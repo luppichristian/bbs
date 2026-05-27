@@ -218,33 +218,136 @@ static void print_help(int argc, char** argv) {
   printf("  bbs %s <command>\n", CMD_INFOS[CMD_DEFAULT].name);
 }
 
-static int run_cmd(cmd c, int argc, char** argv, base_cfgs* cfgs) {
-  if (c == CMD_CFG) {
-    u32 minimal_mode = false;
-    if ((argc >= 3) && (_strcmpi("-m", argv[2]) == 0)) {  // TODO: Properly document this
-      minimal_mode = true;
+static int error_code(cmd c, char idx) {
+  return 200 + c * 255 + idx;
+}
+
+static void parse_cmdline_options_with_warnings(cmdline* cl, cmdopt* opts, size_t opt_count) {
+  while (!cmdline_empty(cl)) {
+    const char* arg = cmdline_peek(cl);
+
+    if (strcmp(arg, "--") == 0) {
+      cmdline_pop(cl);
+      break;
     }
 
-    if (minimal_mode) {
-      printf("%s\n", cfgs->project);
-      printf("%s\n", cfgs->user);
-      printf("%s\n", cfgs->local);
-    } else {
-      printf("  Project config: %s\n", cfgs->project);
-      printf("  User config:    %s\n", cfgs->user);
-      printf("  Local config:   %s\n", cfgs->local);
+    if (cmdline_is_longopt(arg)) {
+      const char* name = arg + 2;
+      const char* value = NULL;
+      char buffer[256];
+      bool recognized = false;
+
+      const char* eq = strchr(name, '=');
+      if (eq) {
+        size_t len = (size_t)(eq - name);
+
+        if (len >= sizeof(buffer)) {
+          len = sizeof(buffer) - 1;
+        }
+
+        memcpy(buffer, name, len);
+        buffer[len] = '\0';
+
+        name = buffer;
+        value = eq + 1;
+      }
+
+      for (size_t i = 0; i < opt_count; ++i) {
+        if (opts[i].long_name && strcmp(opts[i].long_name, name) == 0) {
+          opts[i].present = true;
+          opts[i].value = value;
+          recognized = true;
+          break;
+        }
+      }
+
+      if (!recognized) {
+        fprintf(stderr, "Warning: ignoring unrecognized option '%s'.\n", arg);
+      }
+
+      cmdline_pop(cl);
+      continue;
     }
-    return 0;
+
+    if (cmdline_is_shortopt(arg)) {
+      const char* p = arg + 1;
+
+      while (*p) {
+        char name[2] = {*p, 0};
+        bool recognized = false;
+
+        for (size_t i = 0; i < opt_count; ++i) {
+          if (opts[i].short_name && strcmp(opts[i].short_name, name) == 0) {
+            opts[i].present = true;
+            recognized = true;
+            break;
+          }
+        }
+
+        if (!recognized) {
+          fprintf(stderr, "Warning: ignoring unrecognized option '-%c'.\n", *p);
+        }
+
+        ++p;
+      }
+
+      cmdline_pop(cl);
+      continue;
+    }
+
+    break;
+  }
+}
+
+static int run_cmd_cfg(cmdline* cl, base_cfgs* cfgs) {
+  cmdopt opts[] = {
+      // Print only raw paths.
+      {"m", "minimal"},
+      // Print the resolved project config path.
+      {"p", "project"},
+      // Print the resolved shared user config path.
+      {"u",    "user"},
+      // Print the resolved machine-local config path.
+      {"l",   "local"},
+  };
+
+  parse_cmdline_options_with_warnings(cl, opts, _countof(opts));
+
+  if (opts[1].present == opts[2].present && opts[2].present == opts[3].present) {
+    opts[1].present = opts[2].present = opts[3].present = true;
   }
 
-  printf("Command '%s' is not implemented yet.\n", CMD_INFOS[c].name);
-  return 1;
+  if (opts[0].present) {
+    if (opts[1].present) printf("%s\n", cfgs->project);
+    if (opts[2].present) printf("%s\n", cfgs->user);
+    if (opts[3].present) printf("%s\n", cfgs->local);
+  } else {
+    if (opts[1].present) printf("  Project config: %s\n", cfgs->project);
+    if (opts[2].present) printf("  User config:    %s\n", cfgs->user);
+    if (opts[3].present) printf("  Local config:   %s\n", cfgs->local);
+  }
+
+  return 0;
+}
+
+static int run_cmd(cmd c, cmdline* cl, base_cfgs* cfgs) {
+  switch (c) {
+    case CMD_CFG: {
+      return run_cmd_cfg(cl, cfgs);
+    }
+    default: {
+      printf("Command '%s' is not implemented yet.\n", CMD_INFOS[c].name);
+      return error_code(c, 1);
+    }
+  }
+
+  return error_code(c, 0);
 }
 
 static int print_unrecognized_command(const char* name) {
   printf("Error: '%s' is not a recognized command.\n", name);
   printf("Run 'bbs %s' to see the list of available commands.\n", CMD_INFOS[CMD_DEFAULT].name);
-  return 1;
+  return 2;
 }
 
 int main(int argc, char** argv) {
@@ -273,9 +376,12 @@ int main(int argc, char** argv) {
       local_path,
       sizeof(local_path));
 
+  cmdline cl = {.argv = (const char**)argv, .argc = argc};
+  cmdline_pop(&cl);  // Pop argv[0]
+  cmdline_pop(&cl);  // Pop argv[1]
   for (int i = CMD_HELP_END; i < CMD_MAX; ++i) {
     if (_strcmpi(argv[1], CMD_INFOS[i].name) == 0) {
-      return run_cmd((cmd)i, argc, argv, &cfgs);
+      return run_cmd((cmd)i, &cl, &cfgs);
     }
   }
 

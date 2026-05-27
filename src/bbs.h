@@ -1,31 +1,7 @@
 #pragma once
 
-#define VER_MAJOR 0
-#define VER_MINOR 0
-
-#define PROJ_FILENAME  "project.bbs"
-#define USER_FILENAME  "user.bbs"
-#define LOCAL_FILENAME "local.bbs"
-
-#include <ctype.h>
-#include <direct.h>
-#include <limits.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
-typedef int8_t s8;
-typedef int16_t s16;
-typedef int32_t s32;
-typedef int64_t s64;
-typedef float f32;
-typedef double f64;
+#include "bbs_base.h"
+#include "bbs_cmdline.h"
 
 typedef struct {
   const char* name;
@@ -119,10 +95,14 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                      "Use this when you want to discard previous outputs and force the next build to start from a clean state."                 },
 
     [CMD_CFG] = {     .name = "cfg",
-                     .params = "",
+                     .params = "[-m] [-p] [-u] [-l]",
                      .desc = "Show the resolved config file paths",
-                     .detailed_desc = "Print the project, shared user, and local config file paths used by bbs.\n"
-                     "Use this to verify where bbs expects each configuration file to be located."                                              },
+                     .detailed_desc = "Print the resolved config file paths used by bbs.\n"
+                     "Use -m or --minimal to print raw paths only.\n"
+                     "Use -p or --project to print the project config path.\n"
+                     "Use -u or --user to print the shared user config path.\n"
+                     "Use -l or --local to print the machine-local config path.\n"
+                     "If none of -p, -u, or -l is provided, bbs prints all three paths."                                                        },
 
     [CMD_BUILD] = {   .name = "build",
                      .params = "[target] [platform]",
