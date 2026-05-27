@@ -1,0 +1,25 @@
+builddir( "build" )
+
+platforms (
+  windows.x86_64
+  windows.arm64
+  windows.x86
+)
+
+project (
+  name( "project" )
+  version( 0.1.0 )
+  author( "Christian Luppi" )
+)
+
+target (
+  name( "bbs" )
+  type( runnable )
+  warnings( "max" )
+  static_runtime( false )
+  dependencies(raylib)
+  language("gnu11")
+  sources(
+    "src/bbs.c"
+  )
+)
