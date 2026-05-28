@@ -323,6 +323,10 @@ static int print_unrecognized_command(const char* name) {
 int main(int argc, char** argv) {
   atexit(release);
 
+  const char* f = read_entire_file("build.bbs");
+  node* n = node_parse(f);
+  node_debug_print(n);
+
   if (argc == 1) {
     print_usage();
     return 0;

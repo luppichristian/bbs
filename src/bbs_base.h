@@ -5,10 +5,6 @@
 
 #define ARENA_DIM (1024 * 1024 * 4)  // 4 megabytes, sizeof each block
 
-#define PROJ_FILENAME  "project.bbs"
-#define USER_FILENAME  "user.bbs"
-#define LOCAL_FILENAME "local.bbs"
-
 #include <ctype.h>
 #include <direct.h>
 #include <limits.h>
@@ -32,13 +28,13 @@ typedef struct {
 } cmdopt;
 
 typedef enum {
-  ATTR_TYPE_DEF = 0,
-  ATTR_TYPE_STR,
-  ATTR_TYPE_INT,
-  ATTR_TYPE_FLT,
-  ATTR_TYPE_VER,
-  ATTR_TYPE_IDF,
-} attr_type;
+  NODE_TYPE_DEF = 0,
+  NODE_TYPE_STR,
+  NODE_TYPE_INT,
+  NODE_TYPE_FLT,
+  NODE_TYPE_VER,
+  NODE_TYPE_IDF,
+} node_type;
 
 typedef struct {
   uint8_t major;
@@ -47,14 +43,15 @@ typedef struct {
   uint8_t user;
 } ver;
 
-typedef struct attr attr;
-struct attr {
-  attr* next;
-  attr* parent;
-  attr* children;
+typedef struct node node;
+struct node {
+  node* next;
+  node* parent;
+  node* children;
 
   const char* name;
-  attr_type type;
+  size_t name_dim;
+  node_type type;
   union {
     const char* _str;
     int64_t _int;

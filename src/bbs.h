@@ -1,5 +1,9 @@
 #pragma once
 
+#define PROJ_FILENAME  "project.bbs"
+#define USER_FILENAME  "user.bbs"
+#define LOCAL_FILENAME "local.bbs"
+
 #include "bbs_base.h"
 
 typedef struct {
@@ -137,7 +141,7 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                      "The optional target and platform arguments restrict execution to the matching test target or cross-compilation output."   },
 
     [CMD_BUMPVER] = { .name = "bumpver",
-                     .params = "<major/minor/patch/all> [target] [platform]",
+                     .params = "<major/minor/patch/user/all> [target] [platform]",
                      .desc = "Increment the version of the project",
                      .detailed_desc = "Increment the project version according to the requested part.\n"
                      "Use major, minor, patch, or all depending on how versioning is defined for the project.\n"

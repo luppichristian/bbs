@@ -13,11 +13,20 @@ project (
 )
 
 target (
+  name( "raylib" )
+  type ( "static_lib" )
+  git (
+    repo( "https://github.com/raysan5/raylib" )
+    tag( "6.0" )
+  )
+)
+
+target (
   name( "bbs" )
-  type( runnable )
+  type( "console" )
   warnings( "max" )
   static_runtime( false )
-  dependencies(raylib)
+  depends( "raylib" )
   language("gnu11")
   sources(
     "src/bbs.c"
