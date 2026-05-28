@@ -1,5 +1,6 @@
 #pragma once
 #include "bbs_base.h"
+#include <windows.h>
 
 static arena garena = {0};
 static void* push(size_t sz) {
@@ -114,7 +115,21 @@ static bool cmdline_is_longopt(const char* s) {
   return s && s[0] == '-' && s[1] == '-' && s[2];
 }
 
-static void cmdline_options(cmdline* cl, cmdopt* opts, size_t opt_count, bool warnings) {
+static const char* cmdline_consume_param(cmdline* cl) {
+  while (!cmdline_empty(cl)) {
+    const char* arg = cmdline_peek(cl);
+    if (strcmp(arg, "--") == 0) {
+      cmdline_pop(cl);
+      continue;
+    }
+    if (cmdline_is_longopt(arg) || cmdline_is_shortopt(arg))
+      return NULL;
+    return cmdline_pop(cl);
+  }
+  return NULL;
+}
+
+static void cmdline_consume_options(cmdline* cl, cmdopt* opts, size_t count) {
   while (!cmdline_empty(cl)) {
     const char* arg = cmdline_peek(cl);
 
@@ -127,31 +142,22 @@ static void cmdline_options(cmdline* cl, cmdopt* opts, size_t opt_count, bool wa
       const char* name = arg + 2;
       const char* value = NULL;
       char buffer[256];
-      bool recognized = false;
       const char* eq = strchr(name, '=');
       if (eq) {
         size_t len = (size_t)(eq - name);
-        if (len >= sizeof(buffer)) {
-          len = sizeof(buffer) - 1;
-        }
-
+        if (len >= sizeof(buffer)) len = sizeof(buffer) - 1;
         memcpy(buffer, name, len);
         buffer[len] = '\0';
         name = buffer;
         value = eq + 1;
       }
 
-      for (size_t i = 0; i < opt_count; ++i) {
+      for (size_t i = 0; i < count; ++i) {
         if (opts[i].long_name && strcmp(opts[i].long_name, name) == 0) {
           opts[i].present = true;
           opts[i].value = value;
-          recognized = true;
           break;
         }
-      }
-
-      if (!recognized) {
-        warn("ignoring unrecognized option '%s'.", arg);
       }
 
       cmdline_pop(cl);
@@ -160,22 +166,14 @@ static void cmdline_options(cmdline* cl, cmdopt* opts, size_t opt_count, bool wa
 
     if (cmdline_is_shortopt(arg)) {
       const char* p = arg + 1;
-
       while (*p) {
         char name[2] = {*p, 0};
-        bool recognized = false;
-        for (size_t i = 0; i < opt_count; ++i) {
+        for (size_t i = 0; i < count; ++i) {
           if (opts[i].short_name && strcmp(opts[i].short_name, name) == 0) {
             opts[i].present = true;
-            recognized = true;
             break;
           }
         }
-
-        if ((!recognized) && warnings) {
-          warn("ignoring unrecognized option '-%c'.", *p);
-        }
-
         ++p;
       }
 
@@ -184,6 +182,85 @@ static void cmdline_options(cmdline* cl, cmdopt* opts, size_t opt_count, bool wa
     }
 
     break;
+  }
+}
+
+static void cmdline_consume_all_options(cmdline* cl, cmdopt* opts, size_t count) {
+  int wi = 0;
+  char** argv = cl->argv;
+
+  for (int ri = 0; ri < cl->argc; ri++) {
+    const char* arg = argv[ri];
+
+    if (strcmp(arg, "--") == 0) {
+      argv[wi++] = argv[ri];
+      ri++;
+      while (ri < cl->argc) argv[wi++] = argv[ri++];
+      break;
+    }
+
+    if (cmdline_is_longopt(arg)) {
+      const char* name = arg + 2;
+      const char* value = NULL;
+      char buffer[256];
+      bool recognized = false;
+      const char* eq = strchr(name, '=');
+      if (eq) {
+        size_t len = (size_t)(eq - name);
+        if (len >= sizeof(buffer)) len = sizeof(buffer) - 1;
+        memcpy(buffer, name, len);
+        buffer[len] = '\0';
+        name = buffer;
+        value = eq + 1;
+      }
+
+      for (size_t i = 0; i < count; ++i) {
+        if (opts[i].long_name && strcmp(opts[i].long_name, name) == 0) {
+          opts[i].present = true;
+          opts[i].value = value;
+          recognized = true;
+          break;
+        }
+      }
+
+      if (!recognized) argv[wi++] = argv[ri];
+      continue;
+    }
+
+    if (cmdline_is_shortopt(arg)) {
+      const char* p = arg + 1;
+      bool any_matched = false;
+      while (*p) {
+        char name[2] = {*p, 0};
+        for (size_t i = 0; i < count; ++i) {
+          if (opts[i].short_name && strcmp(opts[i].short_name, name) == 0) {
+            opts[i].present = true;
+            any_matched = true;
+            break;
+          }
+        }
+        ++p;
+      }
+
+      if (!any_matched) argv[wi++] = argv[ri];
+      continue;
+    }
+
+    argv[wi++] = argv[ri];
+  }
+
+  cl->argc = wi;
+}
+
+static void cmdline_validate(cmdline* cl) {
+  for (int i = 0; i < cl->argc; i++) {
+    const char* a = cl->argv[i];
+    if (!a) continue;
+    if (a[0] == '-') {
+      warn("ignoring unrecognized option '%s'.", a);
+    } else {
+      warn("ignoring unexpected parameter '%s'.", a);
+    }
   }
 }
 
@@ -212,6 +289,11 @@ static ver node_get_ver(node* a) {
   if (a->type != NODE_TYPE_VER)
     return v;
   return a->_ver;
+}
+static bool node_get_bool(node* a) {
+  if (a->type != NODE_TYPE_BOL)
+    return false;
+  return a->_bol;
 }
 static bool node_check_type(node* a, node_type type) {
   return a->type == type;
@@ -339,6 +421,21 @@ static bool token_is_version(token t) {
   return dots >= 2;
 }
 
+static bool token_is_bool(token t) {
+  if (t.type != TOK_NAME)
+    return false;
+  size_t len = token_len(t);
+  if (len == 4 && _strnicmp(t.begin, "true", 4) == 0)
+    return true;
+  if (len == 5 && _strnicmp(t.begin, "false", 5) == 0)
+    return true;
+  if (len == 2 && _strnicmp(t.begin, "on", 2) == 0)
+    return true;
+  if (len == 3 && _strnicmp(t.begin, "off", 3) == 0)
+    return true;
+  return false;
+}
+
 static node_type token_to_type(token t) {
   switch (t.type) {
     case TOK_STRING:
@@ -350,6 +447,8 @@ static node_type token_to_type(token t) {
         return NODE_TYPE_INT;
       if (token_is_float(t))
         return NODE_TYPE_FLT;
+      if (token_is_bool(t))
+        return NODE_TYPE_BOL;
       return NODE_TYPE_IDF;
     default:
       return NODE_TYPE_DEF;
@@ -504,6 +603,12 @@ static void node_assign_scalar(node* n, token t) {
     case NODE_TYPE_IDF:
       n->_idf = t.begin;
       break;
+    case NODE_TYPE_BOL: {
+      size_t len = token_len(t);
+      n->_bol = (len == 4 && _strnicmp(t.begin, "true", 4) == 0) ||
+                (len == 2 && _strnicmp(t.begin, "on", 2) == 0);
+      break;
+    }
     default:
       break;
   }
@@ -643,6 +748,8 @@ static size_t node_plain_len(const node* n) {
     }
     case NODE_TYPE_IDF:
       return n->txt_dim;
+    case NODE_TYPE_BOL:
+      return n->_bol ? 4 : 5;
     default:
       if (n->name && !n->children)
         return n->name_dim;
@@ -669,6 +776,9 @@ static void node_plain_write(const node* n, char* out) {
       break;
     case NODE_TYPE_IDF:
       memcpy(out, n->_idf, n->txt_dim);
+      break;
+    case NODE_TYPE_BOL:
+      memcpy(out, n->_bol ? "true" : "false", n->_bol ? 4 : 5);
       break;
     default:
       if (n->name && !n->children)
@@ -878,6 +988,10 @@ static const char* node_edit(node* n, const char* str) {
         replacement = n->_idf;
         replacement_len = n->txt_dim;
         break;
+      case NODE_TYPE_BOL:
+        replacement = n->_bol ? "true" : "false";
+        replacement_len = n->_bol ? 4 : 5;
+        break;
       default:
         replacement = n->name ? n->name : "";
         replacement_len = n->name ? n->name_dim : 0;
@@ -900,18 +1014,6 @@ static const char* node_edit(node* n, const char* str) {
   return out;
 }
 
-static const char* node_type_name(node_type type) {
-  switch (type) {
-    case NODE_TYPE_DEF: return "def";
-    case NODE_TYPE_STR: return "str";
-    case NODE_TYPE_INT: return "int";
-    case NODE_TYPE_FLT: return "flt";
-    case NODE_TYPE_VER: return "ver";
-    case NODE_TYPE_IDF: return "idf";
-    default:            return "?";
-  }
-}
-
 static void node_debug_print_impl(node* n, size_t depth) {
   if (!n)
     return;
@@ -922,7 +1024,8 @@ static void node_debug_print_impl(node* n, size_t depth) {
   if (n->name)
     printf("%.*s", (int)n->name_dim, n->name);
 
-  printf(" [%s]", node_type_name(n->type));
+  const char* name = n->type < NODE_TYPE_MAX ? NODE_TYPE_NAMES[n->type] : "?";
+  printf(" [%s]", name);
   switch (n->type) {
     case NODE_TYPE_STR:
       printf(" = \"%.*s\"", (int)n->txt_dim, n->_str ? n->_str : "");
@@ -938,6 +1041,9 @@ static void node_debug_print_impl(node* n, size_t depth) {
       break;
     case NODE_TYPE_IDF:
       printf(" = %.*s", (int)n->txt_dim, n->_idf ? n->_idf : "");
+      break;
+    case NODE_TYPE_BOL:
+      printf(" = %s", n->_bol ? "true" : "false");
       break;
     default:
       break;
@@ -1004,4 +1110,33 @@ static bool write_entire_file(const char* p, const char* text) {
 
   fclose(f);
   return true;
+}
+
+static const char* get_path_cwd(const char* filename) {
+  char cwd[_MAX_PATH] = {0};
+  if (!_getcwd(cwd, sizeof(cwd))) {
+    cwd[0] = '\0';
+  }
+
+  size_t len = strlen(cwd) + 1 + strlen(filename) + 1;
+  char* out = push(len);
+  snprintf(out, len, "%s\\%s", cwd, filename);
+  return out;
+}
+
+static const char* get_path_exe(const char* filename) {
+  char exe_path[_MAX_PATH] = {0};
+  char exe_dir[_MAX_PATH] = {0};
+
+  if (GetModuleFileNameA(NULL, exe_path, sizeof(exe_path))) {
+    snprintf(exe_dir, sizeof(exe_dir), "%s", exe_path);
+    char* last_slash = strrchr(exe_dir, '\\');
+    if (!last_slash) last_slash = strrchr(exe_dir, '/');
+    if (last_slash) *last_slash = '\0';
+  }
+
+  size_t len = strlen(exe_dir) + 1 + strlen(filename) + 1;
+  char* out = push(len);
+  snprintf(out, len, "%s\\%s", exe_dir, filename);
+  return out;
 }

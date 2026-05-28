@@ -14,10 +14,14 @@ typedef struct {
 } cmd_info;
 
 typedef struct {
+  cmdline* cl;
+
+  bool debug;
+
   const char* user;
   const char* project;
   const char* local;
-} base_cfgs;
+} cmd_ctx;
 
 typedef enum {
 

@@ -16,16 +16,16 @@
 #include <string.h>
 
 typedef struct {
-  const char** argv;
-  int argc;
-} cmdline;
-
-typedef struct {
   const char* short_name;  // "a"
   const char* long_name;   // "all"
   bool present;
   const char* value;
 } cmdopt;
+
+typedef struct {
+  char** argv;
+  int argc;
+} cmdline;
 
 typedef enum {
   NODE_TYPE_DEF = 0,
@@ -34,7 +34,19 @@ typedef enum {
   NODE_TYPE_FLT,
   NODE_TYPE_VER,
   NODE_TYPE_IDF,
+  NODE_TYPE_BOL,
+  NODE_TYPE_MAX,
 } node_type;
+
+const char* NODE_TYPE_NAMES[] = {
+    [NODE_TYPE_DEF] = "def",
+    [NODE_TYPE_STR] = "str",
+    [NODE_TYPE_INT] = "int",
+    [NODE_TYPE_FLT] = "flt",
+    [NODE_TYPE_VER] = "ver",
+    [NODE_TYPE_IDF] = "idf",
+    [NODE_TYPE_BOL] = "bol",
+};
 
 typedef struct {
   uint8_t major;
@@ -58,6 +70,7 @@ struct node {
     double _flt;
     ver _ver;
     const char* _idf;
+    bool _bol;
   };
 
   size_t txt_offset;

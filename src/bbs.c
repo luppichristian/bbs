@@ -28,65 +28,6 @@ static void format_cmd_usage(char* out, size_t out_size, cmd command) {
   snprintf(out, out_size, "bbs %s", info.name);
 }
 
-static void build_path(char* out, size_t out_size, const char* dir, const char* name) {
-  if (!dir || dir[0] == '\0') {
-    snprintf(out, out_size, "%s", name);
-    return;
-  }
-
-  snprintf(out, out_size, "%s\\%s", dir, name);
-}
-
-static void get_parent_dir(char* path) {
-  char* last_slash = strrchr(path, '\\');
-  if (!last_slash) {
-    last_slash = strrchr(path, '/');
-  }
-
-  if (last_slash) {
-    *last_slash = '\0';
-  }
-}
-
-static void resolve_base_cfgs(
-    base_cfgs* cfgs,
-    const char* argv0,
-    char* project_path,
-    size_t project_path_size,
-    char* user_path,
-    size_t user_path_size,
-    char* local_path,
-    size_t local_path_size) {
-  char cwd[_MAX_PATH] = {0};
-  char exe_dir[_MAX_PATH] = {0};
-
-  if (!_getcwd(cwd, sizeof(cwd))) {
-    cwd[0] = '\0';
-  }
-
-  if (argv0 && argv0[0] != '\0') {
-    char exe_path[_MAX_PATH] = {0};
-
-    if (_fullpath(exe_path, argv0, sizeof(exe_path))) {
-      snprintf(exe_dir, sizeof(exe_dir), "%s", exe_path);
-      get_parent_dir(exe_dir);
-    } else {
-      snprintf(exe_dir, sizeof(exe_dir), "%s", argv0);
-      get_parent_dir(exe_dir);
-    }
-  } else {
-    exe_dir[0] = '\0';
-  }
-
-  build_path(project_path, project_path_size, cwd, PROJ_FILENAME);
-  build_path(local_path, local_path_size, cwd, LOCAL_FILENAME);
-  build_path(user_path, user_path_size, exe_dir[0] != '\0' ? exe_dir : cwd, USER_FILENAME);
-
-  cfgs->project = project_path;
-  cfgs->user = user_path;
-  cfgs->local = local_path;
-}
-
 static void print_cmd_synopsis(cmd command) {
   char usage[128] = {0};
   format_cmd_usage(usage, sizeof(usage), command);
@@ -220,7 +161,8 @@ static int error_code(cmd c, char idx) {
   return 200 + c * 255 + idx;
 }
 
-static int run_cmd_cfg(cmdline* cl, base_cfgs* cfgs) {
+static int run_cmd_cfg(cmd_ctx* cmdctx) {
+  cmdline* cl = cmdctx->cl;
   enum {
     MINIMAL = 0,
     PROJECT,
@@ -235,76 +177,77 @@ static int run_cmd_cfg(cmdline* cl, base_cfgs* cfgs) {
       [LOCAL] = {"l",   "local"},
   };
 
-  cmdline_options(cl, opts, _countof(opts), true);
+  cmdline_consume_all_options(cl, opts, _countof(opts));
+  cmdline_validate(cl);
   if ((opts[PROJECT].present == opts[USER].present) && (opts[USER].present == opts[LOCAL].present)) {
     opts[PROJECT].present = opts[USER].present = opts[LOCAL].present = true;
   }
 
   if (opts[0].present) {
-    if (opts[PROJECT].present) print("%s", cfgs->project);
-    if (opts[USER].present) print("%s", cfgs->user);
-    if (opts[LOCAL].present) print("%s", cfgs->local);
+    if (opts[PROJECT].present) print("%s", cmdctx->project);
+    if (opts[USER].present) print("%s", cmdctx->user);
+    if (opts[LOCAL].present) print("%s", cmdctx->local);
   } else {
-    if (opts[PROJECT].present) print("  Project config: %s", cfgs->project);
-    if (opts[USER].present) print("  User config:    %s", cfgs->user);
-    if (opts[LOCAL].present) print("  Local config:   %s", cfgs->local);
+    if (opts[PROJECT].present) print("  Project config: %s", cmdctx->project);
+    if (opts[USER].present) print("  User config:    %s", cmdctx->user);
+    if (opts[LOCAL].present) print("  Local config:   %s", cmdctx->local);
   }
 
   return 0;
 }
 
-static int run_cmd_clean(cmdline* cl, base_cfgs* cfgs) {
-  return 0;
+static int run_cmd_clean(cmd_ctx* cmdctx) {
+  return 0;  // TODO:
 }
 
-static int run_cmd_build(cmdline* cl, base_cfgs* cfgs) {
-  return 0;
+static int run_cmd_build(cmd_ctx* cmdctx) {
+  return 0;  // TODO:
 }
 
-static int run_cmd_run(cmdline* cl, base_cfgs* cfgs) {
-  return 0;
+static int run_cmd_run(cmd_ctx* cmdctx) {
+  return 0;  // TODO:
 }
 
-static int run_cmd_info(cmdline* cl, base_cfgs* cfgs) {
-  return 0;
+static int run_cmd_info(cmd_ctx* cmdctx) {
+  return 0;  // TODO:
 }
 
-static int run_cmd_package(cmdline* cl, base_cfgs* cfgs) {
-  return 0;
+static int run_cmd_package(cmd_ctx* cmdctx) {
+  return 0;  // TODO:
 }
 
-static int run_cmd_test(cmdline* cl, base_cfgs* cfgs) {
-  return 0;
+static int run_cmd_test(cmd_ctx* cmdctx) {
+  return 0;  // TODO:
 }
 
-static int run_cmd_bumpver(cmdline* cl, base_cfgs* cfgs) {
-  return 0;
+static int run_cmd_bumpver(cmd_ctx* cmdctx) {
+  return 0;  // TODO:
 }
 
-static int run_cmd_update(cmdline* cl, base_cfgs* cfgs) {
-  return 0;
+static int run_cmd_update(cmd_ctx* cmdctx) {
+  return 0;  // TODO:
 }
 
-static int run_cmd(cmd c, cmdline* cl, base_cfgs* cfgs) {
+static int run_cmd(cmd c, cmd_ctx* cmdctx) {
   switch (c) {
     case CMD_CFG:
-      return run_cmd_cfg(cl, cfgs);
+      return run_cmd_cfg(cmdctx);
     case CMD_CLEAN:
-      return run_cmd_clean(cl, cfgs);
+      return run_cmd_clean(cmdctx);
     case CMD_BUILD:
-      return run_cmd_build(cl, cfgs);
+      return run_cmd_build(cmdctx);
     case CMD_RUN:
-      return run_cmd_run(cl, cfgs);
+      return run_cmd_run(cmdctx);
     case CMD_INFO:
-      return run_cmd_info(cl, cfgs);
+      return run_cmd_info(cmdctx);
     case CMD_PACKAGE:
-      return run_cmd_package(cl, cfgs);
+      return run_cmd_package(cmdctx);
     case CMD_TEST:
-      return run_cmd_test(cl, cfgs);
+      return run_cmd_test(cmdctx);
     case CMD_BUMPVER:
-      return run_cmd_bumpver(cl, cfgs);
+      return run_cmd_bumpver(cmdctx);
     case CMD_UPDATE:
-      return run_cmd_update(cl, cfgs);
+      return run_cmd_update(cmdctx);
     default: {
       print("Command '%s' is not implemented yet.", CMD_INFOS[c].name);
       return error_code(c, 1);
@@ -320,12 +263,35 @@ static int print_unrecognized_command(const char* name) {
   return 2;
 }
 
+static cmd_ctx* init_cmd_ctx(int argc, char** argv) {
+  cmd_ctx* cmdctx = push(sizeof(cmd_ctx));
+  memset(cmdctx, 0, sizeof(cmd_ctx));
+  cmdctx->cl = push(sizeof(cmdline));
+  memset(cmdctx->cl, 0, sizeof(cmdline));
+
+  cmdctx->cl->argv = argv;
+  cmdctx->cl->argc = argc;
+  cmdline_pop(cmdctx->cl);  // Pop argv[0]
+  cmdline_pop(cmdctx->cl);  // Pop argv[1]
+
+  enum {
+    DEBUG = 0,
+  };
+
+  cmdopt base_opts[] = {
+      [DEBUG] = {"d", "debug"}
+  };
+  cmdline_consume_all_options(cmdctx->cl, base_opts, 1);
+  cmdctx->debug = base_opts[DEBUG].present;
+
+  cmdctx->project = get_path_cwd(PROJ_FILENAME);
+  cmdctx->user = get_path_exe(USER_FILENAME);
+  cmdctx->local = get_path_cwd(LOCAL_FILENAME);
+  return cmdctx;
+}
+
 int main(int argc, char** argv) {
   atexit(release);
-
-  const char* f = read_entire_file("build.bbs");
-  node* n = node_parse(f);
-  node_debug_print(n);
 
   if (argc == 1) {
     print_usage();
@@ -337,27 +303,10 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  base_cfgs cfgs = {0};
-  char project_path[_MAX_PATH] = {0};
-  char user_path[_MAX_PATH] = {0};
-  char local_path[_MAX_PATH] = {0};
-
-  resolve_base_cfgs(
-      &cfgs,
-      argv[0],
-      project_path,
-      sizeof(project_path),
-      user_path,
-      sizeof(user_path),
-      local_path,
-      sizeof(local_path));
-
-  cmdline cl = {.argv = (const char**)argv, .argc = argc};
-  cmdline_pop(&cl);  // Pop argv[0]
-  cmdline_pop(&cl);  // Pop argv[1]
+  cmd_ctx* cmdctx = init_cmd_ctx(argc, argv);
   for (int i = CMD_HELP_END; i < CMD_MAX; ++i) {
     if (_strcmpi(argv[1], CMD_INFOS[i].name) == 0) {
-      return run_cmd((cmd)i, &cl, &cfgs);
+      return run_cmd((cmd)i, cmdctx);
     }
   }
 
