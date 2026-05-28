@@ -1,6 +1,21 @@
 #pragma once
 #include "bbs_base.h"
-#include <windows.h>
+
+#if defined(_WIN32)
+#  include <io.h>
+#  include <windows.h>
+#  define access _access
+#  define F_OK   0
+#elif defined(__APPLE__)
+#  include <mach-o/dyld.h>
+#  include <unistd.h>
+#else
+#  include <unistd.h>
+#endif
+
+#if !defined(_WIN32) && !defined(_MAX_PATH)
+#  define _MAX_PATH 4096
+#endif
 
 static arena garena = {0};
 static void* push(size_t sz) {
@@ -1127,8 +1142,32 @@ static const char* get_path_cwd(const char* filename) {
 static const char* get_path_exe(const char* filename) {
   char exe_path[_MAX_PATH] = {0};
   char exe_dir[_MAX_PATH] = {0};
+  bool got_path = false;
 
+#if defined(_WIN32)
   if (GetModuleFileNameA(NULL, exe_path, sizeof(exe_path))) {
+    got_path = true;
+  }
+#elif defined(__linux__)
+  ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+  if (len != -1) {
+    exe_path[len] = '\0';
+    got_path = true;
+  }
+#elif defined(__APPLE__)
+  uint32_t size = sizeof(exe_path);
+  if (_NSGetExecutablePath(exe_path, &size) == 0) {
+    char* resolved = realpath(exe_path, NULL);
+    if (resolved) {
+      strncpy(exe_path, resolved, sizeof(exe_path) - 1);
+      exe_path[sizeof(exe_path) - 1] = '\0';
+      free(resolved);
+    }
+    got_path = true;
+  }
+#endif
+
+  if (got_path) {
     snprintf(exe_dir, sizeof(exe_dir), "%s", exe_path);
     char* last_slash = strrchr(exe_dir, '\\');
     if (!last_slash) last_slash = strrchr(exe_dir, '/');
@@ -1139,4 +1178,8 @@ static const char* get_path_exe(const char* filename) {
   char* out = push(len);
   snprintf(out, len, "%s\\%s", exe_dir, filename);
   return out;
+}
+
+static bool file_exists(const char* path) {
+  return access(path, F_OK) == 0;
 }

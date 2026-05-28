@@ -1,5 +1,6 @@
 #include "bbs.h"
 #include "bbs_base.c"
+#include "bbs_toolchain.c"
 
 static void print_section(const char* title) {
   printf("\n%s\n", title);
@@ -148,8 +149,8 @@ static void print_help(int argc, char** argv) {
   print("  [] indicates optional arguments. <> indicates required arguments.");
   print("  All commands operate on the project rooted at the current working directory.");
   print("  The build system is initialized automatically when a command runs.");
-  print("  [target] can be inferred when the project only has one target; otherwise bbs operates on all targets.");
-  print("  [platform] selects one of the platforms declared in '%s'.", PROJ_FILENAME);
+  print("  [-t target] can be inferred when the project only has one target; otherwise bbs operates on all targets.");
+  print("  [-p platform] selects one of the platforms declared in '%s'.", PROJ_FILENAME);
 
   print_section("MORE HELP");
   for (int i = CMD_DEFAULT + 1; i < CMD_HELP_END; ++i)
@@ -167,32 +168,57 @@ static int run_cmd_cfg(cmd_ctx* cmdctx) {
     MINIMAL = 0,
     PROJECT,
     USER,
-    LOCAL
+    LOCAL,
+    TOOLCHAIN
   };
 
   cmdopt opts[] = {
-      [MINIMAL] = {"m", "minimal"},
-      [PROJECT] = {"p", "project"},
-      [USER] = {"u",    "user"},
-      [LOCAL] = {"l",   "local"},
+      [MINIMAL] = {"m",   "minimal"},
+      [PROJECT] = {"p",   "project"},
+      [USER] = {"u",      "user"},
+      [LOCAL] = {"l",     "local"},
+      [TOOLCHAIN] = {"t", "toolchain"},
   };
 
   cmdline_consume_all_options(cl, opts, _countof(opts));
   cmdline_validate(cl);
-  if ((opts[PROJECT].present == opts[USER].present) && (opts[USER].present == opts[LOCAL].present)) {
-    opts[PROJECT].present = opts[USER].present = opts[LOCAL].present = true;
+  if ((opts[PROJECT].present == opts[USER].present) && (opts[USER].present == opts[LOCAL].present) && (opts[LOCAL].present == opts[TOOLCHAIN].present)) {
+    opts[PROJECT].present = opts[USER].present = opts[LOCAL].present = opts[TOOLCHAIN].present = true;
   }
 
   if (opts[0].present) {
     if (opts[PROJECT].present) print("%s", cmdctx->project);
     if (opts[USER].present) print("%s", cmdctx->user);
     if (opts[LOCAL].present) print("%s", cmdctx->local);
+    if (opts[TOOLCHAIN].present) print("%s", cmdctx->toolchain);
   } else {
     if (opts[PROJECT].present) print("  Project config: %s", cmdctx->project);
     if (opts[USER].present) print("  User config:    %s", cmdctx->user);
     if (opts[LOCAL].present) print("  Local config:   %s", cmdctx->local);
+    if (opts[TOOLCHAIN].present) print("  Toolchain config:   %s", cmdctx->toolchain);
   }
 
+  return 0;
+}
+
+static int run_cmd_toolchain(cmd_ctx* cmdctx) {
+  cmdline* cl = cmdctx->cl;
+  const char* sub = cmdline_consume_param(cl);
+  if (sub && _strcmpi(sub, "init") == 0) {
+    toolchain* tc = toolchain_init(cmdctx->toolchain);
+    return tc ? 0 : error_code(CMD_TOOLCHAIN, 0);
+  }
+
+  if (!file_exists(cmdctx->toolchain)) {
+    print("Toolchain is not currently initialized.");
+    print("Run 'bbs toolchain init' to manually init.");
+    return 0;
+  }
+
+  toolchain* tc = toolchain_init(cmdctx->toolchain);
+  print("Current toolchain setup:");
+  (void)tc;
+  // TODO: Print toolchain
   return 0;
 }
 
@@ -201,6 +227,9 @@ static int run_cmd_clean(cmd_ctx* cmdctx) {
 }
 
 static int run_cmd_build(cmd_ctx* cmdctx) {
+  toolchain* tc = toolchain_init(cmdctx->toolchain);
+  if (!tc) return error_code(CMD_BUILD, 0);
+
   return 0;  // TODO:
 }
 
@@ -225,6 +254,9 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
 }
 
 static int run_cmd_update(cmd_ctx* cmdctx) {
+  toolchain* tc = toolchain_init(cmdctx->toolchain);
+  if (!tc) return error_code(CMD_UPDATE, 0);
+
   return 0;  // TODO:
 }
 
@@ -248,6 +280,8 @@ static int run_cmd(cmd c, cmd_ctx* cmdctx) {
       return run_cmd_bumpver(cmdctx);
     case CMD_UPDATE:
       return run_cmd_update(cmdctx);
+    case CMD_TOOLCHAIN:
+      return run_cmd_toolchain(cmdctx);
     default: {
       print("Command '%s' is not implemented yet.", CMD_INFOS[c].name);
       return error_code(c, 1);
@@ -287,6 +321,7 @@ static cmd_ctx* init_cmd_ctx(int argc, char** argv) {
   cmdctx->project = get_path_cwd(PROJ_FILENAME);
   cmdctx->user = get_path_exe(USER_FILENAME);
   cmdctx->local = get_path_cwd(LOCAL_FILENAME);
+  cmdctx->toolchain = get_path_exe(TOOLCHAIN_FILENAME);
   return cmdctx;
 }
 
