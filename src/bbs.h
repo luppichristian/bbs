@@ -1,7 +1,6 @@
 #pragma once
 
 #include "bbs_base.h"
-#include "bbs_cmdline.h"
 
 typedef struct {
   const char* name;

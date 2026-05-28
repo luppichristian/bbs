@@ -1,4 +1,5 @@
 #include "bbs.h"
+#include "bbs_base.c"
 
 static void print_section(const char* title) {
   printf("\n%s\n", title);
@@ -89,7 +90,7 @@ static void resolve_base_cfgs(
 static void print_cmd_synopsis(cmd command) {
   char usage[128] = {0};
   format_cmd_usage(usage, sizeof(usage), command);
-  printf("  %s\n", usage);
+  print("  %s", usage);
 }
 
 static void print_cmd_help(cmd command) {
@@ -97,7 +98,7 @@ static void print_cmd_help(cmd command) {
   char usage[128] = {0};
 
   format_cmd_usage(usage, sizeof(usage), command);
-  printf("  %-62s %s\n", usage, info.desc);
+  print("  %-62s %s", usage, info.desc);
 }
 
 static void print_cmd_detailed_help(cmd command) {
@@ -116,20 +117,20 @@ static void print_cmd_detailed_help(cmd command) {
 }
 
 static void print_usage(void) {
-  printf("Better Build System v%u.%u\n", VER_MAJOR, VER_MINOR);
-  printf("An integrated build system for C/C++ projects.\n");
+  print("Better Build System v%u.%u", VER_MAJOR, VER_MINOR);
+  print("An integrated build system for C/C++ projects.");
 
   print_section("USAGE");
-  printf("  bbs <command> [arguments]\n");
-  printf("  bbs %s [command/topic]\n", CMD_INFOS[CMD_DEFAULT].name);
+  print("  bbs <command> [arguments]");
+  print("  bbs %s [command/topic]", CMD_INFOS[CMD_DEFAULT].name);
 
   print_section("GET STARTED");
-  printf("  Create '{PROJECT_DIR}/%s' in the project root directory.\n", PROJ_FILENAME);
-  printf("  Store shared user defaults next to the bbs executable as '%s'.\n", USER_FILENAME);
-  printf("  Store machine-specific project overrides in '{PROJECT_DIR}/%s'.\n", LOCAL_FILENAME);
+  print("  Create '{PROJECT_DIR}/%s' in the project root directory.", PROJ_FILENAME);
+  print("  Store shared user defaults next to the bbs executable as '{BBS_DIR}/%s'.", USER_FILENAME);
+  print("  Store machine-specific project overrides in '{PROJECT_DIR}/%s'.", LOCAL_FILENAME);
 
   print_section("NEXT STEP");
-  printf("  Run 'bbs %s' to see all commands and help topics.\n", CMD_INFOS[CMD_DEFAULT].name);
+  print("  Run 'bbs %s' to see all commands and help topics.", CMD_INFOS[CMD_DEFAULT].name);
 }
 
 static cmd parse_cmd_name(const char* name) {
@@ -147,13 +148,12 @@ static void print_help(int argc, char** argv) {
   if (argc > 2) {
     help_page = parse_cmd_name(argv[2]);
     if (help_page == CMD_MAX) {
-      printf("Warning: 'bbs help %s' is not a recognized command. Showing general help instead.\n",
-             argv[2]);
+      warn("'bbs help %s' is not a recognized command. Showing general help instead", argv[2]);
       help_page = CMD_DEFAULT;
     }
   }
 
-  printf("Better Build System v%u.%u\n", VER_MAJOR, VER_MINOR);
+  print("Better Build System v%u.%u", VER_MAJOR, VER_MINOR);
   switch (help_page) {
     case CMD_DEFAULT: {
       print_section("COMMANDS");
@@ -165,38 +165,36 @@ static void print_help(int argc, char** argv) {
     case CMD_BUILDIR: {
       print_cmd_detailed_help(help_page);
       print_section("TOPIC NOTES");
-      printf("  The build directory contains generated files and compiled artifacts.\n");
-      printf("  bbs keeps source files in the project tree and writes derived outputs under the configured build directory.\n");
-      printf("  Clean this directory when you want to remove cached outputs or force a full rebuild.\n");
+      print("  The build directory contains generated files and compiled artifacts.");
+      print("  bbs keeps source files in the project tree and writes derived outputs under the configured build directory.");
+      print("  Clean this directory when you want to remove cached outputs or force a full rebuild.");
       break;
     }
     case CMD_CFGFILE: {
       print_cmd_detailed_help(help_page);
       print_section("TOPIC NOTES");
-      printf("  '%s' is the main project configuration file.\n", PROJ_FILENAME);
-      printf("  Keep it in the project root and declare project metadata, targets, platforms, and build settings there.\n");
-      printf("  bbs reads this file first, then applies defaults from '%s' and overrides from '%s' when present.\n",
-             USER_FILENAME,
-             LOCAL_FILENAME);
+      print("  '%s' is the main project configuration file.", PROJ_FILENAME);
+      print("  Keep it in the project root and declare project metadata, targets, platforms, and build settings there.");
+      print("  bbs reads this file first, then applies defaults from '%s' and overrides from '%s' when present.", USER_FILENAME, LOCAL_FILENAME);
       break;
     }
     case CMD_LOCALCFG: {
       print_cmd_detailed_help(help_page);
       print_section("TOPIC NOTES");
-      printf("  '%s' stores user config variables and project attributes specific to this machine.\n", LOCAL_FILENAME);
-      printf("  Keep it in the project root directory, next to '%s'.\n", PROJ_FILENAME);
-      printf("  Values in '%s' can override the defaults from '%s'.\n", LOCAL_FILENAME, USER_FILENAME);
-      printf("  In normal projects this file should usually be added to .gitignore.\n");
-      printf("  Use it for machine-specific settings that should not be shared with the rest of the project.\n");
+      print("  '%s' stores user config variables and project attributes specific to this machine.", LOCAL_FILENAME);
+      print("  Keep it in the project root directory, next to '%s'.", PROJ_FILENAME);
+      print("  Values in '%s' can override the defaults from '%s'.", LOCAL_FILENAME, USER_FILENAME);
+      print("  In normal projects this file should usually be added to .gitignore.");
+      print("  Use it for machine-specific settings that should not be shared with the rest of the project.");
       break;
     }
     case CMD_USERCFG: {
       print_cmd_detailed_help(help_page);
       print_section("TOPIC NOTES");
-      printf("  '%s' stores shared user config defaults.\n", USER_FILENAME);
-      printf("  Use it to define your preferred defaults across projects.\n");
-      printf("  Values from '%s' can be overridden by '%s' in a specific project.\n", USER_FILENAME, LOCAL_FILENAME);
-      printf("  Keep it next to the bbs executable so those defaults are available everywhere you run bbs.\n");
+      print("  '%s' stores shared user config defaults.", USER_FILENAME);
+      print("  Use it to define your preferred defaults across projects.");
+      print("  Values from '%s' can be overridden by '%s' in a specific project.", USER_FILENAME, LOCAL_FILENAME);
+      print("  Keep it next to the bbs executable so those defaults are available everywhere you run bbs.");
       break;
     }
     default: {
@@ -206,137 +204,109 @@ static void print_help(int argc, char** argv) {
   }
 
   print_section("NOTES");
-  printf("  [] indicates optional arguments. <> indicates required arguments.\n");
-  printf("  All commands operate on the project rooted at the current working directory.\n");
-  printf("  The build system is initialized automatically when a command runs.\n");
-  printf("  [target] can be inferred when the project only has one target; otherwise bbs operates on all targets.\n");
-  printf("  [platform] selects one of the platforms declared in '%s'.\n", PROJ_FILENAME);
+  print("  [] indicates optional arguments. <> indicates required arguments.");
+  print("  All commands operate on the project rooted at the current working directory.");
+  print("  The build system is initialized automatically when a command runs.");
+  print("  [target] can be inferred when the project only has one target; otherwise bbs operates on all targets.");
+  print("  [platform] selects one of the platforms declared in '%s'.", PROJ_FILENAME);
 
   print_section("MORE HELP");
   for (int i = CMD_DEFAULT + 1; i < CMD_HELP_END; ++i)
-    printf("  bbs help %-29s %s\n", CMD_INFOS[i].name, CMD_INFOS[i].desc);
-  printf("  bbs %s <command>\n", CMD_INFOS[CMD_DEFAULT].name);
+    print("  bbs help %-29s %s", CMD_INFOS[i].name, CMD_INFOS[i].desc);
+  print("  bbs %s <command>", CMD_INFOS[CMD_DEFAULT].name);
 }
 
 static int error_code(cmd c, char idx) {
   return 200 + c * 255 + idx;
 }
 
-static void parse_cmdline_options_with_warnings(cmdline* cl, cmdopt* opts, size_t opt_count) {
-  while (!cmdline_empty(cl)) {
-    const char* arg = cmdline_peek(cl);
-
-    if (strcmp(arg, "--") == 0) {
-      cmdline_pop(cl);
-      break;
-    }
-
-    if (cmdline_is_longopt(arg)) {
-      const char* name = arg + 2;
-      const char* value = NULL;
-      char buffer[256];
-      bool recognized = false;
-
-      const char* eq = strchr(name, '=');
-      if (eq) {
-        size_t len = (size_t)(eq - name);
-
-        if (len >= sizeof(buffer)) {
-          len = sizeof(buffer) - 1;
-        }
-
-        memcpy(buffer, name, len);
-        buffer[len] = '\0';
-
-        name = buffer;
-        value = eq + 1;
-      }
-
-      for (size_t i = 0; i < opt_count; ++i) {
-        if (opts[i].long_name && strcmp(opts[i].long_name, name) == 0) {
-          opts[i].present = true;
-          opts[i].value = value;
-          recognized = true;
-          break;
-        }
-      }
-
-      if (!recognized) {
-        fprintf(stderr, "Warning: ignoring unrecognized option '%s'.\n", arg);
-      }
-
-      cmdline_pop(cl);
-      continue;
-    }
-
-    if (cmdline_is_shortopt(arg)) {
-      const char* p = arg + 1;
-
-      while (*p) {
-        char name[2] = {*p, 0};
-        bool recognized = false;
-
-        for (size_t i = 0; i < opt_count; ++i) {
-          if (opts[i].short_name && strcmp(opts[i].short_name, name) == 0) {
-            opts[i].present = true;
-            recognized = true;
-            break;
-          }
-        }
-
-        if (!recognized) {
-          fprintf(stderr, "Warning: ignoring unrecognized option '-%c'.\n", *p);
-        }
-
-        ++p;
-      }
-
-      cmdline_pop(cl);
-      continue;
-    }
-
-    break;
-  }
-}
-
 static int run_cmd_cfg(cmdline* cl, base_cfgs* cfgs) {
-  cmdopt opts[] = {
-      // Print only raw paths.
-      {"m", "minimal"},
-      // Print the resolved project config path.
-      {"p", "project"},
-      // Print the resolved shared user config path.
-      {"u",    "user"},
-      // Print the resolved machine-local config path.
-      {"l",   "local"},
+  enum {
+    MINIMAL = 0,
+    PROJECT,
+    USER,
+    LOCAL
   };
 
-  parse_cmdline_options_with_warnings(cl, opts, _countof(opts));
+  cmdopt opts[] = {
+      [MINIMAL] = {"m", "minimal"},
+      [PROJECT] = {"p", "project"},
+      [USER] = {"u",    "user"},
+      [LOCAL] = {"l",   "local"},
+  };
 
-  if (opts[1].present == opts[2].present && opts[2].present == opts[3].present) {
-    opts[1].present = opts[2].present = opts[3].present = true;
+  cmdline_options(cl, opts, _countof(opts), true);
+  if ((opts[PROJECT].present == opts[USER].present) && (opts[USER].present == opts[LOCAL].present)) {
+    opts[PROJECT].present = opts[USER].present = opts[LOCAL].present = true;
   }
 
   if (opts[0].present) {
-    if (opts[1].present) printf("%s\n", cfgs->project);
-    if (opts[2].present) printf("%s\n", cfgs->user);
-    if (opts[3].present) printf("%s\n", cfgs->local);
+    if (opts[PROJECT].present) print("%s", cfgs->project);
+    if (opts[USER].present) print("%s", cfgs->user);
+    if (opts[LOCAL].present) print("%s", cfgs->local);
   } else {
-    if (opts[1].present) printf("  Project config: %s\n", cfgs->project);
-    if (opts[2].present) printf("  User config:    %s\n", cfgs->user);
-    if (opts[3].present) printf("  Local config:   %s\n", cfgs->local);
+    if (opts[PROJECT].present) print("  Project config: %s", cfgs->project);
+    if (opts[USER].present) print("  User config:    %s", cfgs->user);
+    if (opts[LOCAL].present) print("  Local config:   %s", cfgs->local);
   }
 
   return 0;
 }
 
+static int run_cmd_clean(cmdline* cl, base_cfgs* cfgs) {
+  return 0;
+}
+
+static int run_cmd_build(cmdline* cl, base_cfgs* cfgs) {
+  return 0;
+}
+
+static int run_cmd_run(cmdline* cl, base_cfgs* cfgs) {
+  return 0;
+}
+
+static int run_cmd_info(cmdline* cl, base_cfgs* cfgs) {
+  return 0;
+}
+
+static int run_cmd_package(cmdline* cl, base_cfgs* cfgs) {
+  return 0;
+}
+
+static int run_cmd_test(cmdline* cl, base_cfgs* cfgs) {
+  return 0;
+}
+
+static int run_cmd_bumpver(cmdline* cl, base_cfgs* cfgs) {
+  return 0;
+}
+
+static int run_cmd_update(cmdline* cl, base_cfgs* cfgs) {
+  return 0;
+}
+
 static int run_cmd(cmd c, cmdline* cl, base_cfgs* cfgs) {
   switch (c) {
-    case CMD_CFG: {
+    case CMD_CFG:
       return run_cmd_cfg(cl, cfgs);
-    }
+    case CMD_CLEAN:
+      return run_cmd_clean(cl, cfgs);
+    case CMD_BUILD:
+      return run_cmd_build(cl, cfgs);
+    case CMD_RUN:
+      return run_cmd_run(cl, cfgs);
+    case CMD_INFO:
+      return run_cmd_info(cl, cfgs);
+    case CMD_PACKAGE:
+      return run_cmd_package(cl, cfgs);
+    case CMD_TEST:
+      return run_cmd_test(cl, cfgs);
+    case CMD_BUMPVER:
+      return run_cmd_bumpver(cl, cfgs);
+    case CMD_UPDATE:
+      return run_cmd_update(cl, cfgs);
     default: {
-      printf("Command '%s' is not implemented yet.\n", CMD_INFOS[c].name);
+      print("Command '%s' is not implemented yet.", CMD_INFOS[c].name);
       return error_code(c, 1);
     }
   }
@@ -345,12 +315,14 @@ static int run_cmd(cmd c, cmdline* cl, base_cfgs* cfgs) {
 }
 
 static int print_unrecognized_command(const char* name) {
-  printf("Error: '%s' is not a recognized command.\n", name);
-  printf("Run 'bbs %s' to see the list of available commands.\n", CMD_INFOS[CMD_DEFAULT].name);
+  error("'%s' is not a recognized command.", name);
+  print("Run 'bbs %s' to see the list of available commands.", CMD_INFOS[CMD_DEFAULT].name);
   return 2;
 }
 
 int main(int argc, char** argv) {
+  atexit(release);
+
   if (argc == 1) {
     print_usage();
     return 0;
