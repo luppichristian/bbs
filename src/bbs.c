@@ -3,7 +3,7 @@
 #include "bbs_toolchain.c"
 
 static void print_section(const char* title) {
-  printf("\n%s\n", title);
+  printf(ANSI_FG_INFO "\n%s\n" ANSI_RESET, title);
 }
 
 static void print_indented_text(const char* text) {
@@ -59,7 +59,7 @@ static void print_cmd_detailed_help(cmd command) {
 }
 
 static void print_usage(void) {
-  print("Better Build System v%u.%u", VER_MAJOR, VER_MINOR);
+  print(ANSI_BOLD "Better Build System v%u.%u" ANSI_RESET, VER_MAJOR, VER_MINOR);
   print("An integrated build system for C/C++ projects.");
 
   print_section("USAGE");
@@ -95,7 +95,7 @@ static void print_help(int argc, char** argv) {
     }
   }
 
-  print("Better Build System v%u.%u", VER_MAJOR, VER_MINOR);
+  print(ANSI_BOLD "Better Build System v%u.%u" ANSI_RESET, VER_MAJOR, VER_MINOR);
   switch (help_page) {
     case CMD_DEFAULT: {
       print_section("COMMANDS");
@@ -201,12 +201,99 @@ static int run_cmd_cfg(cmd_ctx* cmdctx) {
   return 0;
 }
 
+static void toolchain_cmd_build_print_opts(toolchain_print_opts* out, cmdopt* opts) {
+  if (!out || !opts)
+    return;
+
+  enum {
+    MINIMAL = 0,
+    TOOLS,
+    SDKS,
+    TYPE,
+    TOOL,
+    SDK,
+    PATHS_ONLY,
+    VERSIONS_ONLY,
+  };
+
+  memset(out, 0, sizeof(*out));
+  out->minimal = opts[MINIMAL].present;
+  out->show_tools = opts[TOOLS].present;
+  out->show_sdks = opts[SDKS].present;
+  out->paths_only = opts[PATHS_ONLY].present;
+  out->versions_only = opts[VERSIONS_ONLY].present;
+  if (!out->show_tools && !out->show_sdks)
+    out->show_tools = out->show_sdks = true;
+
+  if (out->paths_only && out->versions_only) {
+    warn("'--paths-only' and '--versions-only' cannot be used together. Using '--paths-only'.");
+    out->versions_only = false;
+  }
+
+  if (opts[TYPE].value && opts[TYPE].value[0]) {
+    const char* type = opts[TYPE].value;
+    if (_stricmp(type, "build_system") == 0 || _stricmp(type, "c_compiler") == 0 || _stricmp(type, "cpp_compiler") == 0 || _stricmp(type, "archiver") == 0 || _stricmp(type, "linker") == 0 || _stricmp(type, "misc") == 0) {
+      out->type_filter = tool_type_from_idf(type);
+      out->has_type_filter = true;
+    } else {
+      warn("ignoring unknown tool type '%s'.", type);
+    }
+  }
+  out->tool_id_filter = opts[TOOL].value;
+  out->sdk_name_filter = opts[SDK].value;
+}
+
 static int run_cmd_toolchain(cmd_ctx* cmdctx) {
   cmdline* cl = cmdctx->cl;
   const char* sub = cmdline_consume_param(cl);
+  enum {
+    MINIMAL = 0,
+    TOOLS,
+    SDKS,
+    TYPE,
+    TOOL,
+    SDK,
+    PATHS_ONLY,
+    VERSIONS_ONLY,
+  };
+
+  cmdopt opts[] = {
+      [MINIMAL] = {"m", "minimal"},
+      [TOOLS] = {NULL, "tools"},
+      [SDKS] = {NULL, "sdks"},
+      [TYPE] = {NULL, "type"},
+      [TOOL] = {NULL, "tool"},
+      [SDK] = {NULL, "sdk"},
+      [PATHS_ONLY] = {NULL, "paths-only"},
+      [VERSIONS_ONLY] = {NULL, "versions-only"},
+  };
+
+  cmdline_consume_all_options(cl, opts, _countof(opts));
+  cmdline_validate(cl);
+
+  toolchain_print_opts print_opts = {0};
+  toolchain_cmd_build_print_opts(&print_opts, opts);
+
   if (sub && _strcmpi(sub, "init") == 0) {
-    toolchain* tc = toolchain_init(cmdctx->toolchain);
+    print("Initializing toolchain file: %s", cmdctx->toolchain);
+    toolchain* tc = toolchain_init(cmdctx->toolchain, true, cmdctx);
+    if (tc) {
+      print("Toolchain initialized successfully.");
+      toolchain_print_with_opts(tc, &print_opts);
+    }
     return tc ? 0 : error_code(CMD_TOOLCHAIN, 0);
+  }
+
+  if (sub && _strcmpi(sub, "clean") == 0) {
+    if (!file_exists(cmdctx->toolchain)) {
+      print("Toolchain is not initialized. Nothing to clean.");
+      return 0;
+    }
+    if (!file_delete(cmdctx->toolchain)) {
+      return error_code(CMD_TOOLCHAIN, 0);
+    }
+    print("Toolchain config deleted.");
+    return 0;
   }
 
   if (!file_exists(cmdctx->toolchain)) {
@@ -215,10 +302,9 @@ static int run_cmd_toolchain(cmd_ctx* cmdctx) {
     return 0;
   }
 
-  toolchain* tc = toolchain_init(cmdctx->toolchain);
+  toolchain* tc = toolchain_init(cmdctx->toolchain, false, cmdctx);
   print("Current toolchain setup:");
-  (void)tc;
-  // TODO: Print toolchain
+  toolchain_print_with_opts(tc, &print_opts);
   return 0;
 }
 
@@ -227,9 +313,6 @@ static int run_cmd_clean(cmd_ctx* cmdctx) {
 }
 
 static int run_cmd_build(cmd_ctx* cmdctx) {
-  toolchain* tc = toolchain_init(cmdctx->toolchain);
-  if (!tc) return error_code(CMD_BUILD, 0);
-
   return 0;  // TODO:
 }
 
@@ -241,7 +324,7 @@ static int run_cmd_info(cmd_ctx* cmdctx) {
   return 0;  // TODO:
 }
 
-static int run_cmd_package(cmd_ctx* cmdctx) {
+static int run_cmd_dist(cmd_ctx* cmdctx) {
   return 0;  // TODO:
 }
 
@@ -254,9 +337,6 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
 }
 
 static int run_cmd_update(cmd_ctx* cmdctx) {
-  toolchain* tc = toolchain_init(cmdctx->toolchain);
-  if (!tc) return error_code(CMD_UPDATE, 0);
-
   return 0;  // TODO:
 }
 
@@ -272,8 +352,8 @@ static int run_cmd(cmd c, cmd_ctx* cmdctx) {
       return run_cmd_run(cmdctx);
     case CMD_INFO:
       return run_cmd_info(cmdctx);
-    case CMD_PACKAGE:
-      return run_cmd_package(cmdctx);
+    case CMD_DIST:
+      return run_cmd_dist(cmdctx);
     case CMD_TEST:
       return run_cmd_test(cmdctx);
     case CMD_BUMPVER:

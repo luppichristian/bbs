@@ -15,6 +15,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define ANSI_RESET      "\x1b[0m"
+#define ANSI_BOLD       "\x1b[1m"
+#define ANSI_FG_INFO    "\x1b[38;5;110m"
+#define ANSI_FG_WARN    "\x1b[38;5;180m"
+#define ANSI_FG_ERROR   "\x1b[38;5;167m"
+#define ANSI_FG_SUCCESS "\x1b[38;5;114m"
+#define ANSI_FG_TEXT    "\x1b[38;5;245m"
+
+/* Backward-compatible color aliases */
+#define ANSI_BLACK   "\x1b[30m"
+#define ANSI_RED     ANSI_FG_ERROR
+#define ANSI_GREEN   ANSI_FG_SUCCESS
+#define ANSI_YELLOW  ANSI_FG_WARN
+#define ANSI_BLUE    ANSI_FG_INFO
+#define ANSI_MAGENTA "\x1b[35m"
+#define ANSI_CYAN    "\x1b[36m"
+#define ANSI_WHITE   "\x1b[37m"
+
+#define LABEL_INFO    ANSI_FG_TEXT
+#define LABEL_WARN    ANSI_BOLD ANSI_FG_WARN "[warn]" ANSI_RESET " " ANSI_FG_TEXT
+#define LABEL_ERROR   ANSI_BOLD ANSI_FG_ERROR "[error]" ANSI_RESET " " ANSI_FG_TEXT
+#define LABEL_SUCCESS ANSI_BOLD ANSI_FG_SUCCESS "[ ok ]" ANSI_RESET " " ANSI_FG_TEXT
+
 typedef struct {
   const char* short_name;  // "a"
   const char* long_name;   // "all"

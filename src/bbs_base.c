@@ -13,11 +13,17 @@
 #  include <unistd.h>
 #endif
 
+#if !defined(_WIN32)
+#  include <dirent.h>
+#  include <sys/stat.h>
+#endif
+
 #if !defined(_WIN32) && !defined(_MAX_PATH)
 #  define _MAX_PATH 4096
 #endif
 
 static arena garena = {0};
+static const char* arena_text(const char* begin, size_t len);
 static void* push(size_t sz) {
   if (sz == 0)
     return NULL;
@@ -83,23 +89,27 @@ static void release(void) {
 static void print(const char* fmt, ...) {
   va_list list;
   va_start(list, fmt);
+  fputs(LABEL_INFO, stdout);
   vfprintf(stdout, fmt, list);
+  fputs(ANSI_RESET, stdout);
   fputc('\n', stdout);
   va_end(list);
 }
 static void error(const char* fmt, ...) {
   va_list list;
   va_start(list, fmt);
-  fputs("Error: ", stderr);
+  fputs(LABEL_ERROR, stderr);
   vfprintf(stderr, fmt, list);
+  fputs(ANSI_RESET, stderr);
   fputc('\n', stderr);
   va_end(list);
 }
 static void warn(const char* fmt, ...) {
   va_list list;
   va_start(list, fmt);
-  fputs("Warn: ", stderr);
+  fputs(LABEL_WARN, stderr);
   vfprintf(stderr, fmt, list);
+  fputs(ANSI_RESET, stderr);
   fputc('\n', stderr);
   va_end(list);
 }
@@ -287,7 +297,7 @@ static const char* node_get_str(node* a) {
 static const char* node_get_idf(node* a) {
   if (a->type != NODE_TYPE_IDF)
     return 0;
-  return a->_idf;
+  return arena_text(a->_idf, a->txt_dim);
 }
 static int64_t node_get_int(node* a) {
   if (a->type != NODE_TYPE_INT)
@@ -363,6 +373,37 @@ static const char* arena_text(const char* begin, size_t len) {
   memcpy(out, begin, len);
   out[len] = '\0';
   return out;
+}
+
+static const char* str_unescape(const char* src, size_t src_len, size_t* out_len) {
+  if (!src) {
+    *out_len = 0;
+    return NULL;
+  }
+  char* dst = push(src_len + 1);
+  if (!dst) {
+    *out_len = 0;
+    return NULL;
+  }
+  size_t j = 0;
+  for (size_t i = 0; i < src_len; ++i) {
+    if (src[i] == '\\' && i + 1 < src_len) {
+      ++i;
+      switch (src[i]) {
+        case 'n':  dst[j++] = '\n'; break;
+        case 'r':  dst[j++] = '\r'; break;
+        case 't':  dst[j++] = '\t'; break;
+        case '\\': dst[j++] = '\\'; break;
+        case '"':  dst[j++] = '"'; break;
+        default:   dst[j++] = src[i]; break;
+      }
+    } else {
+      dst[j++] = src[i];
+    }
+  }
+  dst[j] = '\0';
+  *out_len = j;
+  return dst;
 }
 
 static bool token_all_digits(const char* begin, const char* end) {
@@ -475,6 +516,11 @@ static void parser_skip(parser* p) {
     while (*p->cur && isspace((unsigned char)*p->cur))
       ++p->cur;
 
+    if (*p->cur == ',') {
+      ++p->cur;
+      continue;
+    }
+
     if (p->cur[0] == '/' && p->cur[1] == '/') {
       while (*p->cur && *p->cur != '\n' && *p->cur != '\r')
         ++p->cur;
@@ -565,6 +611,104 @@ static node* node_alloc(void) {
   return n;
 }
 
+static bool node_set_name(node* n, const char* name) {
+  if (!n)
+    return false;
+  if (!name || !name[0]) {
+    n->name = NULL;
+    n->name_dim = 0;
+    return true;
+  }
+
+  size_t len = strlen(name);
+  const char* copy = arena_text(name, len);
+  if (!copy)
+    return false;
+
+  n->name = copy;
+  n->name_dim = len;
+  return true;
+}
+
+static node* node_create_named(const char* name) {
+  node* n = node_alloc();
+  if (!n)
+    return NULL;
+  if (!node_set_name(n, name))
+    return NULL;
+  return n;
+}
+
+static node* node_create_str(const char* name, const char* value) {
+  node* n = node_create_named(name);
+  if (!n)
+    return NULL;
+
+  if (!value)
+    value = "";
+  n->type = NODE_TYPE_STR;
+  n->_str = arena_text(value, strlen(value));
+  if (!n->_str)
+    return NULL;
+  n->txt_dim = strlen(n->_str);
+  return n;
+}
+
+static node* node_create_int(const char* name, int64_t value) {
+  node* n = node_create_named(name);
+  if (!n)
+    return NULL;
+
+  n->type = NODE_TYPE_INT;
+  n->_int = value;
+  return n;
+}
+
+static node* node_create_flt(const char* name, double value) {
+  node* n = node_create_named(name);
+  if (!n)
+    return NULL;
+
+  n->type = NODE_TYPE_FLT;
+  n->_flt = value;
+  return n;
+}
+
+static node* node_create_ver(const char* name, ver value) {
+  node* n = node_create_named(name);
+  if (!n)
+    return NULL;
+
+  n->type = NODE_TYPE_VER;
+  n->_ver = value;
+  return n;
+}
+
+static node* node_create_idf(const char* name, const char* value) {
+  node* n = node_create_named(name);
+  if (!n)
+    return NULL;
+
+  if (!value)
+    value = "";
+  n->type = NODE_TYPE_IDF;
+  n->_idf = arena_text(value, strlen(value));
+  if (!n->_idf)
+    return NULL;
+  n->txt_dim = strlen(n->_idf);
+  return n;
+}
+
+static node* node_create_bool(const char* name, bool value) {
+  node* n = node_create_named(name);
+  if (!n)
+    return NULL;
+
+  n->type = NODE_TYPE_BOL;
+  n->_bol = value;
+  return n;
+}
+
 static void node_assign_scalar(node* n, token t) {
   n->type = token_to_type(t);
   switch (n->type) {
@@ -632,12 +776,16 @@ static void node_assign_scalar(node* n, token t) {
 static node* node_parse_item(parser* p);
 
 static node* node_parse_named(parser* p, token name_tok) {
-  node* n = node_alloc();
+  char name_buf[256];
+  size_t name_len = token_len(name_tok);
+  if (name_len >= sizeof(name_buf))
+    name_len = sizeof(name_buf) - 1;
+  memcpy(name_buf, name_tok.begin, name_len);
+  name_buf[name_len] = '\0';
+
+  node* n = node_create_named(name_buf);
   if (!n)
     return NULL;
-
-  n->name = name_tok.begin;
-  n->name_dim = token_len(name_tok);
 
   token lp = parser_next(p);
   (void)lp;
@@ -653,6 +801,11 @@ static node* node_parse_named(parser* p, token name_tok) {
     node_assign_scalar(n, first);
     n->txt_offset = (size_t)(first.begin - p->src);
     n->txt_dim = token_len(first);
+    if (n->type == NODE_TYPE_STR) {
+      const char* unesc = str_unescape(n->_str, n->txt_dim, &n->txt_dim);
+      if (unesc)
+        n->_str = unesc;
+    }
     parser_next(p);  // consume ')'
     return n;
   }
@@ -698,6 +851,11 @@ static node* node_parse_item(parser* p) {
   node_assign_scalar(n, t);
   n->txt_offset = (size_t)(t.begin - p->src);
   n->txt_dim = token_len(t);
+  if (n->type == NODE_TYPE_STR) {
+    const char* unesc = str_unescape(n->_str, n->txt_dim, &n->txt_dim);
+    if (unesc)
+      n->_str = unesc;
+  }
   return n;
 }
 
@@ -1182,4 +1340,80 @@ static const char* get_path_exe(const char* filename) {
 
 static bool file_exists(const char* path) {
   return access(path, F_OK) == 0;
+}
+
+static bool file_delete(const char* path) {
+#if defined(_WIN32)
+  return DeleteFileA(path) != 0;
+#else
+  return unlink(path) == 0;
+#endif
+}
+
+static bool dir_exists(const char* path) {
+#if defined(_WIN32)
+  DWORD attr = GetFileAttributesA(path);
+  return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
+#else
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+#endif
+}
+
+static bool dir_create(const char* path) {
+#if defined(_WIN32)
+  return CreateDirectoryA(path, NULL) != 0;
+#else
+  return mkdir(path, 0755) == 0;
+#endif
+}
+static bool dir_delete(const char* path) {  // Delete directory and all its contents
+#if defined(_WIN32)
+  char search_path[_MAX_PATH];
+  snprintf(search_path, sizeof(search_path), "%s\\*", path);
+
+  WIN32_FIND_DATAA ffd;
+  HANDLE hFind = FindFirstFileA(search_path, &ffd);
+  if (hFind == INVALID_HANDLE_VALUE) return false;
+
+  do {
+    if (strcmp(ffd.cFileName, ".") == 0 || strcmp(ffd.cFileName, "..") == 0)
+      continue;
+
+    char full_path[_MAX_PATH];
+    snprintf(full_path, sizeof(full_path), "%s\\%s", path, ffd.cFileName);
+
+    if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      dir_delete(full_path);
+    } else {
+      DeleteFileA(full_path);
+    }
+  } while (FindNextFileA(hFind, &ffd) != 0);
+
+  FindClose(hFind);
+  return RemoveDirectoryA(path) != 0;
+#else
+  DIR* dir = opendir(path);
+  if (!dir) return false;
+
+  struct dirent* entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+      continue;
+
+    char full_path[_MAX_PATH];
+    snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
+
+    struct stat st;
+    if (stat(full_path, &st) == 0) {
+      if (S_ISDIR(st.st_mode)) {
+        dir_delete(full_path);
+      } else {
+        unlink(full_path);
+      }
+    }
+  }
+  closedir(dir);
+  return rmdir(path) == 0;
+#endif
 }
