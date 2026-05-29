@@ -180,19 +180,6 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .version_arg = "--version",
      .version_regex = "clang version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
      },
-    {
-     .id = "cl",
-     .type = TOOL_TYPE_C_COMPILER,
-     .target_os = OS_WINDOWS,
-     .exe_name = "cl",
-     .dir_hints = "{program_files}\\Microsoft Visual Studio;{program_files_x86}\\Microsoft Visual Studio",
-     .deep_roots = "{program_files};{program_files_x86}",
-     .version_arg = "",
-     .version_regex = "Version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     .version_arg_fallback = "/?",
-     .version_regex_fallback = "Compiler Version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-
     // CPP_COMPILER
     {
      .id = "g++",
@@ -214,19 +201,6 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .version_arg = "--version",
      .version_regex = "clang version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
      },
-    {
-     .id = "cl",
-     .type = TOOL_TYPE_CPP_COMPILER,
-     .target_os = OS_WINDOWS,
-     .exe_name = "cl",
-     .dir_hints = "{program_files}\\Microsoft Visual Studio;{program_files_x86}\\Microsoft Visual Studio",
-     .deep_roots = "{program_files};{program_files_x86}",
-     .version_arg = "",
-     .version_regex = "Version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     .version_arg_fallback = "/?",
-     .version_regex_fallback = "Compiler Version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-
     // ARCHIVERS
     {
      .id = "ar",
@@ -248,19 +222,6 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .version_arg = "--version",
      .version_regex = "LLVM version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
      },
-    {
-     .id = "lib",
-     .type = TOOL_TYPE_ARCHIVERS,
-     .target_os = OS_WINDOWS,
-     .exe_name = "lib",
-     .dir_hints = "{program_files}\\Microsoft Visual Studio;{program_files_x86}\\Microsoft Visual Studio",
-     .deep_roots = "{program_files};{program_files_x86}",
-     .version_arg = "",
-     .version_regex = "Version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     .version_arg_fallback = "/?",
-     .version_regex_fallback = "Microsoft .* Library Manager Version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-
     // LINKERS
     {
      .id = "ld",
@@ -282,19 +243,6 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .version_arg = "--version",
      .version_regex = "LLD ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
      },
-    {
-     .id = "link",
-     .type = TOOL_TYPE_LINKERS,
-     .target_os = OS_WINDOWS,
-     .exe_name = "link",
-     .dir_hints = "{program_files}\\Microsoft Visual Studio;{program_files_x86}\\Microsoft Visual Studio",
-     .deep_roots = "{program_files};{program_files_x86}",
-     .version_arg = "",
-     .version_regex = "Version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     .version_arg_fallback = "/?",
-     .version_regex_fallback = "LINK : warning .* version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-
     // MISC
     {
      .id = "objdump",
@@ -335,16 +283,6 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .deep_roots = "{msys2_root};/usr;/usr/local",
      .version_arg = "--version",
      .version_regex = "readelf(.*?) ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    {
-     .id = "dumpbin",
-     .type = TOOL_TYPE_MISC,
-     .target_os = OS_WINDOWS,
-     .exe_name = "dumpbin",
-     .dir_hints = "{program_files}\\Microsoft Visual Studio;{program_files_x86}\\Microsoft Visual Studio",
-     .deep_roots = "{program_files};{program_files_x86}",
-     .version_arg = "/?",
-     .version_regex = "Version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
      },
     {
      .id = "vcvarsall",

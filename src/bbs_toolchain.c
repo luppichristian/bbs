@@ -861,130 +861,6 @@ static int toolchain_collect_deep_tool_paths(const char* exe_name, const char* r
   return out;
 }
 
-static void toolchain_try_add_tool_from_dir(toolchain* tc, tool_type type, const char* id, const char* dir, const char* exe_base, const char* arg_a, const char* arg_b, const char* pat_a, const char* pat_b) {
-  if (!tc || !dir || !dir[0] || !exe_base || !exe_base[0] || tc->tool_c >= TOOL_ARRAY_DIM)
-    return;
-
-  const char* p1 = toolchain_join2(dir, exe_base);
-  const char* p2 = toolchain_join2(dir, toolchain_join2(exe_base, ".exe"));
-  const char* path = NULL;
-
-  if (p1 && file_exists(p1))
-    path = p1;
-  else if (p2 && file_exists(p2))
-    path = p2;
-
-  if (!path)
-    return;
-
-  path = toolchain_norm_path(path);
-  if (toolchain_tool_exists(tc, type, path))
-    return;
-
-  const char* version = toolchain_probe_version(path, arg_a, arg_b, pat_a, pat_b);
-  if (!version)
-    version = toolchain_path_version_fallback(path);
-  toolchain_upsert_tool(tc, id, type, path, version);
-
-  if (version && version[0])
-    print("  [tool] %-12s found at %s (v%s)", id, path, version);
-  else
-    print("  [tool] %-12s found at %s (version unknown)", id, path);
-}
-
-static void toolchain_discover_vs_tool_bins(toolchain* tc) {
-#if defined(_WIN32)
-  const char* pf86 = getenv("ProgramFiles(x86)");
-  if (!pf86 || !pf86[0])
-    return;
-
-  char vswhere[_MAX_PATH] = {0};
-  snprintf(vswhere, sizeof(vswhere), "%s\\Microsoft Visual Studio\\Installer\\vswhere.exe", pf86);
-  if (!file_exists(vswhere))
-    return;
-
-  char cmd[2048] = {0};
-  snprintf(cmd, sizeof(cmd), "\"%s\" -all -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>nul", vswhere);
-
-  const char* installs[32] = {0};
-  int install_c = toolchain_run_collect_lines(cmd, installs, 32);
-  for (int i = 0; i < install_c; ++i) {
-    const char* install = installs[i];
-    const char* msvc_root = toolchain_join2(install, "VC/Tools/MSVC");
-    if (!dir_exists(msvc_root))
-      continue;
-
-    char ver_cmd[2048] = {0};
-    snprintf(ver_cmd, sizeof(ver_cmd), "dir /b /ad \"%s\" 2>nul", msvc_root);
-    const char* versions[32] = {0};
-    int ver_c = toolchain_run_collect_lines(ver_cmd, versions, 32);
-    for (int v = 0; v < ver_c; ++v) {
-      const char* ver_root = toolchain_join2(msvc_root, versions[v]);
-      const char* bin_x64 = toolchain_join2(ver_root, "bin/Hostx64/x64");
-      const char* bin_x86 = toolchain_join2(ver_root, "bin/Hostx64/x86");
-      const char* bin_arm64 = toolchain_join2(ver_root, "bin/Hostx64/arm64");
-      const char* bin_hx86_x86 = toolchain_join2(ver_root, "bin/Hostx86/x86");
-      const char* bin_hx86_x64 = toolchain_join2(ver_root, "bin/Hostx86/x64");
-      const char* bin_hx86_arm64 = toolchain_join2(ver_root, "bin/Hostx86/arm64");
-      const char* bin_harm64_x64 = toolchain_join2(ver_root, "bin/Hostarm64/x64");
-      const char* bin_harm64_x86 = toolchain_join2(ver_root, "bin/Hostarm64/x86");
-      const char* bin_harm64_arm64 = toolchain_join2(ver_root, "bin/Hostarm64/arm64");
-
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_C_COMPILER, "cl", bin_x64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_CPP_COMPILER, "cl", bin_x64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_LINKERS, "link", bin_x64, "link", "", "/?", "Version", "LINK");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_ARCHIVERS, "lib", bin_x64, "lib", "", "/?", "Version", "Library Manager Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_MISC, "dumpbin", bin_x64, "dumpbin", "/?", "", "Version", "Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_BUILD_SYSTEM, "nmake", bin_x64, "nmake", "/?", "", "Version", "Version");
-
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_C_COMPILER, "cl", bin_x86, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_CPP_COMPILER, "cl", bin_x86, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_LINKERS, "link", bin_x86, "link", "", "/?", "Version", "LINK");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_ARCHIVERS, "lib", bin_x86, "lib", "", "/?", "Version", "Library Manager Version");
-
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_C_COMPILER, "cl", bin_arm64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_CPP_COMPILER, "cl", bin_arm64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_LINKERS, "link", bin_arm64, "link", "", "/?", "Version", "LINK");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_ARCHIVERS, "lib", bin_arm64, "lib", "", "/?", "Version", "Library Manager Version");
-
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_C_COMPILER, "cl", bin_hx86_x86, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_CPP_COMPILER, "cl", bin_hx86_x86, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_LINKERS, "link", bin_hx86_x86, "link", "", "/?", "Version", "LINK");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_ARCHIVERS, "lib", bin_hx86_x86, "lib", "", "/?", "Version", "Library Manager Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_MISC, "dumpbin", bin_hx86_x86, "dumpbin", "/?", "", "Version", "Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_BUILD_SYSTEM, "nmake", bin_hx86_x86, "nmake", "/?", "", "Version", "Version");
-
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_C_COMPILER, "cl", bin_hx86_x64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_CPP_COMPILER, "cl", bin_hx86_x64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_LINKERS, "link", bin_hx86_x64, "link", "", "/?", "Version", "LINK");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_ARCHIVERS, "lib", bin_hx86_x64, "lib", "", "/?", "Version", "Library Manager Version");
-
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_C_COMPILER, "cl", bin_hx86_arm64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_CPP_COMPILER, "cl", bin_hx86_arm64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_LINKERS, "link", bin_hx86_arm64, "link", "", "/?", "Version", "LINK");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_ARCHIVERS, "lib", bin_hx86_arm64, "lib", "", "/?", "Version", "Library Manager Version");
-
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_C_COMPILER, "cl", bin_harm64_x64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_CPP_COMPILER, "cl", bin_harm64_x64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_LINKERS, "link", bin_harm64_x64, "link", "", "/?", "Version", "LINK");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_ARCHIVERS, "lib", bin_harm64_x64, "lib", "", "/?", "Version", "Library Manager Version");
-
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_C_COMPILER, "cl", bin_harm64_x86, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_CPP_COMPILER, "cl", bin_harm64_x86, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_LINKERS, "link", bin_harm64_x86, "link", "", "/?", "Version", "LINK");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_ARCHIVERS, "lib", bin_harm64_x86, "lib", "", "/?", "Version", "Library Manager Version");
-
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_C_COMPILER, "cl", bin_harm64_arm64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_CPP_COMPILER, "cl", bin_harm64_arm64, "cl", "", "/?", "Version", "Compiler Version");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_LINKERS, "link", bin_harm64_arm64, "link", "", "/?", "Version", "LINK");
-      toolchain_try_add_tool_from_dir(tc, TOOL_TYPE_ARCHIVERS, "lib", bin_harm64_arm64, "lib", "", "/?", "Version", "Library Manager Version");
-    }
-  }
-#else
-  (void)tc;
-#endif
-}
-
 static const char* toolchain_probe_version(const char* exe_path, const char* arg_a, const char* arg_b, const char* pat_a, const char* pat_b) {
   if (!exe_path || !exe_path[0])
     return NULL;
@@ -1027,6 +903,22 @@ static void toolchain_discover_tool(toolchain* tc, const tool_discover_strat* s)
   if (!tc || !s || tc->tool_c >= TOOL_ARRAY_DIM)
     return;
 
+  if (_stricmp(s->id, "vcvarsall") == 0) {
+    const char* vcvars = toolchain_find_with_vswhere_vcvarsall();
+    if (vcvars) {
+      const char* version = toolchain_probe_version(vcvars, s->version_arg, s->version_arg_fallback, s->version_regex, s->version_regex_fallback);
+      if (!version)
+        version = toolchain_path_version_fallback(vcvars);
+      toolchain_upsert_tool(tc, s->id, s->type, vcvars, version);
+
+      if (version && version[0])
+        print("  [tool] %-12s found at %s (v%s)", s->id, vcvars, version);
+      else
+        print("  [tool] %-12s found at %s (version unknown)", s->id, vcvars);
+      return;
+    }
+  }
+
   const char* matches[64] = {0};
   int match_c = 0;
 
@@ -1035,11 +927,6 @@ static void toolchain_discover_tool(toolchain* tc, const tool_discover_strat* s)
     int found_c = toolchain_collect_with_system(s->exe_name, found, _countof(found));
     for (int i = 0; i < found_c; ++i)
       toolchain_push_unique_path(matches, &match_c, _countof(matches), found[i]);
-  }
-  if (_stricmp(s->id, "vcvarsall") == 0) {
-    const char* vcvars = toolchain_find_with_vswhere_vcvarsall();
-    if (vcvars)
-      toolchain_push_unique_path(matches, &match_c, _countof(matches), vcvars);
   }
   if (match_c < _countof(matches)) {
     const char* found[64] = {0};
@@ -1480,9 +1367,6 @@ static void toolchain_fill(toolchain* tc) {
 
   for (size_t i = 0; i < sizeof(TOOL_DISCOVER_STRATS) / sizeof(TOOL_DISCOVER_STRATS[0]); ++i)
     toolchain_discover_tool(tc, &TOOL_DISCOVER_STRATS[i]);
-
-  print("Discovering Visual Studio tool bins...");
-  toolchain_discover_vs_tool_bins(tc);
 
   print("Discovering SDKs...");
 
