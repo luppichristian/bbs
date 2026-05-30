@@ -3,16 +3,6 @@
 #include "bbs.h"
 #include "bbs_base.c"
 
-static const char* get_full_platform_name(arch a, os o) {
-  char name[256] = {0};
-  snprintf(name, 256, "%s%s", ARCH_NAMES[a], OS_NAMES[a]);
-  int len = strlen(name);
-  char* str = push(len + 1);
-  memcpy(str, name, len);
-  str[len] = 0;
-  return str;
-}
-
 static bool toolchain_tool_exists(toolchain* tc, tool_type type, const char* path);
 static const char* toolchain_probe_version(const char* exe_path, const char* arg_a, const char* arg_b, const char* pat_a, const char* pat_b);
 static const char* toolchain_first_path_match(const char* pattern);
@@ -35,6 +25,7 @@ static toolchain_env* toolchain_host_env(toolchain* tc, bool ensure);
 static void toolchain_sort_tool_array(tool* items, int count);
 static void toolchain_sort_sdk_array(sdk* items, int count);
 static void toolchain_discover_extra_envs(toolchain* tc);
+static void toolchain_enable_docker_buildx_linux_support(toolchain* tc);
 
 static arch toolchain_detect_host_arch(void) {
 #if defined(_M_ARM64) || defined(__aarch64__)
@@ -80,22 +71,6 @@ static bool toolchain_list_has_ci(const char** items, int count, const char* val
   return false;
 }
 
-static bool toolchain_has_tool_id(toolchain* tc, const char* id) {
-  if (!tc || !id || !id[0])
-    return false;
-
-  toolchain_env* env = toolchain_host_env(tc, false);
-  if (!env)
-    return false;
-
-  for (int i = 0; i < env->tool_c; ++i) {
-    if (env->tools[i].id && _stricmp(env->tools[i].id, id) == 0)
-      return true;
-  }
-
-  return false;
-}
-
 static const char* toolchain_get_tool_path(toolchain* tc, const char* id) {
   if (!tc || !id || !id[0])
     return NULL;
@@ -110,33 +85,6 @@ static const char* toolchain_get_tool_path(toolchain* tc, const char* id) {
   }
 
   return NULL;
-}
-
-static bool toolchain_has_sdk_name(toolchain* tc, const char* name) {
-  if (!tc || !name || !name[0])
-    return false;
-
-  toolchain_env* env = toolchain_host_env(tc, false);
-  if (!env)
-    return false;
-
-  for (int i = 0; i < env->sdk_c; ++i) {
-    if (env->sdks[i].name && _stricmp(env->sdks[i].name, name) == 0)
-      return true;
-  }
-
-  return false;
-}
-
-static void toolchain_set_platform_support(toolchain* tc, os target_os, arch target_arch, bool supported) {
-  if (!tc || target_os < 0 || target_os >= OS_MAX || target_arch < 0 || target_arch >= ARCH_MAX)
-    return;
-
-  tc->supported[target_os][target_arch] = supported;
-}
-
-static void toolchain_enable_platform_support(toolchain* tc, os target_os, arch target_arch) {
-  toolchain_set_platform_support(tc, target_os, target_arch, true);
 }
 
 static void toolchain_set_platform_support_source(toolchain* tc, os target_os, arch target_arch, const char* source) {
@@ -375,6 +323,7 @@ static void toolchain_refresh_runtime_support(toolchain* tc) {
   }
 
   toolchain_discover_extra_envs(tc);
+  toolchain_enable_docker_buildx_linux_support(tc);
   toolchain_rebuild_aggregate_support(tc);
 }
 
@@ -409,116 +358,6 @@ static int toolchain_collect_wsl_distros(const char** distros, int max_distros) 
   (void)distros;
   (void)max_distros;
   return 0;
-#endif
-}
-
-static void toolchain_probe_wsl_distro_linux_support(toolchain* tc, const char* wsl, const char* distro) {
-#if defined(_WIN32)
-  if (!tc || !wsl || !wsl[0] || !distro)
-    return;
-
-  const char* wsl_cmd = toolchain_path_basename(wsl);
-  const char* native_source = distro[0] ? toolchain_join2("wsl:", distro) : "wsl:default";
-  const char* cross_source = distro[0] ? toolchain_join2("wsl-cross:", distro) : "wsl-cross:default";
-  if (!wsl_cmd || !wsl_cmd[0])
-    wsl_cmd = "wsl.exe";
-
-  char cmd[4096] = {0};
-  if (distro[0]) {
-    snprintf(cmd,
-             sizeof(cmd),
-             "%s -d \"%s\" -e sh -lc \"uname -m; command -v gcc && echo has_native_gcc; command -v g++ && echo has_native_gpp; command -v x86_64-linux-gnu-gcc && echo has_x86_64_gcc; command -v x86_64-linux-gnu-g++ && echo has_x86_64_gpp; command -v i686-linux-gnu-gcc && echo has_x86_gcc; command -v i686-linux-gnu-g++ && echo has_x86_gpp; command -v aarch64-linux-gnu-gcc && echo has_arm64_gcc; command -v aarch64-linux-gnu-g++ && echo has_arm64_gpp\" 2>nul",
-             wsl_cmd,
-             distro);
-  } else {
-    snprintf(cmd,
-             sizeof(cmd),
-             "%s -e sh -lc \"uname -m; command -v gcc && echo has_native_gcc; command -v g++ && echo has_native_gpp; command -v x86_64-linux-gnu-gcc && echo has_x86_64_gcc; command -v x86_64-linux-gnu-g++ && echo has_x86_64_gpp; command -v i686-linux-gnu-gcc && echo has_x86_gcc; command -v i686-linux-gnu-g++ && echo has_x86_gpp; command -v aarch64-linux-gnu-gcc && echo has_arm64_gcc; command -v aarch64-linux-gnu-g++ && echo has_arm64_gpp\" 2>nul",
-             wsl_cmd);
-  }
-
-  const char* lines[64] = {0};
-  int line_c = toolchain_run_collect_lines(cmd, lines, _countof(lines));
-  if (line_c <= 0)
-    return;
-
-  const char* native_arch = NULL;
-  bool has_native_gcc = false;
-  bool has_native_gpp = false;
-  bool has_x86_64_gcc = false;
-  bool has_x86_64_gpp = false;
-  bool has_x86_gcc = false;
-  bool has_x86_gpp = false;
-  bool has_arm64_gcc = false;
-  bool has_arm64_gpp = false;
-
-  for (int i = 0; i < line_c; ++i) {
-    const char* line = lines[i];
-    if (!line || !line[0])
-      continue;
-
-    if (!native_arch)
-      native_arch = line;
-    else if (_stricmp(line, "has_native_gcc") == 0)
-      has_native_gcc = true;
-    else if (_stricmp(line, "has_native_gpp") == 0)
-      has_native_gpp = true;
-    else if (_stricmp(line, "has_x86_64_gcc") == 0)
-      has_x86_64_gcc = true;
-    else if (_stricmp(line, "has_x86_64_gpp") == 0)
-      has_x86_64_gpp = true;
-    else if (_stricmp(line, "has_x86_gcc") == 0)
-      has_x86_gcc = true;
-    else if (_stricmp(line, "has_x86_gpp") == 0)
-      has_x86_gpp = true;
-    else if (_stricmp(line, "has_arm64_gcc") == 0)
-      has_arm64_gcc = true;
-    else if (_stricmp(line, "has_arm64_gpp") == 0)
-      has_arm64_gpp = true;
-  }
-
-  if (has_native_gcc && has_native_gpp && native_arch) {
-    if (_stricmp(native_arch, "x86_64") == 0 || _stricmp(native_arch, "amd64") == 0)
-      toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86_64, native_source);
-    else if (_stricmp(native_arch, "i686") == 0 || _stricmp(native_arch, "i386") == 0 || _stricmp(native_arch, "x86") == 0)
-      toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86, native_source);
-    else if (_stricmp(native_arch, "aarch64") == 0 || _stricmp(native_arch, "arm64") == 0)
-      toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_ARM64, native_source);
-  }
-
-  if (has_x86_64_gcc && has_x86_64_gpp)
-    toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86_64, cross_source);
-  if (has_x86_gcc && has_x86_gpp)
-    toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86, cross_source);
-  if (has_arm64_gcc && has_arm64_gpp)
-    toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_ARM64, cross_source);
-#else
-  (void)tc;
-  (void)wsl;
-  (void)distro;
-#endif
-}
-
-static void toolchain_enable_wsl_linux_support(toolchain* tc) {
-#if defined(_WIN32)
-  if (!tc)
-    return;
-
-  const char* wsl = toolchain_get_tool_path(tc, "wsl");
-  if (!wsl || !wsl[0])
-    return;
-
-  toolchain_probe_wsl_distro_linux_support(tc, wsl, "");
-
-  const char* distros[32] = {0};
-  int distro_c = toolchain_collect_wsl_distros(distros, _countof(distros));
-  if (distro_c <= 0)
-    return;
-
-  for (int i = 0; i < distro_c; ++i)
-    toolchain_probe_wsl_distro_linux_support(tc, wsl, distros[i]);
-#else
-  (void)tc;
 #endif
 }
 
@@ -2451,7 +2290,7 @@ static node* toolchain_write(toolchain* tc) {
       toolchain_push_child_back(env_n, env_host_n);
     }
 
-    node* env_tools_n = node_create_named("tools");
+    node* env_tools_n = env->tool_c > 0 ? node_create_named("tools") : NULL;
     if (env_tools_n)
       toolchain_push_child_back(env_n, env_tools_n);
     for (int i = 0; env_tools_n && i < env->tool_c; ++i) {
@@ -2467,7 +2306,7 @@ static node* toolchain_write(toolchain* tc) {
       toolchain_push_child_back(env_tools_n, t);
     }
 
-    node* env_sdks_n = node_create_named("sdks");
+    node* env_sdks_n = env->sdk_c > 0 ? node_create_named("sdks") : NULL;
     if (env_sdks_n)
       toolchain_push_child_back(env_n, env_sdks_n);
     for (int i = 0; env_sdks_n && i < env->sdk_c; ++i) {
