@@ -99,19 +99,33 @@ typedef struct {
 } sdk_discover_strat;
 
 typedef struct {
+  const char* id;
+  const char* provider;
+  const char* name;
+  arch p_arch;
+  os p_os;
+  bool supported[OS_MAX][ARCH_MAX];
+  const char* support_source[OS_MAX][ARCH_MAX];
+
+#define TOOL_ENV_TOOL_ARRAY_DIM 256
+  tool tools[TOOL_ENV_TOOL_ARRAY_DIM];
+  int tool_c;
+
+#define TOOL_ENV_SDK_ARRAY_DIM 256
+  sdk sdks[TOOL_ENV_SDK_ARRAY_DIM];
+  int sdk_c;
+} toolchain_env;
+
+typedef struct {
   // Platform
   arch p_arch;
   os p_os;
+  bool supported[OS_MAX][ARCH_MAX];
+  const char* support_source[OS_MAX][ARCH_MAX];
 
-  // Tools
-#define TOOL_ARRAY_DIM 256
-  tool tools[TOOL_ARRAY_DIM];
-  int tool_c;
-
-// SDKs
-#define SDK_ARRAY_DIM 256
-  sdk sdks[SDK_ARRAY_DIM];
-  int sdk_c;
+#define TOOLCHAIN_ENV_ARRAY_DIM 64
+  toolchain_env envs[TOOLCHAIN_ENV_ARRAY_DIM];
+  int env_c;
 } toolchain;
 
 static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
@@ -273,6 +287,28 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .deep_roots = "{msys2_root};/usr;/usr/local",
      .version_arg = "--version",
      .version_regex = "strings(.*?) ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
+     },
+    {
+     .id = "docker",
+     .type = TOOL_TYPE_MISC,
+     .target_os = OS_MAX,
+     .exe_name = "docker",
+     .dir_hints = "{program_files}\\Docker\\Docker\\resources\\bin;{local_app_data}\\Programs\\Docker\\Docker\\resources\\bin;C:\\Program Files\\Docker\\Docker\\resources\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
+     .deep_roots = "{program_files};{local_app_data};/usr;/usr/local;/opt/homebrew",
+     .version_arg = "--version",
+     .version_regex = "Docker version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
+     },
+    {
+     .id = "wsl",
+     .type = TOOL_TYPE_MISC,
+     .target_os = OS_WINDOWS,
+     .exe_name = "wsl",
+     .dir_hints = "C:\\Windows\\System32;{user_profile}\\AppData\\Local\\Microsoft\\WindowsApps",
+     .deep_roots = "",
+     .version_arg = "--version",
+     .version_regex = "WSL version: ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
+     .version_arg_fallback = "--status",
+     .version_regex_fallback = "Default Version: ([0-9]+)",
      },
     {
      .id = "readelf",

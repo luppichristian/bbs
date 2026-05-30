@@ -3,13 +3,58 @@
 #include "bbs.h"
 #include "bbs_base.c"
 
+static const char* get_full_platform_name(arch a, os o) {
+  char name[256] = {0};
+  snprintf(name, 256, "%s%s", ARCH_NAMES[a], OS_NAMES[a]);
+  int len = strlen(name);
+  char* str = push(len + 1);
+  memcpy(str, name, len);
+  str[len] = 0;
+  return str;
+}
+
 static bool toolchain_tool_exists(toolchain* tc, tool_type type, const char* path);
 static const char* toolchain_probe_version(const char* exe_path, const char* arg_a, const char* arg_b, const char* pat_a, const char* pat_b);
 static const char* toolchain_first_path_match(const char* pattern);
 static int toolchain_collect_path_matches(const char* pattern, const char** matches, int max_matches, bool dirs_only);
+static const char* toolchain_path_basename(const char* path);
+static const char* toolchain_join2(const char* a, const char* b);
 static const char* toolchain_norm_path(const char* in);
 static const char* toolchain_extract_version(const char* text);
+static const char* toolchain_extract_version_by_pattern(const char* text, const char* pattern);
+static const char* toolchain_path_version_fallback(const char* path);
+static int toolchain_run_collect_lines(const char* cmd, const char** lines, int max_lines);
 static const char* toolchain_run_extract_version(const char* cmd);
+static const char* toolchain_append_text(const char* text, const char* suffix);
+static void toolchain_set_tool(tool* out, const char* id, tool_type type, const char* path, const char* version);
+static int toolchain_tool_cmp(const tool* a, const tool* b);
+static int toolchain_sdk_cmp(const sdk* a, const sdk* b);
+static int toolchain_env_find_index(toolchain* tc, const char* id);
+static const char* toolchain_make_env_id(const char* provider, const char* name, os target_os, arch target_arch);
+static toolchain_env* toolchain_host_env(toolchain* tc, bool ensure);
+static void toolchain_sort_tool_array(tool* items, int count);
+static void toolchain_sort_sdk_array(sdk* items, int count);
+static void toolchain_discover_extra_envs(toolchain* tc);
+
+static arch toolchain_detect_host_arch(void) {
+#if defined(_M_ARM64) || defined(__aarch64__)
+  return ARCH_ARM64;
+#elif defined(_M_IX86) || defined(__i386__)
+  return ARCH_X86;
+#else
+  return ARCH_X86_64;
+#endif
+}
+
+static os toolchain_detect_host_os(void) {
+#if defined(_WIN32)
+  return OS_WINDOWS;
+#elif defined(__APPLE__)
+  return OS_MACOS;
+#else
+  return OS_LINUX;
+#endif
+}
 
 typedef struct {
   bool minimal;
@@ -33,6 +78,672 @@ static bool toolchain_list_has_ci(const char** items, int count, const char* val
   }
 
   return false;
+}
+
+static bool toolchain_has_tool_id(toolchain* tc, const char* id) {
+  if (!tc || !id || !id[0])
+    return false;
+
+  toolchain_env* env = toolchain_host_env(tc, false);
+  if (!env)
+    return false;
+
+  for (int i = 0; i < env->tool_c; ++i) {
+    if (env->tools[i].id && _stricmp(env->tools[i].id, id) == 0)
+      return true;
+  }
+
+  return false;
+}
+
+static const char* toolchain_get_tool_path(toolchain* tc, const char* id) {
+  if (!tc || !id || !id[0])
+    return NULL;
+
+  toolchain_env* env = toolchain_host_env(tc, false);
+  if (!env)
+    return NULL;
+
+  for (int i = 0; i < env->tool_c; ++i) {
+    if (env->tools[i].id && _stricmp(env->tools[i].id, id) == 0)
+      return env->tools[i].path;
+  }
+
+  return NULL;
+}
+
+static bool toolchain_has_sdk_name(toolchain* tc, const char* name) {
+  if (!tc || !name || !name[0])
+    return false;
+
+  toolchain_env* env = toolchain_host_env(tc, false);
+  if (!env)
+    return false;
+
+  for (int i = 0; i < env->sdk_c; ++i) {
+    if (env->sdks[i].name && _stricmp(env->sdks[i].name, name) == 0)
+      return true;
+  }
+
+  return false;
+}
+
+static void toolchain_set_platform_support(toolchain* tc, os target_os, arch target_arch, bool supported) {
+  if (!tc || target_os < 0 || target_os >= OS_MAX || target_arch < 0 || target_arch >= ARCH_MAX)
+    return;
+
+  tc->supported[target_os][target_arch] = supported;
+}
+
+static void toolchain_enable_platform_support(toolchain* tc, os target_os, arch target_arch) {
+  toolchain_set_platform_support(tc, target_os, target_arch, true);
+}
+
+static void toolchain_set_platform_support_source(toolchain* tc, os target_os, arch target_arch, const char* source) {
+  if (!tc || target_os < 0 || target_os >= OS_MAX || target_arch < 0 || target_arch >= ARCH_MAX || !source || !source[0])
+    return;
+
+  tc->support_source[target_os][target_arch] = arena_text(source, strlen(source));
+}
+
+static void toolchain_enable_platform_support_with_source(toolchain* tc, os target_os, arch target_arch, const char* source) {
+  if (!tc || target_os < 0 || target_os >= OS_MAX || target_arch < 0 || target_arch >= ARCH_MAX)
+    return;
+
+  if (!tc->supported[target_os][target_arch]) {
+    tc->supported[target_os][target_arch] = true;
+    toolchain_set_platform_support_source(tc, target_os, target_arch, source);
+    return;
+  }
+
+  if (!tc->support_source[target_os][target_arch] || !tc->support_source[target_os][target_arch][0])
+    toolchain_set_platform_support_source(tc, target_os, target_arch, source);
+}
+
+static toolchain_env* toolchain_host_env(toolchain* tc, bool ensure) {
+  if (!tc)
+    return NULL;
+
+  int idx = toolchain_env_find_index(tc, toolchain_make_env_id("host", "current", tc->p_os, tc->p_arch));
+  if (idx >= 0)
+    return &tc->envs[idx];
+  if (!ensure || tc->env_c >= TOOLCHAIN_ENV_ARRAY_DIM)
+    return NULL;
+
+  toolchain_env* env = &tc->envs[tc->env_c++];
+  memset(env, 0, sizeof(*env));
+  env->provider = "host";
+  env->name = "current";
+  env->p_os = tc->p_os;
+  env->p_arch = tc->p_arch;
+  env->id = toolchain_make_env_id(env->provider, env->name, env->p_os, env->p_arch);
+  return env;
+}
+
+static int toolchain_env_find_index(toolchain* tc, const char* id) {
+  if (!tc || !id || !id[0])
+    return -1;
+
+  for (int i = 0; i < tc->env_c; ++i) {
+    if (tc->envs[i].id && _stricmp(tc->envs[i].id, id) == 0)
+      return i;
+  }
+
+  return -1;
+}
+
+static bool toolchain_env_has_tool_id(toolchain_env* env, const char* id) {
+  if (!env || !id || !id[0])
+    return false;
+
+  for (int i = 0; i < env->tool_c; ++i) {
+    if (env->tools[i].id && _stricmp(env->tools[i].id, id) == 0)
+      return true;
+  }
+
+  return false;
+}
+
+static bool toolchain_env_has_sdk_name(toolchain_env* env, const char* name) {
+  if (!env || !name || !name[0])
+    return false;
+
+  for (int i = 0; i < env->sdk_c; ++i) {
+    if (env->sdks[i].name && _stricmp(env->sdks[i].name, name) == 0)
+      return true;
+  }
+
+  return false;
+}
+
+static void toolchain_env_set_support_source(toolchain_env* env, os target_os, arch target_arch, const char* source) {
+  if (!env || target_os < 0 || target_os >= OS_MAX || target_arch < 0 || target_arch >= ARCH_MAX || !source || !source[0])
+    return;
+
+  env->support_source[target_os][target_arch] = arena_text(source, strlen(source));
+}
+
+static void toolchain_env_enable_support(toolchain_env* env, os target_os, arch target_arch, const char* source) {
+  if (!env || target_os < 0 || target_os >= OS_MAX || target_arch < 0 || target_arch >= ARCH_MAX)
+    return;
+
+  env->supported[target_os][target_arch] = true;
+  if ((!env->support_source[target_os][target_arch] || !env->support_source[target_os][target_arch][0]) && source && source[0])
+    toolchain_env_set_support_source(env, target_os, target_arch, source);
+}
+
+static void toolchain_sort_tool_array(tool* items, int count) {
+  if (!items || count <= 1)
+    return;
+
+  for (int i = 0; i < count - 1; ++i) {
+    for (int j = i + 1; j < count; ++j) {
+      if (toolchain_tool_cmp(&items[i], &items[j]) > 0) {
+        tool tmp = items[i];
+        items[i] = items[j];
+        items[j] = tmp;
+      }
+    }
+  }
+}
+
+static void toolchain_sort_sdk_array(sdk* items, int count) {
+  if (!items || count <= 1)
+    return;
+
+  for (int i = 0; i < count - 1; ++i) {
+    for (int j = i + 1; j < count; ++j) {
+      if (toolchain_sdk_cmp(&items[i], &items[j]) > 0) {
+        sdk tmp = items[i];
+        items[i] = items[j];
+        items[j] = tmp;
+      }
+    }
+  }
+}
+
+static const char* toolchain_make_env_id(const char* provider, const char* name, os target_os, arch target_arch) {
+  char buf[256] = {0};
+  snprintf(buf,
+           sizeof(buf),
+           "%s:%s:%s:%s",
+           provider ? provider : "env",
+           name ? name : "default",
+           target_os >= 0 && target_os < OS_MAX ? OS_NAMES[target_os] : "unknown",
+           target_arch >= 0 && target_arch < ARCH_MAX ? ARCH_NAMES[target_arch] : "unknown");
+  return arena_text(buf, strlen(buf));
+}
+
+static void toolchain_add_or_replace_env(toolchain* tc, const toolchain_env* src) {
+  if (!tc || !src || !src->id || !src->id[0])
+    return;
+
+  int idx = toolchain_env_find_index(tc, src->id);
+  if (idx >= 0) {
+    tc->envs[idx] = *src;
+    return;
+  }
+
+  if (tc->env_c >= TOOLCHAIN_ENV_ARRAY_DIM)
+    return;
+  tc->envs[tc->env_c++] = *src;
+}
+
+static void toolchain_snapshot_current_host_env(toolchain* tc) {
+  if (!tc)
+    return;
+
+  toolchain_env* env = toolchain_host_env(tc, true);
+  if (!env)
+    return;
+  env->p_os = tc->p_os;
+  env->p_arch = tc->p_arch;
+  env->provider = "host";
+  env->name = "current";
+  env->id = toolchain_make_env_id(env->provider, env->name, env->p_os, env->p_arch);
+  memcpy(env->supported, tc->supported, sizeof(env->supported));
+  memcpy(env->support_source, tc->support_source, sizeof(env->support_source));
+}
+
+static void toolchain_rebuild_aggregate_support(toolchain* tc) {
+  if (!tc)
+    return;
+
+  memset(tc->supported, 0, sizeof(tc->supported));
+  memset(tc->support_source, 0, sizeof(tc->support_source));
+  for (int ei = 0; ei < tc->env_c; ++ei) {
+    toolchain_env* env = &tc->envs[ei];
+    for (int osi = 0; osi < OS_MAX; ++osi) {
+      for (int ai = 0; ai < ARCH_MAX; ++ai) {
+        if (!env->supported[osi][ai])
+          continue;
+        toolchain_enable_platform_support_with_source(tc, (os)osi, (arch)ai, env->support_source[osi][ai] ? env->support_source[osi][ai] : env->id);
+      }
+    }
+  }
+}
+
+static void toolchain_fill_env_platform_support(toolchain_env* env, bool is_current_host) {
+  if (!env)
+    return;
+
+  memset(env->supported, 0, sizeof(env->supported));
+  memset(env->support_source, 0, sizeof(env->support_source));
+
+  if (!is_current_host)
+    return;
+
+  bool has_gcc = toolchain_env_has_tool_id(env, "gcc");
+  bool has_gpp = toolchain_env_has_tool_id(env, "g++");
+  bool has_clang = toolchain_env_has_tool_id(env, "clang");
+  bool has_clangpp = toolchain_env_has_tool_id(env, "clang++");
+  bool has_linker = toolchain_env_has_tool_id(env, "ld") || toolchain_env_has_tool_id(env, "lld");
+  bool has_archiver = toolchain_env_has_tool_id(env, "ar") || toolchain_env_has_tool_id(env, "llvm-ar");
+  bool has_posix_cpp_toolchain = has_linker && has_archiver && ((has_gcc && has_gpp) || (has_clang && has_clangpp));
+  bool has_vcvarsall = toolchain_env_has_tool_id(env, "vcvarsall");
+  bool has_msvc = has_vcvarsall && toolchain_env_has_sdk_name(env, "msvc") && toolchain_env_has_sdk_name(env, "windows_sdk") && toolchain_env_has_sdk_name(env, "ucrt_sdk");
+  bool has_xcode = toolchain_env_has_sdk_name(env, "xcode");
+
+  if (env->p_os == OS_WINDOWS) {
+    if (has_msvc) {
+      toolchain_env_enable_support(env, OS_WINDOWS, ARCH_X86_64, "msvc");
+      toolchain_env_enable_support(env, OS_WINDOWS, ARCH_X86, "msvc");
+      toolchain_env_enable_support(env, OS_WINDOWS, ARCH_ARM64, "msvc");
+    } else if (has_posix_cpp_toolchain) {
+      toolchain_env_enable_support(env, OS_WINDOWS, env->p_arch, "host-toolchain");
+    }
+  }
+
+  if (env->p_os == OS_LINUX && has_posix_cpp_toolchain)
+    toolchain_env_enable_support(env, OS_LINUX, env->p_arch, "host-toolchain");
+
+  if (env->p_os == OS_MACOS && has_xcode) {
+    toolchain_env_enable_support(env, OS_MACOS, ARCH_X86_64, "xcode");
+    toolchain_env_enable_support(env, OS_MACOS, ARCH_ARM64, "xcode");
+  }
+}
+
+static void toolchain_refresh_runtime_support(toolchain* tc) {
+  if (!tc)
+    return;
+
+  const char* current_host_id = toolchain_make_env_id("host", "current", tc->p_os, tc->p_arch);
+  for (int i = 0; i < tc->env_c; ++i) {
+    toolchain_env* env = &tc->envs[i];
+    bool is_current_host = env->provider && _stricmp(env->provider, "host") == 0 && env->id && _stricmp(env->id, current_host_id) == 0;
+    toolchain_fill_env_platform_support(env, is_current_host);
+  }
+
+  toolchain_discover_extra_envs(tc);
+  toolchain_rebuild_aggregate_support(tc);
+}
+
+static int toolchain_collect_wsl_distros(const char** distros, int max_distros) {
+#if defined(_WIN32)
+  if (!distros || max_distros <= 0)
+    return 0;
+
+  const char* cmd = "reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss /s /v DistributionName 2>nul";
+  const char* lines[64] = {0};
+  int line_c = toolchain_run_collect_lines(cmd, lines, _countof(lines));
+  int out = 0;
+  for (int i = 0; i < line_c && out < max_distros; ++i) {
+    const char* line = lines[i];
+    if (!line || !line[0])
+      continue;
+
+    const char* reg_sz = strstr(line, "REG_SZ");
+    if (!reg_sz)
+      continue;
+
+    reg_sz += strlen("REG_SZ");
+    while (*reg_sz && isspace((unsigned char)*reg_sz))
+      ++reg_sz;
+    if (!reg_sz[0] || toolchain_list_has_ci(distros, out, reg_sz))
+      continue;
+
+    distros[out++] = arena_text(reg_sz, strlen(reg_sz));
+  }
+  return out;
+#else
+  (void)distros;
+  (void)max_distros;
+  return 0;
+#endif
+}
+
+static void toolchain_probe_wsl_distro_linux_support(toolchain* tc, const char* wsl, const char* distro) {
+#if defined(_WIN32)
+  if (!tc || !wsl || !wsl[0] || !distro)
+    return;
+
+  const char* wsl_cmd = toolchain_path_basename(wsl);
+  const char* native_source = distro[0] ? toolchain_join2("wsl:", distro) : "wsl:default";
+  const char* cross_source = distro[0] ? toolchain_join2("wsl-cross:", distro) : "wsl-cross:default";
+  if (!wsl_cmd || !wsl_cmd[0])
+    wsl_cmd = "wsl.exe";
+
+  char cmd[4096] = {0};
+  if (distro[0]) {
+    snprintf(cmd,
+             sizeof(cmd),
+             "%s -d \"%s\" -e sh -lc \"uname -m; command -v gcc && echo has_native_gcc; command -v g++ && echo has_native_gpp; command -v x86_64-linux-gnu-gcc && echo has_x86_64_gcc; command -v x86_64-linux-gnu-g++ && echo has_x86_64_gpp; command -v i686-linux-gnu-gcc && echo has_x86_gcc; command -v i686-linux-gnu-g++ && echo has_x86_gpp; command -v aarch64-linux-gnu-gcc && echo has_arm64_gcc; command -v aarch64-linux-gnu-g++ && echo has_arm64_gpp\" 2>nul",
+             wsl_cmd,
+             distro);
+  } else {
+    snprintf(cmd,
+             sizeof(cmd),
+             "%s -e sh -lc \"uname -m; command -v gcc && echo has_native_gcc; command -v g++ && echo has_native_gpp; command -v x86_64-linux-gnu-gcc && echo has_x86_64_gcc; command -v x86_64-linux-gnu-g++ && echo has_x86_64_gpp; command -v i686-linux-gnu-gcc && echo has_x86_gcc; command -v i686-linux-gnu-g++ && echo has_x86_gpp; command -v aarch64-linux-gnu-gcc && echo has_arm64_gcc; command -v aarch64-linux-gnu-g++ && echo has_arm64_gpp\" 2>nul",
+             wsl_cmd);
+  }
+
+  const char* lines[64] = {0};
+  int line_c = toolchain_run_collect_lines(cmd, lines, _countof(lines));
+  if (line_c <= 0)
+    return;
+
+  const char* native_arch = NULL;
+  bool has_native_gcc = false;
+  bool has_native_gpp = false;
+  bool has_x86_64_gcc = false;
+  bool has_x86_64_gpp = false;
+  bool has_x86_gcc = false;
+  bool has_x86_gpp = false;
+  bool has_arm64_gcc = false;
+  bool has_arm64_gpp = false;
+
+  for (int i = 0; i < line_c; ++i) {
+    const char* line = lines[i];
+    if (!line || !line[0])
+      continue;
+
+    if (!native_arch)
+      native_arch = line;
+    else if (_stricmp(line, "has_native_gcc") == 0)
+      has_native_gcc = true;
+    else if (_stricmp(line, "has_native_gpp") == 0)
+      has_native_gpp = true;
+    else if (_stricmp(line, "has_x86_64_gcc") == 0)
+      has_x86_64_gcc = true;
+    else if (_stricmp(line, "has_x86_64_gpp") == 0)
+      has_x86_64_gpp = true;
+    else if (_stricmp(line, "has_x86_gcc") == 0)
+      has_x86_gcc = true;
+    else if (_stricmp(line, "has_x86_gpp") == 0)
+      has_x86_gpp = true;
+    else if (_stricmp(line, "has_arm64_gcc") == 0)
+      has_arm64_gcc = true;
+    else if (_stricmp(line, "has_arm64_gpp") == 0)
+      has_arm64_gpp = true;
+  }
+
+  if (has_native_gcc && has_native_gpp && native_arch) {
+    if (_stricmp(native_arch, "x86_64") == 0 || _stricmp(native_arch, "amd64") == 0)
+      toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86_64, native_source);
+    else if (_stricmp(native_arch, "i686") == 0 || _stricmp(native_arch, "i386") == 0 || _stricmp(native_arch, "x86") == 0)
+      toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86, native_source);
+    else if (_stricmp(native_arch, "aarch64") == 0 || _stricmp(native_arch, "arm64") == 0)
+      toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_ARM64, native_source);
+  }
+
+  if (has_x86_64_gcc && has_x86_64_gpp)
+    toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86_64, cross_source);
+  if (has_x86_gcc && has_x86_gpp)
+    toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86, cross_source);
+  if (has_arm64_gcc && has_arm64_gpp)
+    toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_ARM64, cross_source);
+#else
+  (void)tc;
+  (void)wsl;
+  (void)distro;
+#endif
+}
+
+static void toolchain_enable_wsl_linux_support(toolchain* tc) {
+#if defined(_WIN32)
+  if (!tc)
+    return;
+
+  const char* wsl = toolchain_get_tool_path(tc, "wsl");
+  if (!wsl || !wsl[0])
+    return;
+
+  toolchain_probe_wsl_distro_linux_support(tc, wsl, "");
+
+  const char* distros[32] = {0};
+  int distro_c = toolchain_collect_wsl_distros(distros, _countof(distros));
+  if (distro_c <= 0)
+    return;
+
+  for (int i = 0; i < distro_c; ++i)
+    toolchain_probe_wsl_distro_linux_support(tc, wsl, distros[i]);
+#else
+  (void)tc;
+#endif
+}
+
+static arch toolchain_arch_from_text(const char* text) {
+  if (!text || !text[0])
+    return ARCH_X86_64;
+  if (_stricmp(text, "aarch64") == 0 || _stricmp(text, "arm64") == 0)
+    return ARCH_ARM64;
+  if (_stricmp(text, "i686") == 0 || _stricmp(text, "i386") == 0 || _stricmp(text, "x86") == 0)
+    return ARCH_X86;
+  return ARCH_X86_64;
+}
+
+static int toolchain_wsl_collect_lines(const char* wsl_cmd, const char* distro, const char* shell_cmd, const char** lines, int max_lines) {
+  if (!wsl_cmd || !wsl_cmd[0] || !shell_cmd || !shell_cmd[0] || !lines || max_lines <= 0)
+    return 0;
+
+  char cmd[4096] = {0};
+  if (distro && distro[0])
+    snprintf(cmd, sizeof(cmd), "%s -d \"%s\" -e sh -lc \"%s\" 2>nul", wsl_cmd, distro, shell_cmd);
+  else
+    snprintf(cmd, sizeof(cmd), "%s -e sh -lc \"%s\" 2>nul", wsl_cmd, shell_cmd);
+  return toolchain_run_collect_lines(cmd, lines, max_lines);
+}
+
+static void toolchain_discover_wsl_env(toolchain* tc, const char* distro) {
+#if defined(_WIN32)
+  if (!tc)
+    return;
+
+  const char* wsl = toolchain_get_tool_path(tc, "wsl");
+  const char* wsl_cmd = toolchain_path_basename(wsl ? wsl : "wsl.exe");
+  const char* env_name = (distro && distro[0]) ? distro : "default";
+  if (!wsl_cmd || !wsl_cmd[0])
+    wsl_cmd = "wsl.exe";
+
+  if (!distro || !distro[0]) {
+    const char* distros[4] = {0};
+    int distro_c = toolchain_collect_wsl_distros(distros, _countof(distros));
+    if (distro_c > 0 && distros[0] && distros[0][0])
+      env_name = distros[0];
+  }
+
+  toolchain_env env = {0};
+  env.provider = "wsl";
+  env.name = arena_text(env_name, strlen(env_name));
+  env.p_os = OS_LINUX;
+
+  const char* lines[64] = {0};
+  int line_c = toolchain_wsl_collect_lines(wsl_cmd,
+                                           distro,
+                                           "tmp=/tmp/bbs_tc_probe; rm -f /tmp/bbs_tc_probe /tmp/bbs_tc_probe.* /tmp/bbs_tc_probe_*; printf 'int main(void){return 0;}\\n' > /tmp/bbs_tc_probe.c; printf 'int main(){return 0;}\\n' > /tmp/bbs_tc_probe.cpp; uname -m; command -v gcc && echo has_native_gcc; command -v g++ && echo has_native_gpp; command -v x86_64-linux-gnu-gcc && echo has_x86_64_gcc; command -v x86_64-linux-gnu-g++ && echo has_x86_64_gpp; gcc -m32 /tmp/bbs_tc_probe.c -o /tmp/bbs_tc_probe_x86_c >/dev/null 2>&1 && echo has_x86_c_multilib; g++ -m32 /tmp/bbs_tc_probe.cpp -o /tmp/bbs_tc_probe_x86_cpp >/dev/null 2>&1 && echo has_x86_cpp_multilib; command -v aarch64-linux-gnu-gcc && echo has_arm64_gcc; command -v aarch64-linux-gnu-g++ && echo has_arm64_gpp; command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 && aarch64-linux-gnu-gcc /tmp/bbs_tc_probe.c -o /tmp/bbs_tc_probe_arm64_c >/dev/null 2>&1 && echo has_arm64_c_cross; command -v aarch64-linux-gnu-g++ >/dev/null 2>&1 && aarch64-linux-gnu-g++ /tmp/bbs_tc_probe.cpp -o /tmp/bbs_tc_probe_arm64_cpp >/dev/null 2>&1 && echo has_arm64_cpp_cross; rm -f /tmp/bbs_tc_probe /tmp/bbs_tc_probe.* /tmp/bbs_tc_probe_*",
+                                           lines,
+                                           _countof(lines));
+  if (line_c <= 0)
+    return;
+
+  const char* native_arch = lines[0];
+  env.p_arch = toolchain_arch_from_text(native_arch);
+  env.id = toolchain_make_env_id(env.provider, env.name, env.p_os, env.p_arch);
+
+  bool has_native_gcc = false;
+  bool has_native_gpp = false;
+  bool has_x86_64_gcc = false;
+  bool has_x86_64_gpp = false;
+  bool has_x86_c_multilib = false;
+  bool has_x86_cpp_multilib = false;
+  bool has_arm64_gcc = false;
+  bool has_arm64_gpp = false;
+  bool has_arm64_c_cross = false;
+  bool has_arm64_cpp_cross = false;
+  for (int i = 1; i < line_c; ++i) {
+    const char* line = lines[i];
+    if (!line || !line[0])
+      continue;
+    if (_stricmp(line, "has_native_gcc") == 0)
+      has_native_gcc = true;
+    else if (_stricmp(line, "has_native_gpp") == 0)
+      has_native_gpp = true;
+    else if (_stricmp(line, "has_x86_64_gcc") == 0)
+      has_x86_64_gcc = true;
+    else if (_stricmp(line, "has_x86_64_gpp") == 0)
+      has_x86_64_gpp = true;
+    else if (_stricmp(line, "has_x86_c_multilib") == 0)
+      has_x86_c_multilib = true;
+    else if (_stricmp(line, "has_x86_cpp_multilib") == 0)
+      has_x86_cpp_multilib = true;
+    else if (_stricmp(line, "has_arm64_gcc") == 0)
+      has_arm64_gcc = true;
+    else if (_stricmp(line, "has_arm64_gpp") == 0)
+      has_arm64_gpp = true;
+    else if (_stricmp(line, "has_arm64_c_cross") == 0)
+      has_arm64_c_cross = true;
+    else if (_stricmp(line, "has_arm64_cpp_cross") == 0)
+      has_arm64_cpp_cross = true;
+  }
+
+  if (has_native_gcc && has_native_gpp)
+    toolchain_env_enable_support(&env, OS_LINUX, env.p_arch, distro && distro[0] ? toolchain_join2("wsl:", distro) : "wsl:default");
+  if (has_x86_64_gcc && has_x86_64_gpp)
+    toolchain_env_enable_support(&env, OS_LINUX, ARCH_X86_64, distro && distro[0] ? toolchain_join2("wsl-cross:", distro) : "wsl-cross:default");
+  if (has_x86_c_multilib && has_x86_cpp_multilib)
+    toolchain_env_enable_support(&env, OS_LINUX, ARCH_X86, distro && distro[0] ? toolchain_join2("wsl-multilib:", distro) : "wsl-multilib:default");
+  if (has_arm64_gcc && has_arm64_gpp && has_arm64_c_cross && has_arm64_cpp_cross)
+    toolchain_env_enable_support(&env, OS_LINUX, ARCH_ARM64, distro && distro[0] ? toolchain_join2("wsl-cross:", distro) : "wsl-cross:default");
+
+  for (size_t i = 0; i < sizeof(TOOL_DISCOVER_STRATS) / sizeof(TOOL_DISCOVER_STRATS[0]); ++i) {
+    const tool_discover_strat* s = &TOOL_DISCOVER_STRATS[i];
+    if (!s->exe_name || !s->exe_name[0])
+      continue;
+    if (!(s->target_os == OS_MAX || s->target_os == OS_LINUX))
+      continue;
+    if (_stricmp(s->id, "wsl") == 0 || _stricmp(s->id, "vcvarsall") == 0 || _stricmp(s->id, "docker") == 0)
+      continue;
+    if (env.tool_c >= TOOL_ENV_TOOL_ARRAY_DIM)
+      break;
+
+    const char* path_lines[4] = {0};
+    int path_c = toolchain_wsl_collect_lines(wsl_cmd, distro, toolchain_append_text("command -v ", s->exe_name), path_lines, _countof(path_lines));
+    if (path_c <= 0 || !path_lines[0] || !path_lines[0][0])
+      continue;
+
+    const char* version = NULL;
+    if (s->version_arg && s->version_arg[0]) {
+      char ver_shell[512] = {0};
+      snprintf(ver_shell, sizeof(ver_shell), "%s %s 2>&1", s->exe_name, s->version_arg);
+      const char* ver_lines[32] = {0};
+      int ver_c = toolchain_wsl_collect_lines(wsl_cmd, distro, ver_shell, ver_lines, _countof(ver_lines));
+      for (int vi = 0; vi < ver_c && !version; ++vi)
+        version = s->version_regex && s->version_regex[0] ? toolchain_extract_version_by_pattern(ver_lines[vi], s->version_regex) : toolchain_extract_version(ver_lines[vi]);
+    }
+
+    toolchain_set_tool(&env.tools[env.tool_c++], s->id, s->type, path_lines[0], version ? version : toolchain_path_version_fallback(path_lines[0]));
+  }
+
+  toolchain_sort_tool_array(env.tools, env.tool_c);
+  toolchain_sort_sdk_array(env.sdks, env.sdk_c);
+  toolchain_add_or_replace_env(tc, &env);
+#else
+  (void)tc;
+  (void)distro;
+#endif
+}
+
+static void toolchain_discover_extra_envs(toolchain* tc) {
+  if (!tc)
+    return;
+
+#if defined(_WIN32)
+  toolchain_discover_wsl_env(tc, "");
+#else
+  (void)tc;
+#endif
+}
+
+static void toolchain_enable_docker_buildx_linux_support(toolchain* tc) {
+  if (!tc)
+    return;
+
+  const char* docker = toolchain_get_tool_path(tc, "docker");
+  if (!docker || !docker[0])
+    return;
+
+  char cmd[2048] = {0};
+  snprintf(cmd, sizeof(cmd), "\"%s\" buildx inspect 2>&1", docker);
+
+  const char* lines[64] = {0};
+  int line_c = toolchain_run_collect_lines(cmd, lines, _countof(lines));
+  if (line_c <= 0)
+    return;
+
+  for (int i = 0; i < line_c; ++i) {
+    const char* line = lines[i];
+    if (!line || !line[0])
+      continue;
+
+    if (strstr(line, "linux/amd64"))
+      toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86_64, "docker-buildx");
+    if (strstr(line, "linux/386"))
+      toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86, "docker-buildx");
+    if (strstr(line, "linux/arm64"))
+      toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_ARM64, "docker-buildx");
+  }
+}
+
+static void toolchain_fill_platform_support(toolchain* tc) {
+  if (!tc)
+    return;
+
+  memset(tc->supported, 0, sizeof(tc->supported));
+  memset(tc->support_source, 0, sizeof(tc->support_source));
+
+  toolchain_refresh_runtime_support(tc);
+}
+
+static void toolchain_print_platform_support(toolchain* tc, bool minimal) {
+  if (!tc)
+    return;
+
+  if (minimal) {
+    for (int osi = 0; osi < OS_MAX; ++osi) {
+      for (int ai = 0; ai < ARCH_MAX; ++ai)
+        print("support|%s|%s|%s|%s", OS_NAMES[osi], ARCH_NAMES[ai], tc->supported[osi][ai] ? "true" : "false", tc->support_source[osi][ai] ? tc->support_source[osi][ai] : "");
+    }
+    return;
+  }
+
+  print("Supported Platforms:");
+  print("  %-10s %-7s %-7s %-7s", "os", ARCH_NAMES[ARCH_X86_64], ARCH_NAMES[ARCH_X86], ARCH_NAMES[ARCH_ARM64]);
+  for (int osi = 0; osi < OS_MAX; ++osi) {
+    print("  %-10s %-7s %-7s %-7s",
+          OS_NAMES[osi],
+          tc->supported[osi][ARCH_X86_64] ? "yes" : "no",
+          tc->supported[osi][ARCH_X86] ? "yes" : "no",
+          tc->supported[osi][ARCH_ARM64] ? "yes" : "no");
+  }
+
+  print("Support Sources:");
+  for (int osi = 0; osi < OS_MAX; ++osi) {
+    for (int ai = 0; ai < ARCH_MAX; ++ai) {
+      if (!tc->supported[osi][ai])
+        continue;
+      print("  - %s/%s: %s", OS_NAMES[osi], ARCH_NAMES[ai], tc->support_source[osi][ai] ? tc->support_source[osi][ai] : "unknown");
+    }
+  }
 }
 
 static bool toolchain_push_unique_path(const char** items, int* count, int max_count, const char* value) {
@@ -73,7 +784,7 @@ static bool toolchain_path_name_matches(const char* path, const char* exe_name) 
 
   if (!strchr(exe_name, '.')) {
     char cand[128] = {0};
-    const char* exts[] = {".exe", ".bat", ".cmd", ".com"};
+    const char* exts[] = {".exe"};
     for (size_t i = 0; i < _countof(exts); ++i) {
       snprintf(cand, sizeof(cand), "%s%s", exe_name, exts[i]);
       if (_stricmp(base, cand) == 0)
@@ -164,39 +875,31 @@ static int toolchain_sdk_cmp(const sdk* a, const sdk* b) {
 static void toolchain_sort_tools(toolchain* tc) {
   if (!tc)
     return;
-
-  for (int i = 0; i < tc->tool_c - 1; ++i) {
-    for (int j = i + 1; j < tc->tool_c; ++j) {
-      if (toolchain_tool_cmp(&tc->tools[i], &tc->tools[j]) > 0) {
-        tool tmp = tc->tools[i];
-        tc->tools[i] = tc->tools[j];
-        tc->tools[j] = tmp;
-      }
-    }
-  }
+  toolchain_env* env = toolchain_host_env(tc, false);
+  if (!env)
+    return;
+  toolchain_sort_tool_array(env->tools, env->tool_c);
 }
 
 static void toolchain_sort_sdks(toolchain* tc) {
   if (!tc)
     return;
-
-  for (int i = 0; i < tc->sdk_c - 1; ++i) {
-    for (int j = i + 1; j < tc->sdk_c; ++j) {
-      if (toolchain_sdk_cmp(&tc->sdks[i], &tc->sdks[j]) > 0) {
-        sdk tmp = tc->sdks[i];
-        tc->sdks[i] = tc->sdks[j];
-        tc->sdks[j] = tmp;
-      }
-    }
-  }
+  toolchain_env* env = toolchain_host_env(tc, false);
+  if (!env)
+    return;
+  toolchain_sort_sdk_array(env->sdks, env->sdk_c);
 }
 
 static int toolchain_find_tool_by_id(toolchain* tc, tool_type type, const char* id) {
   if (!tc || !id || !id[0])
     return -1;
 
-  for (int i = 0; i < tc->tool_c; ++i) {
-    if (tc->tools[i].type == type && tc->tools[i].id && _stricmp(tc->tools[i].id, id) == 0)
+  toolchain_env* env = toolchain_host_env(tc, false);
+  if (!env)
+    return -1;
+
+  for (int i = 0; i < env->tool_c; ++i) {
+    if (env->tools[i].type == type && env->tools[i].id && _stricmp(env->tools[i].id, id) == 0)
       return i;
   }
 
@@ -277,17 +980,21 @@ static void toolchain_upsert_tool(toolchain* tc, const char* id, tool_type type,
   if (!tc || !id || !id[0] || !path || !path[0])
     return;
 
+  toolchain_env* env = toolchain_host_env(tc, true);
+  if (!env)
+    return;
+
   int idx = toolchain_find_tool_by_id(tc, type, id);
   if (idx >= 0) {
-    if (toolchain_should_replace_tool(&tc->tools[idx], version, path))
-      toolchain_set_tool(&tc->tools[idx], id, type, path, version);
+    if (toolchain_should_replace_tool(&env->tools[idx], version, path))
+      toolchain_set_tool(&env->tools[idx], id, type, path, version);
     return;
   }
 
-  if (tc->tool_c >= TOOL_ARRAY_DIM)
+  if (env->tool_c >= TOOL_ENV_TOOL_ARRAY_DIM)
     return;
 
-  toolchain_set_tool(&tc->tools[tc->tool_c++], id, type, path, version);
+  toolchain_set_tool(&env->tools[env->tool_c++], id, type, path, version);
 }
 
 static const char* toolchain_trim_line(char* text) {
@@ -649,6 +1356,24 @@ static const char* toolchain_join2(const char* a, const char* b) {
   return out;
 }
 
+static const char* toolchain_append_text(const char* text, const char* suffix) {
+  if (!text || !text[0])
+    return suffix ? arena_text(suffix, strlen(suffix)) : NULL;
+  if (!suffix || !suffix[0])
+    return arena_text(text, strlen(text));
+
+  size_t tl = strlen(text);
+  size_t sl = strlen(suffix);
+  char* out = push(tl + sl + 1);
+  if (!out)
+    return NULL;
+
+  memcpy(out, text, tl);
+  memcpy(out + tl, suffix, sl);
+  out[tl + sl] = '\0';
+  return out;
+}
+
 static const char* toolchain_find_in_hint_dirs(const char* exe_name, const char* hints) {
   if (!exe_name || !exe_name[0] || !hints || !hints[0])
     return NULL;
@@ -675,8 +1400,8 @@ static const char* toolchain_find_in_hint_dirs(const char* exe_name, const char*
 #if defined(_WIN32)
       if (file_exists(full))
         return arena_text(full, strlen(full));
-      {
-        const char* full_exe = toolchain_join2(dir, toolchain_join2(exe_name, ".exe"));
+      if (!strchr(exe_name, '.')) {
+        const char* full_exe = toolchain_join2(dir, toolchain_append_text(exe_name, ".exe"));
         if (file_exists(full_exe))
           return arena_text(full_exe, strlen(full_exe));
       }
@@ -722,9 +1447,11 @@ static int toolchain_collect_in_hint_dirs(const char* exe_name, const char* hint
         toolchain_push_unique_path(matches, &out, max_matches, full);
 
 #if defined(_WIN32)
-      const char* full_exe = toolchain_join2(dir, toolchain_join2(exe_name, ".exe"));
-      if (full_exe && file_exists(full_exe))
-        toolchain_push_unique_path(matches, &out, max_matches, full_exe);
+      if (!strchr(exe_name, '.')) {
+        const char* full_exe = toolchain_join2(dir, toolchain_append_text(exe_name, ".exe"));
+        if (full_exe && file_exists(full_exe))
+          toolchain_push_unique_path(matches, &out, max_matches, full_exe);
+      }
 #endif
     }
 
@@ -889,18 +1616,40 @@ static const char* toolchain_probe_version(const char* exe_path, const char* arg
   return toolchain_path_version_fallback(exe_path);
 }
 
+static bool toolchain_host_matches_os(os target_os) {
+  if (target_os == OS_MAX)
+    return true;
+
+#if defined(_WIN32)
+  return target_os == OS_WINDOWS;
+#elif defined(__linux__)
+  return target_os == OS_LINUX;
+#elif defined(__APPLE__)
+  return target_os == OS_MACOS;
+#else
+  return false;
+#endif
+}
+
 static bool toolchain_tool_exists(toolchain* tc, tool_type type, const char* path) {
   if (!tc || !path)
     return false;
-  for (int i = 0; i < tc->tool_c; ++i) {
-    if (tc->tools[i].type == type && tc->tools[i].path && _stricmp(tc->tools[i].path, path) == 0)
+  toolchain_env* env = toolchain_host_env(tc, false);
+  if (!env)
+    return false;
+  for (int i = 0; i < env->tool_c; ++i) {
+    if (env->tools[i].type == type && env->tools[i].path && _stricmp(env->tools[i].path, path) == 0)
       return true;
   }
   return false;
 }
 
 static void toolchain_discover_tool(toolchain* tc, const tool_discover_strat* s) {
-  if (!tc || !s || tc->tool_c >= TOOL_ARRAY_DIM)
+  toolchain_env* env = toolchain_host_env(tc, true);
+  if (!tc || !s || !env || env->tool_c >= TOOL_ENV_TOOL_ARRAY_DIM)
+    return;
+
+  if (!toolchain_host_matches_os(s->target_os))
     return;
 
   if (_stricmp(s->id, "vcvarsall") == 0) {
@@ -941,7 +1690,7 @@ static void toolchain_discover_tool(toolchain* tc, const tool_discover_strat* s)
       toolchain_push_unique_path(matches, &match_c, _countof(matches), found[i]);
   }
 
-  for (int i = 0; i < match_c && tc->tool_c < TOOL_ARRAY_DIM; ++i) {
+  for (int i = 0; i < match_c && env->tool_c < TOOL_ENV_TOOL_ARRAY_DIM; ++i) {
     const char* path = toolchain_norm_path(matches[i]);
     if (toolchain_tool_exists(tc, s->type, path))
       continue;
@@ -1244,7 +1993,11 @@ static const char* toolchain_probe_sdk_version(const char* base, const char* rel
 }
 
 static void toolchain_discover_sdk(toolchain* tc, const sdk_discover_strat* s) {
-  if (!tc || !s || tc->sdk_c >= SDK_ARRAY_DIM)
+  toolchain_env* env = toolchain_host_env(tc, true);
+  if (!tc || !s || !env || env->sdk_c >= TOOL_ENV_SDK_ARRAY_DIM)
+    return;
+
+  if (!toolchain_host_matches_os(s->target_os))
     return;
 
   const char* bases[64] = {0};
@@ -1281,7 +2034,7 @@ static void toolchain_discover_sdk(toolchain* tc, const sdk_discover_strat* s) {
   if (!best_base)
     return;
 
-  sdk* out = &tc->sdks[tc->sdk_c++];
+  sdk* out = &env->sdks[env->sdk_c++];
   out->name = arena_text(s->id, strlen(s->id));
   out->base_path = toolchain_norm_path(best_base);
   out->inc_path = s->include_rel && s->include_rel[0] ? toolchain_norm_path(toolchain_is_abs_path(s->include_rel) ? s->include_rel : toolchain_join2(best_base, s->include_rel)) : NULL;
@@ -1359,9 +2112,103 @@ static bool toolchain_sdk_matches_filter(const sdk* s, const toolchain_print_opt
   return true;
 }
 
+static void toolchain_print_env_support(toolchain_env* env, bool minimal) {
+  if (!env)
+    return;
+
+  if (minimal) {
+    for (int osi = 0; osi < OS_MAX; ++osi) {
+      for (int ai = 0; ai < ARCH_MAX; ++ai)
+        print("support|%s|%s|%s|%s|%s", env->id ? env->id : "", OS_NAMES[osi], ARCH_NAMES[ai], env->supported[osi][ai] ? "true" : "false", env->support_source[osi][ai] ? env->support_source[osi][ai] : "");
+    }
+    return;
+  }
+
+  print("    Supported Platforms:");
+  print("      %-10s %-7s %-7s %-7s", "os", ARCH_NAMES[ARCH_X86_64], ARCH_NAMES[ARCH_X86], ARCH_NAMES[ARCH_ARM64]);
+  for (int osi = 0; osi < OS_MAX; ++osi) {
+    print("      %-10s %-7s %-7s %-7s",
+          OS_NAMES[osi],
+          env->supported[osi][ARCH_X86_64] ? "yes" : "no",
+          env->supported[osi][ARCH_X86] ? "yes" : "no",
+          env->supported[osi][ARCH_ARM64] ? "yes" : "no");
+  }
+  print("    Support Sources:");
+  for (int osi = 0; osi < OS_MAX; ++osi) {
+    for (int ai = 0; ai < ARCH_MAX; ++ai) {
+      if (!env->supported[osi][ai])
+        continue;
+      print("      - %s/%s: %s", OS_NAMES[osi], ARCH_NAMES[ai], env->support_source[osi][ai] ? env->support_source[osi][ai] : "unknown");
+    }
+  }
+}
+
+static void toolchain_print_env_with_opts(toolchain_env* env, const toolchain_print_opts* opts) {
+  if (!env || !opts)
+    return;
+
+  if (opts->minimal)
+    print("env|%s|%s|%s|%s|%s", env->id ? env->id : "", env->provider ? env->provider : "", env->name ? env->name : "", OS_NAMES[env->p_os], ARCH_NAMES[env->p_arch]);
+  else
+    print("  - %s | %s | %s/%s", env->provider ? env->provider : "env", env->name ? env->name : "default", OS_NAMES[env->p_os], ARCH_NAMES[env->p_arch]);
+
+  if (opts->show_tools) {
+    if (!opts->minimal && !opts->paths_only && !opts->versions_only)
+      print("    Tools (%d):", env->tool_c);
+    for (int i = 0; i < env->tool_c; ++i) {
+      tool* t = &env->tools[i];
+      if (!toolchain_tool_matches_filter(t, opts))
+        continue;
+      const char* ty = tool_type_to_idf(t->type);
+      const char* id = t->id ? t->id : toolchain_path_basename(t->path ? t->path : "");
+      const char* pa = t->path ? t->path : "";
+      const char* ve = t->version ? t->version : "unknown";
+      if (opts->paths_only)
+        print("%s", pa);
+      else if (opts->versions_only)
+        print("%s", ve);
+      else if (opts->minimal)
+        print("tool|%s|%s|%s|%s|%s", env->id ? env->id : "", ty, id ? id : "", pa, ve);
+      else
+        print("      - %s | %s | %s | %s", ty, id ? id : "", pa, ve);
+    }
+  }
+
+  if (opts->show_sdks) {
+    if (!opts->minimal && !opts->paths_only && !opts->versions_only)
+      print("    SDKs (%d):", env->sdk_c);
+    for (int i = 0; i < env->sdk_c; ++i) {
+      sdk* s = &env->sdks[i];
+      if (!toolchain_sdk_matches_filter(s, opts))
+        continue;
+      if (opts->paths_only)
+        print("%s", s->base_path ? s->base_path : "");
+      else if (opts->versions_only)
+        print("%s", s->version ? s->version : "unknown");
+      else if (opts->minimal)
+        print("sdk|%s|%s|%s|%s", env->id ? env->id : "", s->name ? s->name : "", s->base_path ? s->base_path : "", s->version ? s->version : "unknown");
+      else {
+        print("      - %s", s->name ? s->name : "<unnamed>");
+        if (s->version && s->version[0]) print("          version: %s", s->version);
+        if (s->base_path) print("          base: %s", s->base_path);
+        if (s->inc_path) print("          inc : %s", s->inc_path);
+        if (s->src_path) print("          src : %s", s->src_path);
+        if (s->lib_path) print("          lib : %s", s->lib_path);
+        if (s->bin_path) print("          bin : %s", s->bin_path);
+      }
+    }
+  }
+
+  if (!opts->paths_only && !opts->versions_only)
+    toolchain_print_env_support(env, opts->minimal);
+}
+
 static void toolchain_fill(toolchain* tc) {
   if (!tc)
     return;
+
+  tc->p_arch = toolchain_detect_host_arch();
+  tc->p_os = toolchain_detect_host_os();
 
   print("Discovering host tools...");
 
@@ -1375,8 +2222,13 @@ static void toolchain_fill(toolchain* tc) {
 
   toolchain_sort_tools(tc);
   toolchain_sort_sdks(tc);
+  toolchain_fill_platform_support(tc);
+  toolchain_snapshot_current_host_env(tc);
+  toolchain_discover_extra_envs(tc);
+  toolchain_rebuild_aggregate_support(tc);
 
-  print("Discovery completed: %d tools, %d sdks.", tc->tool_c, tc->sdk_c);
+  toolchain_env* host = toolchain_host_env(tc, false);
+  print("Discovery completed: %d tools, %d sdks, %d environments.", host ? host->tool_c : 0, host ? host->sdk_c : 0, tc->env_c);
 }
 
 static void toolchain_print_with_opts(toolchain* tc, const toolchain_print_opts* opts) {
@@ -1392,67 +2244,15 @@ static void toolchain_print_with_opts(toolchain* tc, const toolchain_print_opts*
     opts = &defaults;
   }
 
-  int tool_count = 0;
-  int sdk_count = 0;
-  for (int i = 0; i < tc->tool_c; ++i)
-    tool_count += toolchain_tool_matches_filter(&tc->tools[i], opts) ? 1 : 0;
-  for (int i = 0; i < tc->sdk_c; ++i)
-    sdk_count += toolchain_sdk_matches_filter(&tc->sdks[i], opts) ? 1 : 0;
+  if (!opts->minimal)
+    print("Environments (%d):", tc->env_c);
+  for (int i = 0; i < tc->env_c; ++i)
+    toolchain_print_env_with_opts(&tc->envs[i], opts);
 
-  if (opts->show_tools) {
+  if (!opts->paths_only && !opts->versions_only) {
     if (!opts->minimal)
-      print("Tools (%d):", tool_count);
-    for (int i = 0; i < tc->tool_c; ++i) {
-      tool* t = &tc->tools[i];
-      if (!toolchain_tool_matches_filter(t, opts))
-        continue;
-
-      const char* ty = tool_type_to_idf(t->type);
-      const char* id = t->id ? t->id : toolchain_path_basename(t->path ? t->path : "");
-      const char* pa = t->path ? t->path : "";
-      const char* ve = t->version ? t->version : "unknown";
-      if (opts->paths_only)
-        print("%s", pa);
-      else if (opts->versions_only)
-        print("%s", ve);
-      else if (opts->minimal)
-        print("%s|%s|%s|%s", ty, id ? id : "", pa, ve);
-      else
-        print("  - %s | %s | %s | %s", ty, id ? id : "", pa, ve);
-    }
-  }
-
-  if (opts->show_sdks) {
-    if (!opts->minimal)
-      print("SDKs (%d):", sdk_count);
-    for (int i = 0; i < tc->sdk_c; ++i) {
-      sdk* s = &tc->sdks[i];
-      if (!toolchain_sdk_matches_filter(s, opts))
-        continue;
-
-      if (opts->paths_only) {
-        print("%s", s->base_path ? s->base_path : "");
-        continue;
-      }
-
-      if (opts->versions_only) {
-        print("%s", s->version ? s->version : "unknown");
-        continue;
-      }
-
-      if (opts->minimal) {
-        print("sdk|%s|%s|%s", s->name ? s->name : "<unnamed>", s->base_path ? s->base_path : "", s->version ? s->version : "unknown");
-        continue;
-      }
-
-      print("  - %s", s->name ? s->name : "<unnamed>");
-      if (s->version && s->version[0]) print("      version: %s", s->version);
-      if (s->base_path) print("      base: %s", s->base_path);
-      if (s->inc_path) print("      inc : %s", s->inc_path);
-      if (s->src_path) print("      src : %s", s->src_path);
-      if (s->lib_path) print("      lib : %s", s->lib_path);
-      if (s->bin_path) print("      bin : %s", s->bin_path);
-    }
+      print("Aggregate Support:");
+    toolchain_print_platform_support(tc, opts->minimal);
   }
 }
 
@@ -1465,10 +2265,36 @@ static toolchain* toolchain_read(node* tree) {
   toolchain* tc = push(sizeof(toolchain));
   memset(tc, 0, sizeof(toolchain));
 
+  tc->p_arch = toolchain_detect_host_arch();
+  tc->p_os = toolchain_detect_host_os();
+
+  node* host_n = node_get_child(tree, "host");
+  if (host_n) {
+    node* arch_n = node_get_child(host_n, "arch");
+    node* os_n = node_get_child(host_n, "os");
+    const char* arch_id = arch_n ? node_get_idf(arch_n) : NULL;
+    const char* os_id = os_n ? node_get_idf(os_n) : NULL;
+
+    for (int i = 0; arch_id && i < ARCH_MAX; ++i) {
+      if (_stricmp(ARCH_NAMES[i], arch_id) == 0) {
+        tc->p_arch = (arch)i;
+        break;
+      }
+    }
+
+    for (int i = 0; os_id && i < OS_MAX; ++i) {
+      if (_stricmp(OS_NAMES[i], os_id) == 0) {
+        tc->p_os = (os)i;
+        break;
+      }
+    }
+  }
+
   node* tools_n = node_get_child(tree, "tools");
   if (tools_n) {
+    toolchain_env* host = toolchain_host_env(tc, true);
     node_foreach(tools_n, it) {
-      if (tc->tool_c >= TOOL_ARRAY_DIM)
+      if (!host || host->tool_c >= TOOL_ENV_TOOL_ARRAY_DIM)
         break;
 
       node* id_n = node_get_child(it, "id");
@@ -1480,17 +2306,18 @@ static toolchain* toolchain_read(node* tree) {
 
       const char* path = toolchain_norm_path(node_get_str(path_n));
       const char* id = id_n ? node_get_str(id_n) : toolchain_path_basename(path);
-      toolchain_upsert_tool(tc, id, tool_type_from_idf(type_n ? node_get_idf(type_n) : NULL), path, ver_n ? node_get_str(ver_n) : NULL);
+      toolchain_set_tool(&host->tools[host->tool_c++], id, tool_type_from_idf(type_n ? node_get_idf(type_n) : NULL), path, ver_n ? node_get_str(ver_n) : NULL);
     }
   }
 
   node* sdks_n = node_get_child(tree, "sdks");
   if (sdks_n) {
+    toolchain_env* host = toolchain_host_env(tc, true);
     node_foreach(sdks_n, it) {
-      if (tc->sdk_c >= SDK_ARRAY_DIM)
+      if (!host || host->sdk_c >= TOOL_ENV_SDK_ARRAY_DIM)
         break;
 
-      sdk* s = &tc->sdks[tc->sdk_c++];
+      sdk* s = &host->sdks[host->sdk_c++];
       node* name_n = node_get_child(it, "name");
       node* ver_n = node_get_child(it, "version");
       node* base_n = node_get_child(it, "base_path");
@@ -1509,6 +2336,88 @@ static toolchain* toolchain_read(node* tree) {
     }
   }
 
+  node* envs_n = node_get_child(tree, "environments");
+  if (envs_n) {
+    node_foreach(envs_n, it) {
+      if (tc->env_c >= TOOLCHAIN_ENV_ARRAY_DIM)
+        break;
+
+      toolchain_env* env = &tc->envs[tc->env_c++];
+      memset(env, 0, sizeof(*env));
+
+      node* id_n = node_get_child(it, "id");
+      node* provider_n = node_get_child(it, "provider");
+      node* name_n = node_get_child(it, "name");
+      node* host_n = node_get_child(it, "host");
+      env->id = id_n ? node_get_str(id_n) : NULL;
+      env->provider = provider_n ? node_get_str(provider_n) : NULL;
+      env->name = name_n ? node_get_str(name_n) : NULL;
+      env->p_os = OS_WINDOWS;
+      env->p_arch = ARCH_X86_64;
+
+      if (host_n) {
+        node* arch_n = node_get_child(host_n, "arch");
+        node* os_n = node_get_child(host_n, "os");
+        const char* arch_id = arch_n ? node_get_idf(arch_n) : NULL;
+        const char* os_id = os_n ? node_get_idf(os_n) : NULL;
+        for (int i = 0; arch_id && i < ARCH_MAX; ++i)
+          if (_stricmp(ARCH_NAMES[i], arch_id) == 0)
+            env->p_arch = (arch)i;
+        for (int i = 0; os_id && i < OS_MAX; ++i)
+          if (_stricmp(OS_NAMES[i], os_id) == 0)
+            env->p_os = (os)i;
+      }
+
+      node* env_tools_n = node_get_child(it, "tools");
+      if (env_tools_n) {
+        node_foreach(env_tools_n, jt) {
+          if (env->tool_c >= TOOL_ENV_TOOL_ARRAY_DIM)
+            break;
+          node* env_id_n = node_get_child(jt, "id");
+          node* type_n = node_get_child(jt, "type");
+          node* path_n = node_get_child(jt, "path");
+          node* ver_n = node_get_child(jt, "version");
+          if (!path_n)
+            continue;
+          const char* path = toolchain_norm_path(node_get_str(path_n));
+          const char* id = env_id_n ? node_get_str(env_id_n) : toolchain_path_basename(path);
+          toolchain_set_tool(&env->tools[env->tool_c++], id, tool_type_from_idf(type_n ? node_get_idf(type_n) : NULL), path, ver_n ? node_get_str(ver_n) : NULL);
+        }
+      }
+
+      node* env_sdks_n = node_get_child(it, "sdks");
+      if (env_sdks_n) {
+        node_foreach(env_sdks_n, jt) {
+          if (env->sdk_c >= TOOL_ENV_SDK_ARRAY_DIM)
+            break;
+          sdk* s = &env->sdks[env->sdk_c++];
+          node* n_name = node_get_child(jt, "name");
+          node* n_ver = node_get_child(jt, "version");
+          node* n_base = node_get_child(jt, "base_path");
+          node* n_inc = node_get_child(jt, "inc_path");
+          node* n_src = node_get_child(jt, "src_path");
+          node* n_lib = node_get_child(jt, "lib_path");
+          node* n_bin = node_get_child(jt, "bin_path");
+          s->name = n_name ? node_get_str(n_name) : NULL;
+          s->version = n_ver ? node_get_str(n_ver) : NULL;
+          s->base_path = n_base ? toolchain_norm_path(node_get_str(n_base)) : NULL;
+          s->inc_path = n_inc ? toolchain_norm_path(node_get_str(n_inc)) : NULL;
+          s->src_path = n_src ? toolchain_norm_path(node_get_str(n_src)) : NULL;
+          s->lib_path = n_lib ? toolchain_norm_path(node_get_str(n_lib)) : NULL;
+          s->bin_path = n_bin ? toolchain_norm_path(node_get_str(n_bin)) : NULL;
+        }
+      }
+
+      toolchain_sort_tool_array(env->tools, env->tool_c);
+      toolchain_sort_sdk_array(env->sdks, env->sdk_c);
+    }
+  }
+
+  if (!envs_n)
+    toolchain_snapshot_current_host_env(tc);
+
+  toolchain_refresh_runtime_support(tc);
+
   toolchain_sort_tools(tc);
   toolchain_sort_sdks(tc);
   return tc;
@@ -1519,48 +2428,70 @@ static node* toolchain_write(toolchain* tc) {
   if (!tree)
     return NULL;
 
-  node* tools_n = node_create_named("tools");
-  if (tools_n)
-    toolchain_push_child_back(tree, tools_n);
+  node* envs_n = node_create_named("environments");
+  if (envs_n)
+    toolchain_push_child_back(tree, envs_n);
 
-  for (int i = 0; i < tc->tool_c; ++i) {
-    node* t = node_create_named("tool");
-    if (!t)
+  for (int ei = 0; envs_n && ei < tc->env_c; ++ei) {
+    toolchain_env* env = &tc->envs[ei];
+    node* env_n = node_create_named("environment");
+    if (!env_n)
       continue;
+    if (env->id)
+      toolchain_push_child_back(env_n, node_create_str("id", env->id));
+    if (env->provider)
+      toolchain_push_child_back(env_n, node_create_str("provider", env->provider));
+    if (env->name)
+      toolchain_push_child_back(env_n, node_create_str("name", env->name));
 
-    if (tc->tools[i].id)
-      toolchain_push_child_back(t, node_create_str("id", tc->tools[i].id));
-    toolchain_push_child_back(t, node_create_idf("type", tool_type_to_idf(tc->tools[i].type)));
-    toolchain_push_child_back(t, node_create_str("path", toolchain_norm_path(tc->tools[i].path ? tc->tools[i].path : "")));
-    if (tc->tools[i].version && tc->tools[i].version[0])
-      toolchain_push_child_back(t, node_create_str("version", tc->tools[i].version));
-    toolchain_push_child_back(tools_n, t);
-  }
+    node* env_host_n = node_create_named("host");
+    if (env_host_n) {
+      toolchain_push_child_back(env_host_n, node_create_idf("arch", ARCH_NAMES[env->p_arch]));
+      toolchain_push_child_back(env_host_n, node_create_idf("os", OS_NAMES[env->p_os]));
+      toolchain_push_child_back(env_n, env_host_n);
+    }
 
-  node* sdks_n = node_create_named("sdks");
-  if (sdks_n)
-    toolchain_push_child_back(tree, sdks_n);
+    node* env_tools_n = node_create_named("tools");
+    if (env_tools_n)
+      toolchain_push_child_back(env_n, env_tools_n);
+    for (int i = 0; env_tools_n && i < env->tool_c; ++i) {
+      node* t = node_create_named("tool");
+      if (!t)
+        continue;
+      if (env->tools[i].id)
+        toolchain_push_child_back(t, node_create_str("id", env->tools[i].id));
+      toolchain_push_child_back(t, node_create_idf("type", tool_type_to_idf(env->tools[i].type)));
+      toolchain_push_child_back(t, node_create_str("path", toolchain_norm_path(env->tools[i].path ? env->tools[i].path : "")));
+      if (env->tools[i].version && env->tools[i].version[0])
+        toolchain_push_child_back(t, node_create_str("version", env->tools[i].version));
+      toolchain_push_child_back(env_tools_n, t);
+    }
 
-  for (int i = 0; i < tc->sdk_c; ++i) {
-    node* s = node_create_named("sdk");
-    if (!s)
-      continue;
+    node* env_sdks_n = node_create_named("sdks");
+    if (env_sdks_n)
+      toolchain_push_child_back(env_n, env_sdks_n);
+    for (int i = 0; env_sdks_n && i < env->sdk_c; ++i) {
+      node* s = node_create_named("sdk");
+      if (!s)
+        continue;
+      if (env->sdks[i].name)
+        toolchain_push_child_back(s, node_create_str("name", env->sdks[i].name));
+      if (env->sdks[i].version)
+        toolchain_push_child_back(s, node_create_str("version", env->sdks[i].version));
+      if (env->sdks[i].base_path)
+        toolchain_push_child_back(s, node_create_str("base_path", toolchain_norm_path(env->sdks[i].base_path)));
+      if (env->sdks[i].inc_path)
+        toolchain_push_child_back(s, node_create_str("inc_path", toolchain_norm_path(env->sdks[i].inc_path)));
+      if (env->sdks[i].src_path)
+        toolchain_push_child_back(s, node_create_str("src_path", toolchain_norm_path(env->sdks[i].src_path)));
+      if (env->sdks[i].lib_path)
+        toolchain_push_child_back(s, node_create_str("lib_path", toolchain_norm_path(env->sdks[i].lib_path)));
+      if (env->sdks[i].bin_path)
+        toolchain_push_child_back(s, node_create_str("bin_path", toolchain_norm_path(env->sdks[i].bin_path)));
+      toolchain_push_child_back(env_sdks_n, s);
+    }
 
-    if (tc->sdks[i].name)
-      toolchain_push_child_back(s, node_create_str("name", tc->sdks[i].name));
-    if (tc->sdks[i].version)
-      toolchain_push_child_back(s, node_create_str("version", tc->sdks[i].version));
-    if (tc->sdks[i].base_path)
-      toolchain_push_child_back(s, node_create_str("base_path", toolchain_norm_path(tc->sdks[i].base_path)));
-    if (tc->sdks[i].inc_path)
-      toolchain_push_child_back(s, node_create_str("inc_path", toolchain_norm_path(tc->sdks[i].inc_path)));
-    if (tc->sdks[i].src_path)
-      toolchain_push_child_back(s, node_create_str("src_path", toolchain_norm_path(tc->sdks[i].src_path)));
-    if (tc->sdks[i].lib_path)
-      toolchain_push_child_back(s, node_create_str("lib_path", toolchain_norm_path(tc->sdks[i].lib_path)));
-    if (tc->sdks[i].bin_path)
-      toolchain_push_child_back(s, node_create_str("bin_path", toolchain_norm_path(tc->sdks[i].bin_path)));
-    toolchain_push_child_back(sdks_n, s);
+    toolchain_push_child_back(envs_n, env_n);
   }
 
   return tree;
@@ -1586,10 +2517,25 @@ static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx)
   }
 
   print("Generating toolchain...");
+  toolchain* previous = NULL;
+  if (exists) {
+    const char* data = read_entire_file(path);
+    if (data) {
+      node* old_tree = node_parse(data);
+      if (old_tree)
+        previous = toolchain_read(old_tree);
+    }
+  }
   file_delete(path);
   toolchain* tc = push(sizeof(toolchain));
   memset(tc, 0, sizeof(toolchain));
   toolchain_fill(tc);
+  if (previous) {
+    for (int i = 0; i < previous->env_c; ++i)
+      if (toolchain_env_find_index(tc, previous->envs[i].id) < 0)
+        toolchain_add_or_replace_env(tc, &previous->envs[i]);
+    toolchain_rebuild_aggregate_support(tc);
+  }
   node* tree = toolchain_write(tc);
   const char* str = node_write(tree);
   write_entire_file(path, str);
