@@ -104,6 +104,21 @@ typedef struct {
   const char* name;
   arch p_arch;
   os p_os;
+
+  // Cached probe data used to rebuild support at runtime.
+  const char* probe_native_arch;
+  bool probe_has_native_gcc;
+  bool probe_has_native_gpp;
+  bool probe_has_x86_64_gcc;
+  bool probe_has_x86_64_gpp;
+  bool probe_has_x86_c_multilib;
+  bool probe_has_x86_cpp_multilib;
+  bool probe_has_arm64_gcc;
+  bool probe_has_arm64_gpp;
+  bool probe_has_arm64_c_cross;
+  bool probe_has_arm64_cpp_cross;
+  const char* probe_docker_buildx_platforms;
+
   bool supported[OS_MAX][ARCH_MAX];
   const char* support_source[OS_MAX][ARCH_MAX];
 

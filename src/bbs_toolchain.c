@@ -16,6 +16,8 @@ static const char* toolchain_path_version_fallback(const char* path);
 static int toolchain_run_collect_lines(const char* cmd, const char** lines, int max_lines);
 static const char* toolchain_run_extract_version(const char* cmd);
 static const char* toolchain_append_text(const char* text, const char* suffix);
+static const char* toolchain_label2(const char* a, const char* b);
+static arch toolchain_arch_from_text(const char* text);
 static void toolchain_set_tool(tool* out, const char* id, tool_type type, const char* path, const char* version);
 static int toolchain_tool_cmp(const tool* a, const tool* b);
 static int toolchain_sdk_cmp(const sdk* a, const sdk* b);
@@ -311,6 +313,42 @@ static void toolchain_fill_env_platform_support(toolchain_env* env, bool is_curr
   }
 }
 
+static void toolchain_fill_wsl_env_platform_support(toolchain_env* env) {
+  if (!env || !env->provider || _stricmp(env->provider, "wsl") != 0)
+    return;
+
+  memset(env->supported, 0, sizeof(env->supported));
+  memset(env->support_source, 0, sizeof(env->support_source));
+
+  if (env->probe_has_native_gcc && env->probe_has_native_gpp) {
+    arch native_arch = toolchain_arch_from_text(env->probe_native_arch ? env->probe_native_arch : ARCH_NAMES[env->p_arch]);
+    toolchain_env_enable_support(env, OS_LINUX, native_arch, env->name ? toolchain_label2("wsl:", env->name) : "wsl:default");
+  }
+  if (env->probe_has_x86_64_gcc && env->probe_has_x86_64_gpp)
+    toolchain_env_enable_support(env, OS_LINUX, ARCH_X86_64, env->name ? toolchain_label2("wsl-cross:", env->name) : "wsl-cross:default");
+  if (env->probe_has_x86_c_multilib && env->probe_has_x86_cpp_multilib)
+    toolchain_env_enable_support(env, OS_LINUX, ARCH_X86, env->name ? toolchain_label2("wsl-multilib:", env->name) : "wsl-multilib:default");
+  if (env->probe_has_arm64_gcc && env->probe_has_arm64_gpp && env->probe_has_arm64_c_cross && env->probe_has_arm64_cpp_cross)
+    toolchain_env_enable_support(env, OS_LINUX, ARCH_ARM64, env->name ? toolchain_label2("wsl-cross:", env->name) : "wsl-cross:default");
+}
+
+static void toolchain_apply_cached_docker_support(toolchain* tc) {
+  if (!tc)
+    return;
+
+  toolchain_env* host = toolchain_host_env(tc, false);
+  if (!host || !host->probe_docker_buildx_platforms || !host->probe_docker_buildx_platforms[0])
+    return;
+
+  const char* text = host->probe_docker_buildx_platforms;
+  if (strstr(text, "linux/amd64"))
+    toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86_64, "docker-buildx");
+  if (strstr(text, "linux/386"))
+    toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_X86, "docker-buildx");
+  if (strstr(text, "linux/arm64"))
+    toolchain_enable_platform_support_with_source(tc, OS_LINUX, ARCH_ARM64, "docker-buildx");
+}
+
 static void toolchain_refresh_runtime_support(toolchain* tc) {
   if (!tc)
     return;
@@ -319,12 +357,14 @@ static void toolchain_refresh_runtime_support(toolchain* tc) {
   for (int i = 0; i < tc->env_c; ++i) {
     toolchain_env* env = &tc->envs[i];
     bool is_current_host = env->provider && _stricmp(env->provider, "host") == 0 && env->id && _stricmp(env->id, current_host_id) == 0;
-    toolchain_fill_env_platform_support(env, is_current_host);
+    if (env->provider && _stricmp(env->provider, "wsl") == 0)
+      toolchain_fill_wsl_env_platform_support(env);
+    else
+      toolchain_fill_env_platform_support(env, is_current_host);
   }
 
-  toolchain_discover_extra_envs(tc);
-  toolchain_enable_docker_buildx_linux_support(tc);
   toolchain_rebuild_aggregate_support(tc);
+  toolchain_apply_cached_docker_support(tc);
 }
 
 static int toolchain_collect_wsl_distros(const char** distros, int max_distros) {
@@ -418,50 +458,41 @@ static void toolchain_discover_wsl_env(toolchain* tc, const char* distro) {
   const char* native_arch = lines[0];
   env.p_arch = toolchain_arch_from_text(native_arch);
   env.id = toolchain_make_env_id(env.provider, env.name, env.p_os, env.p_arch);
+  env.probe_native_arch = arena_text(native_arch, strlen(native_arch));
 
-  bool has_native_gcc = false;
-  bool has_native_gpp = false;
-  bool has_x86_64_gcc = false;
-  bool has_x86_64_gpp = false;
-  bool has_x86_c_multilib = false;
-  bool has_x86_cpp_multilib = false;
-  bool has_arm64_gcc = false;
-  bool has_arm64_gpp = false;
-  bool has_arm64_c_cross = false;
-  bool has_arm64_cpp_cross = false;
   for (int i = 1; i < line_c; ++i) {
     const char* line = lines[i];
     if (!line || !line[0])
       continue;
     if (_stricmp(line, "has_native_gcc") == 0)
-      has_native_gcc = true;
+      env.probe_has_native_gcc = true;
     else if (_stricmp(line, "has_native_gpp") == 0)
-      has_native_gpp = true;
+      env.probe_has_native_gpp = true;
     else if (_stricmp(line, "has_x86_64_gcc") == 0)
-      has_x86_64_gcc = true;
+      env.probe_has_x86_64_gcc = true;
     else if (_stricmp(line, "has_x86_64_gpp") == 0)
-      has_x86_64_gpp = true;
+      env.probe_has_x86_64_gpp = true;
     else if (_stricmp(line, "has_x86_c_multilib") == 0)
-      has_x86_c_multilib = true;
+      env.probe_has_x86_c_multilib = true;
     else if (_stricmp(line, "has_x86_cpp_multilib") == 0)
-      has_x86_cpp_multilib = true;
+      env.probe_has_x86_cpp_multilib = true;
     else if (_stricmp(line, "has_arm64_gcc") == 0)
-      has_arm64_gcc = true;
+      env.probe_has_arm64_gcc = true;
     else if (_stricmp(line, "has_arm64_gpp") == 0)
-      has_arm64_gpp = true;
+      env.probe_has_arm64_gpp = true;
     else if (_stricmp(line, "has_arm64_c_cross") == 0)
-      has_arm64_c_cross = true;
+      env.probe_has_arm64_c_cross = true;
     else if (_stricmp(line, "has_arm64_cpp_cross") == 0)
-      has_arm64_cpp_cross = true;
+      env.probe_has_arm64_cpp_cross = true;
   }
 
-  if (has_native_gcc && has_native_gpp)
+  if (env.probe_has_native_gcc && env.probe_has_native_gpp)
     toolchain_env_enable_support(&env, OS_LINUX, env.p_arch, distro && distro[0] ? toolchain_join2("wsl:", distro) : "wsl:default");
-  if (has_x86_64_gcc && has_x86_64_gpp)
+  if (env.probe_has_x86_64_gcc && env.probe_has_x86_64_gpp)
     toolchain_env_enable_support(&env, OS_LINUX, ARCH_X86_64, distro && distro[0] ? toolchain_join2("wsl-cross:", distro) : "wsl-cross:default");
-  if (has_x86_c_multilib && has_x86_cpp_multilib)
+  if (env.probe_has_x86_c_multilib && env.probe_has_x86_cpp_multilib)
     toolchain_env_enable_support(&env, OS_LINUX, ARCH_X86, distro && distro[0] ? toolchain_join2("wsl-multilib:", distro) : "wsl-multilib:default");
-  if (has_arm64_gcc && has_arm64_gpp && has_arm64_c_cross && has_arm64_cpp_cross)
+  if (env.probe_has_arm64_gcc && env.probe_has_arm64_gpp && env.probe_has_arm64_c_cross && env.probe_has_arm64_cpp_cross)
     toolchain_env_enable_support(&env, OS_LINUX, ARCH_ARM64, distro && distro[0] ? toolchain_join2("wsl-cross:", distro) : "wsl-cross:default");
 
   for (size_t i = 0; i < sizeof(TOOL_DISCOVER_STRATS) / sizeof(TOOL_DISCOVER_STRATS[0]); ++i) {
@@ -500,6 +531,37 @@ static void toolchain_discover_wsl_env(toolchain* tc, const char* distro) {
   (void)tc;
   (void)distro;
 #endif
+}
+
+static void toolchain_capture_host_docker_probe(toolchain* tc) {
+  if (!tc)
+    return;
+
+  toolchain_env* host = toolchain_host_env(tc, false);
+  const char* docker = toolchain_get_tool_path(tc, "docker");
+  if (!host || !docker || !docker[0])
+    return;
+
+  char cmd[2048] = {0};
+  snprintf(cmd, sizeof(cmd), "\"%s\" buildx inspect 2>&1", docker);
+  const char* lines[64] = {0};
+  int line_c = toolchain_run_collect_lines(cmd, lines, _countof(lines));
+  if (line_c <= 0)
+    return;
+
+  char joined[4096] = {0};
+  for (int i = 0; i < line_c; ++i) {
+    const char* line = lines[i];
+    if (!line || !line[0])
+      continue;
+    if (!strstr(line, "linux/"))
+      continue;
+    if (joined[0])
+      strncat(joined, ";", sizeof(joined) - strlen(joined) - 1);
+    strncat(joined, line, sizeof(joined) - strlen(joined) - 1);
+  }
+  if (joined[0])
+    host->probe_docker_buildx_platforms = arena_text(joined, strlen(joined));
 }
 
 static void toolchain_discover_extra_envs(toolchain* tc) {
@@ -1211,6 +1273,10 @@ static const char* toolchain_append_text(const char* text, const char* suffix) {
   memcpy(out + tl, suffix, sl);
   out[tl + sl] = '\0';
   return out;
+}
+
+static const char* toolchain_label2(const char* a, const char* b) {
+  return toolchain_append_text(a, b);
 }
 
 static const char* toolchain_find_in_hint_dirs(const char* exe_name, const char* hints) {
@@ -2061,10 +2127,10 @@ static void toolchain_fill(toolchain* tc) {
 
   toolchain_sort_tools(tc);
   toolchain_sort_sdks(tc);
-  toolchain_fill_platform_support(tc);
   toolchain_snapshot_current_host_env(tc);
   toolchain_discover_extra_envs(tc);
-  toolchain_rebuild_aggregate_support(tc);
+  toolchain_capture_host_docker_probe(tc);
+  toolchain_refresh_runtime_support(tc);
 
   toolchain_env* host = toolchain_host_env(tc, false);
   print("Discovery completed: %d tools, %d sdks, %d environments.", host ? host->tool_c : 0, host ? host->sdk_c : 0, tc->env_c);
@@ -2187,10 +2253,10 @@ static toolchain* toolchain_read(node* tree) {
       node* id_n = node_get_child(it, "id");
       node* provider_n = node_get_child(it, "provider");
       node* name_n = node_get_child(it, "name");
-      node* host_n = node_get_child(it, "host");
-      env->id = id_n ? node_get_str(id_n) : NULL;
-      env->provider = provider_n ? node_get_str(provider_n) : NULL;
-      env->name = name_n ? node_get_str(name_n) : NULL;
+    node* host_n = node_get_child(it, "host");
+    env->id = id_n ? node_get_str(id_n) : NULL;
+    env->provider = provider_n ? node_get_str(provider_n) : NULL;
+    env->name = name_n ? node_get_str(name_n) : NULL;
       env->p_os = OS_WINDOWS;
       env->p_arch = ARCH_X86_64;
 
@@ -2205,6 +2271,34 @@ static toolchain* toolchain_read(node* tree) {
         for (int i = 0; os_id && i < OS_MAX; ++i)
           if (_stricmp(OS_NAMES[i], os_id) == 0)
             env->p_os = (os)i;
+      }
+
+      node* probes_n = node_get_child(it, "probes");
+      if (probes_n) {
+        node* n_native_arch = node_get_child(probes_n, "native_arch");
+        node* n_native_gcc = node_get_child(probes_n, "has_native_gcc");
+        node* n_native_gpp = node_get_child(probes_n, "has_native_gpp");
+        node* n_x64_gcc = node_get_child(probes_n, "has_x86_64_gcc");
+        node* n_x64_gpp = node_get_child(probes_n, "has_x86_64_gpp");
+        node* n_x86_c = node_get_child(probes_n, "has_x86_c_multilib");
+        node* n_x86_cpp = node_get_child(probes_n, "has_x86_cpp_multilib");
+        node* n_arm64_gcc = node_get_child(probes_n, "has_arm64_gcc");
+        node* n_arm64_gpp = node_get_child(probes_n, "has_arm64_gpp");
+        node* n_arm64_c = node_get_child(probes_n, "has_arm64_c_cross");
+        node* n_arm64_cpp = node_get_child(probes_n, "has_arm64_cpp_cross");
+        node* n_docker = node_get_child(probes_n, "docker_buildx_platforms");
+        env->probe_native_arch = n_native_arch ? node_get_str(n_native_arch) : NULL;
+        env->probe_has_native_gcc = n_native_gcc ? node_get_bool(n_native_gcc) : false;
+        env->probe_has_native_gpp = n_native_gpp ? node_get_bool(n_native_gpp) : false;
+        env->probe_has_x86_64_gcc = n_x64_gcc ? node_get_bool(n_x64_gcc) : false;
+        env->probe_has_x86_64_gpp = n_x64_gpp ? node_get_bool(n_x64_gpp) : false;
+        env->probe_has_x86_c_multilib = n_x86_c ? node_get_bool(n_x86_c) : false;
+        env->probe_has_x86_cpp_multilib = n_x86_cpp ? node_get_bool(n_x86_cpp) : false;
+        env->probe_has_arm64_gcc = n_arm64_gcc ? node_get_bool(n_arm64_gcc) : false;
+        env->probe_has_arm64_gpp = n_arm64_gpp ? node_get_bool(n_arm64_gpp) : false;
+        env->probe_has_arm64_c_cross = n_arm64_c ? node_get_bool(n_arm64_c) : false;
+        env->probe_has_arm64_cpp_cross = n_arm64_cpp ? node_get_bool(n_arm64_cpp) : false;
+        env->probe_docker_buildx_platforms = n_docker ? node_get_str(n_docker) : NULL;
       }
 
       node* env_tools_n = node_get_child(it, "tools");
@@ -2282,6 +2376,31 @@ static node* toolchain_write(toolchain* tc) {
       toolchain_push_child_back(env_n, node_create_str("provider", env->provider));
     if (env->name)
       toolchain_push_child_back(env_n, node_create_str("name", env->name));
+
+    node* probes_n = node_create_named("probes");
+    bool has_probes = false;
+    if (probes_n) {
+      if (env->probe_native_arch) {
+        toolchain_push_child_back(probes_n, node_create_str("native_arch", env->probe_native_arch));
+        has_probes = true;
+      }
+      if (env->probe_has_native_gcc) { toolchain_push_child_back(probes_n, node_create_bool("has_native_gcc", true)); has_probes = true; }
+      if (env->probe_has_native_gpp) { toolchain_push_child_back(probes_n, node_create_bool("has_native_gpp", true)); has_probes = true; }
+      if (env->probe_has_x86_64_gcc) { toolchain_push_child_back(probes_n, node_create_bool("has_x86_64_gcc", true)); has_probes = true; }
+      if (env->probe_has_x86_64_gpp) { toolchain_push_child_back(probes_n, node_create_bool("has_x86_64_gpp", true)); has_probes = true; }
+      if (env->probe_has_x86_c_multilib) { toolchain_push_child_back(probes_n, node_create_bool("has_x86_c_multilib", true)); has_probes = true; }
+      if (env->probe_has_x86_cpp_multilib) { toolchain_push_child_back(probes_n, node_create_bool("has_x86_cpp_multilib", true)); has_probes = true; }
+      if (env->probe_has_arm64_gcc) { toolchain_push_child_back(probes_n, node_create_bool("has_arm64_gcc", true)); has_probes = true; }
+      if (env->probe_has_arm64_gpp) { toolchain_push_child_back(probes_n, node_create_bool("has_arm64_gpp", true)); has_probes = true; }
+      if (env->probe_has_arm64_c_cross) { toolchain_push_child_back(probes_n, node_create_bool("has_arm64_c_cross", true)); has_probes = true; }
+      if (env->probe_has_arm64_cpp_cross) { toolchain_push_child_back(probes_n, node_create_bool("has_arm64_cpp_cross", true)); has_probes = true; }
+      if (env->probe_docker_buildx_platforms) {
+        toolchain_push_child_back(probes_n, node_create_str("docker_buildx_platforms", env->probe_docker_buildx_platforms));
+        has_probes = true;
+      }
+      if (has_probes)
+        toolchain_push_child_back(env_n, probes_n);
+    }
 
     node* env_host_n = node_create_named("host");
     if (env_host_n) {
@@ -2365,7 +2484,6 @@ static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx)
         previous = toolchain_read(old_tree);
     }
   }
-  file_delete(path);
   toolchain* tc = push(sizeof(toolchain));
   memset(tc, 0, sizeof(toolchain));
   toolchain_fill(tc);
