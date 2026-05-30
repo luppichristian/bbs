@@ -320,8 +320,422 @@ static int run_cmd_run(cmd_ctx* cmdctx) {
   return 0;  // TODO:
 }
 
+static bool text_contains_ci(const char* text, const char* needle) {
+  if (!needle || !needle[0])
+    return true;
+  if (!text)
+    return false;
+
+  size_t needle_len = strlen(needle);
+  if (needle_len == 0)
+    return true;
+
+  for (const char* p = text; *p; ++p) {
+    if (_strnicmp(p, needle, needle_len) == 0)
+      return true;
+  }
+
+  return false;
+}
+
+static void info_indent(size_t depth) {
+  for (size_t i = 0; i < depth; ++i)
+    printf("  ");
+}
+
+static void info_pretty_name(const char* src, char* out, size_t out_size) {
+  if (!out || out_size == 0)
+    return;
+
+  if (!src || !src[0]) {
+    snprintf(out, out_size, "Value");
+    return;
+  }
+
+  size_t wi = 0;
+  bool new_word = true;
+  for (size_t i = 0; src[i] && wi + 1 < out_size; ++i) {
+    char ch = src[i];
+    if (ch == '_' || ch == '-' || ch == '.') {
+      if (wi > 0 && out[wi - 1] != ' ' && wi + 1 < out_size)
+        out[wi++] = ' ';
+      new_word = true;
+      continue;
+    }
+
+    out[wi++] = new_word ? (char)toupper((unsigned char)ch) : ch;
+    new_word = false;
+  }
+
+  out[wi] = '\0';
+}
+
+static void info_format_value(const node* n, char* out, size_t out_size) {
+  if (!out || out_size == 0) {
+    return;
+  }
+
+  out[0] = '\0';
+  if (!n)
+    return;
+
+  switch (n->type) {
+    case NODE_TYPE_STR:
+      snprintf(out, out_size, "%.*s", (int)n->txt_dim, n->_str ? n->_str : "");
+      break;
+    case NODE_TYPE_INT:
+      snprintf(out, out_size, "%lld", (long long)n->_int);
+      break;
+    case NODE_TYPE_FLT:
+      snprintf(out, out_size, "%g", n->_flt);
+      break;
+    case NODE_TYPE_VER:
+      if (n->ver_parts >= 4)
+        snprintf(out, out_size, "%u.%u.%u.%u", n->_ver.major, n->_ver.minor, n->_ver.patch, n->_ver.user);
+      else
+        snprintf(out, out_size, "%u.%u.%u", n->_ver.major, n->_ver.minor, n->_ver.patch);
+      break;
+    case NODE_TYPE_IDF:
+      snprintf(out, out_size, "%.*s", (int)n->txt_dim, n->_idf ? n->_idf : "");
+      break;
+    case NODE_TYPE_BOL:
+      snprintf(out, out_size, "%s", n->_bol ? "Yes" : "No");
+      break;
+    default:
+      break;
+  }
+}
+
+static int info_child_count(node* n) {
+  int count = 0;
+  if (!n)
+    return 0;
+
+  node_foreach(n, child) {
+    ++count;
+  }
+  return count;
+}
+
+static node** info_children_in_source_order(node* n, int* out_count) {
+  if (out_count)
+    *out_count = 0;
+  if (!n)
+    return NULL;
+
+  int count = info_child_count(n);
+  if (count <= 0)
+    return NULL;
+
+  node** items = push(sizeof(node*) * (size_t)count);
+  if (!items)
+    return NULL;
+
+  int idx = count - 1;
+  node_foreach(n, child) {
+    items[idx--] = child;
+  }
+
+  if (out_count)
+    *out_count = count;
+  return items;
+}
+
+static void info_build_path(char* out, size_t out_size, const char* parent_path, node* n) {
+  if (!out || out_size == 0)
+    return;
+
+  if (!n || !n->name || !n->name[0]) {
+    snprintf(out, out_size, "%s", parent_path ? parent_path : "");
+    return;
+  }
+
+  if (parent_path && parent_path[0])
+    snprintf(out, out_size, "%s.%s", parent_path, n->name);
+  else
+    snprintf(out, out_size, "%s", n->name);
+}
+
+static int info_count_nodes(node* n) {
+  if (!n)
+    return 0;
+
+  int total = 1;
+  node_foreach(n, child) {
+    total += info_count_nodes(child);
+  }
+  return total;
+}
+
+static bool info_node_matches_self(node* n, const char* path, const char* attr_filter, const char* text_filter) {
+  if (!n)
+    return false;
+
+  if (attr_filter && attr_filter[0]) {
+    bool path_match = path && _stricmp(path, attr_filter) == 0;
+    bool name_match = n->name && _stricmp(n->name, attr_filter) == 0;
+    if (!path_match && !name_match)
+      return false;
+  }
+
+  if (text_filter && text_filter[0]) {
+    char value[256] = {0};
+    char label[256] = {0};
+    info_format_value(n, value, sizeof(value));
+    info_pretty_name(n->name, label, sizeof(label));
+    if (!text_contains_ci(path, text_filter) && !text_contains_ci(n->name, text_filter) && !text_contains_ci(label, text_filter) && !text_contains_ci(value, text_filter))
+      return false;
+  }
+
+  return true;
+}
+
+static bool info_node_matches_tree(node* n, const char* parent_path, const char* attr_filter, const char* text_filter) {
+  if (!n)
+    return false;
+
+  char path[1024] = {0};
+  info_build_path(path, sizeof(path), parent_path, n);
+  if (info_node_matches_self(n, path, attr_filter, text_filter))
+    return true;
+
+  int child_count = 0;
+  node** children = info_children_in_source_order(n, &child_count);
+  for (int i = 0; i < child_count; ++i) {
+    if (info_node_matches_tree(children[i], path, attr_filter, text_filter))
+      return true;
+  }
+
+  return false;
+}
+
+static int info_count_visible_nodes(node* n, const char* parent_path, const char* attr_filter, const char* text_filter) {
+  if (!n)
+    return 0;
+
+  int total = 0;
+  int child_count = 0;
+  node** children = info_children_in_source_order(n, &child_count);
+  char path[1024] = {0};
+  info_build_path(path, sizeof(path), parent_path, n);
+  bool self_match = info_node_matches_self(n, path, attr_filter, text_filter);
+  bool child_match = false;
+
+  for (int i = 0; i < child_count; ++i) {
+    int child_total = info_count_visible_nodes(children[i], path, attr_filter, text_filter);
+    total += child_total;
+    if (child_total > 0)
+      child_match = true;
+  }
+
+  if (self_match || child_match)
+    ++total;
+  return total;
+}
+
+typedef enum {
+  INFO_PRINT_NORMAL = 0,
+  INFO_PRINT_MINIMAL,
+  INFO_PRINT_VALUES_ONLY,
+} info_print_mode;
+
+static int info_count_flat_matches(node* n, const char* parent_path, const char* attr_filter, const char* text_filter) {
+  if (!n)
+    return 0;
+
+  char path[1024] = {0};
+  info_build_path(path, sizeof(path), parent_path, n);
+  int total = 0;
+
+  if (!n->children) {
+    if (info_node_matches_self(n, path, attr_filter, text_filter))
+      return 1;
+    return 0;
+  }
+
+  int child_count = 0;
+  node** children = info_children_in_source_order(n, &child_count);
+  for (int i = 0; i < child_count; ++i) {
+    total += info_count_flat_matches(children[i], path, attr_filter, text_filter);
+  }
+  return total;
+}
+
+static void info_print_flat_node(node* n, const char* parent_path, const char* attr_filter, const char* text_filter, info_print_mode mode) {
+  if (!n)
+    return;
+
+  char path[1024] = {0};
+  char value[512] = {0};
+  info_build_path(path, sizeof(path), parent_path, n);
+
+  if (!n->children) {
+    if (!info_node_matches_self(n, path, attr_filter, text_filter))
+      return;
+
+    if (mode == INFO_PRINT_VALUES_ONLY) {
+      info_format_value(n, value, sizeof(value));
+      printf("%s\n", value[0] ? value : "(empty)");
+    } else {
+      printf("%s\n", path);
+    }
+    return;
+  }
+
+  int child_count = 0;
+  node** children = info_children_in_source_order(n, &child_count);
+  for (int i = 0; i < child_count; ++i) {
+    info_print_flat_node(children[i], path, attr_filter, text_filter, mode);
+  }
+}
+
+static void info_print_node(node* n, const char* parent_path, size_t depth, const char* attr_filter, const char* text_filter) {
+  if (!n)
+    return;
+
+  char path[1024] = {0};
+  char label[256] = {0};
+  char value[512] = {0};
+  info_build_path(path, sizeof(path), parent_path, n);
+  if (!info_node_matches_tree(n, path[0] ? parent_path : "", attr_filter, text_filter))
+    return;
+
+  info_pretty_name(n->name, label, sizeof(label));
+  info_format_value(n, value, sizeof(value));
+
+  if (n->children) {
+    info_indent(depth);
+    printf(ANSI_BOLD "%s" ANSI_RESET, label);
+    if (path[0])
+      printf(ANSI_FG_TEXT "  [%s]" ANSI_RESET, path);
+    printf("\n");
+
+    int child_count = 0;
+    node** children = info_children_in_source_order(n, &child_count);
+    for (int i = 0; i < child_count; ++i) {
+      info_print_node(children[i], path, depth + 1, attr_filter, text_filter);
+    }
+    return;
+  }
+
+  info_indent(depth);
+  printf("%s: %s", label, value[0] ? value : "(empty)");
+  if (path[0])
+    printf(ANSI_FG_TEXT "  [%s]" ANSI_RESET, path);
+  printf("\n");
+}
+
+static int run_cmd_info_file(const char* title, const char* path, const char* attr_filter, const char* text_filter, info_print_mode mode) {
+  if (!file_exists(path)) {
+    if (mode == INFO_PRINT_NORMAL) {
+      print("%s is not present.", title);
+      print("Expected path: %s", path);
+    }
+    return 0;
+  }
+
+  const char* data = read_entire_file(path);
+  if (!data) {
+    error("Failed to read '%s'.", path);
+    return 1;
+  }
+
+  node* tree = node_parse(data);
+  if (!tree) {
+    error("Failed to parse '%s'.", path);
+    return 1;
+  }
+
+  int total_nodes = 0;
+  int visible_nodes = 0;
+  int flat_matches = 0;
+  int child_count = 0;
+  node** children = info_children_in_source_order(tree, &child_count);
+  for (int i = 0; i < child_count; ++i) {
+    total_nodes += info_count_nodes(children[i]);
+    visible_nodes += info_count_visible_nodes(children[i], "", attr_filter, text_filter);
+    flat_matches += info_count_flat_matches(children[i], "", attr_filter, text_filter);
+  }
+
+  if (mode == INFO_PRINT_NORMAL) {
+    print_section(title);
+    print("File: %s", path);
+    print("Nodes parsed: %d", total_nodes);
+    if (attr_filter && attr_filter[0])
+      print("Attribute: %s", attr_filter);
+    if (text_filter && text_filter[0])
+      print("Filter: %s", text_filter);
+  }
+
+  if ((mode == INFO_PRINT_NORMAL && visible_nodes == 0) || (mode != INFO_PRINT_NORMAL && flat_matches == 0)) {
+    if (mode == INFO_PRINT_NORMAL)
+      print("No matching attributes found.");
+    return 0;
+  }
+
+  if (mode == INFO_PRINT_NORMAL) {
+    print("Attributes shown: %d", visible_nodes);
+    printf("\n");
+  }
+
+  for (int i = 0; i < child_count; ++i) {
+    if (mode == INFO_PRINT_NORMAL)
+      info_print_node(children[i], "", 0, attr_filter, text_filter);
+    else
+      info_print_flat_node(children[i], "", attr_filter, text_filter, mode);
+  }
+  return 0;
+}
+
 static int run_cmd_info(cmd_ctx* cmdctx) {
-  return 0;  // TODO:
+  cmdline* cl = cmdctx->cl;
+  const char* scope = cmdline_consume_param(cl);
+
+  if (!scope || !scope[0]) {
+    error("Missing info topic.");
+    print("Use 'bbs info project', 'bbs info user', 'bbs info local', or 'bbs info toolchain'.");
+    return error_code(CMD_INFO, 0);
+  }
+
+  if (_strcmpi(scope, "toolchain") == 0)
+    return run_cmd_toolchain(cmdctx);
+
+  const char* positional_attr = cmdline_consume_param(cl);
+  enum {
+    ATTR = 0,
+    FILTER,
+    MINIMAL,
+    VALUES_ONLY,
+  };
+
+  cmdopt opts[] = {
+      [ATTR] = {NULL, "attr"},
+      [FILTER] = {NULL, "filter"},
+      [MINIMAL] = {"m", "minimal"},
+      [VALUES_ONLY] = {NULL, "values-only"},
+  };
+
+  cmdline_consume_all_options(cl, opts, _countof(opts));
+  cmdline_validate(cl);
+
+  const char* attr_filter = opts[ATTR].value && opts[ATTR].value[0] ? opts[ATTR].value : positional_attr;
+  const char* text_filter = opts[FILTER].value;
+  info_print_mode mode = INFO_PRINT_NORMAL;
+  if (opts[VALUES_ONLY].present)
+    mode = INFO_PRINT_VALUES_ONLY;
+  else if (opts[MINIMAL].present)
+    mode = INFO_PRINT_MINIMAL;
+
+  if (_strcmpi(scope, "project") == 0)
+    return run_cmd_info_file("Project File Attributes", cmdctx->project, attr_filter, text_filter, mode);
+  if (_strcmpi(scope, "user") == 0)
+    return run_cmd_info_file("User File Attributes", cmdctx->user, attr_filter, text_filter, mode);
+  if (_strcmpi(scope, "local") == 0)
+    return run_cmd_info_file("Local File Attributes", cmdctx->local, attr_filter, text_filter, mode);
+
+  error("Unknown info topic '%s'.", scope);
+  print("Use 'project', 'user', 'local', or 'toolchain'.");
+  return error_code(CMD_INFO, 1);
 }
 
 static int run_cmd_dist(cmd_ctx* cmdctx) {
@@ -332,8 +746,169 @@ static int run_cmd_test(cmd_ctx* cmdctx) {
   return 0;  // TODO:
 }
 
+static bool bumpver_match_project_id(node* project, const char* project_id) {
+  if (!project_id || !project_id[0])
+    return true;
+
+  node* id = node_get_child(project, "id");
+  if (!id)
+    return false;
+
+  if (id->type == NODE_TYPE_STR)
+    return strlen(project_id) == id->txt_dim && _strnicmp(project_id, id->_str, id->txt_dim) == 0;
+  if (id->type == NODE_TYPE_IDF)
+    return strlen(project_id) == id->txt_dim && _strnicmp(project_id, id->_idf, id->txt_dim) == 0;
+  return false;
+}
+
+static node* bumpver_find_project(node* tree, const char* project_id, int* out_matches) {
+  node* match = NULL;
+  int matches = 0;
+  if (!tree) {
+    if (out_matches)
+      *out_matches = 0;
+    return NULL;
+  }
+
+  node_foreach(tree, child) {
+    if (!child->name || _stricmp(child->name, "project") != 0)
+      continue;
+    if (!bumpver_match_project_id(child, project_id))
+      continue;
+    match = child;
+    ++matches;
+  }
+
+  if (out_matches)
+    *out_matches = matches;
+  return matches == 1 ? match : NULL;
+}
+
+static bool bumpver_inc_byte(uint8_t* value, const char* label) {
+  if (!value)
+    return false;
+  if (*value == UINT8_MAX) {
+    error("Cannot bump %s beyond %u.", label, (unsigned)UINT8_MAX);
+    return false;
+  }
+  ++(*value);
+  return true;
+}
+
 static int run_cmd_bumpver(cmd_ctx* cmdctx) {
-  return 0;  // TODO:
+  cmdline* cl = cmdctx->cl;
+  const char* part = cmdline_consume_param(cl);
+  const char* project_id = cmdline_consume_param(cl);
+  cmdline_validate(cl);
+
+  if (!part || !part[0]) {
+    error("Missing version part.");
+    print("Use 'bbs bumpver <major|minor|patch|user|all> [project_id]'.");
+    return error_code(CMD_BUMPVER, 0);
+  }
+
+  if (!file_exists(cmdctx->project)) {
+    error("Project file not found: %s", cmdctx->project);
+    return error_code(CMD_BUMPVER, 1);
+  }
+
+  const char* text = read_entire_file(cmdctx->project);
+  if (!text) {
+    error("Failed to read '%s'.", cmdctx->project);
+    return error_code(CMD_BUMPVER, 2);
+  }
+
+  node* tree = node_parse(text);
+  if (!tree) {
+    error("Failed to parse '%s'.", cmdctx->project);
+    return error_code(CMD_BUMPVER, 3);
+  }
+
+  int matches = 0;
+  node* project = bumpver_find_project(tree, project_id, &matches);
+  if (!project) {
+    if (project_id && project_id[0]) {
+      if (matches == 0)
+        error("No project node found with id '%s'.", project_id);
+      else
+        error("Multiple project nodes found with id '%s'.", project_id);
+    } else if (matches == 0) {
+      error("No top-level project node found in '%s'.", cmdctx->project);
+    } else {
+      error("Multiple top-level project nodes found. Specify [project_id].");
+    }
+    return error_code(CMD_BUMPVER, 4);
+  }
+
+  node* version = node_get_child(project, "version");
+  if (!version) {
+    error("Project node does not define a version.");
+    return error_code(CMD_BUMPVER, 5);
+  }
+  if (version->type != NODE_TYPE_VER) {
+    error("Project version must be a version value.");
+    return error_code(CMD_BUMPVER, 6);
+  }
+
+  ver before = version->_ver;
+  uint8_t before_parts = version->ver_parts >= 4 ? 4 : 3;
+  if (_stricmp(part, "major") == 0) {
+    if (!bumpver_inc_byte(&version->_ver.major, "major"))
+      return error_code(CMD_BUMPVER, 7);
+    version->_ver.minor = 0;
+    version->_ver.patch = 0;
+    if (before_parts >= 4)
+      version->_ver.user = 0;
+  } else if (_stricmp(part, "minor") == 0) {
+    if (!bumpver_inc_byte(&version->_ver.minor, "minor"))
+      return error_code(CMD_BUMPVER, 8);
+    version->_ver.patch = 0;
+    if (before_parts >= 4)
+      version->_ver.user = 0;
+  } else if (_stricmp(part, "patch") == 0) {
+    if (!bumpver_inc_byte(&version->_ver.patch, "patch"))
+      return error_code(CMD_BUMPVER, 9);
+    if (before_parts >= 4)
+      version->_ver.user = 0;
+  } else if (_stricmp(part, "user") == 0) {
+    if (version->ver_parts < 4)
+      version->ver_parts = 4;
+    if (!bumpver_inc_byte(&version->_ver.user, "user"))
+      return error_code(CMD_BUMPVER, 10);
+  } else if (_stricmp(part, "all") == 0) {
+    if (!bumpver_inc_byte(&version->_ver.major, "major") ||
+        !bumpver_inc_byte(&version->_ver.minor, "minor") ||
+        !bumpver_inc_byte(&version->_ver.patch, "patch"))
+      return error_code(CMD_BUMPVER, 11);
+    if (version->ver_parts >= 4 && !bumpver_inc_byte(&version->_ver.user, "user"))
+      return error_code(CMD_BUMPVER, 12);
+  } else {
+    error("Unknown version part '%s'.", part);
+    print("Use one of: major, minor, patch, user, all.");
+    return error_code(CMD_BUMPVER, 13);
+  }
+
+  const char* updated = node_edit(version, text);
+  if (!updated) {
+    error("Failed to update the version text region.");
+    return error_code(CMD_BUMPVER, 14);
+  }
+  if (!write_entire_file(cmdctx->project, updated)) {
+    error("Failed to write '%s'.", cmdctx->project);
+    return error_code(CMD_BUMPVER, 15);
+  }
+
+  char before_text[32] = {0};
+  char after_text[32] = {0};
+  if (before_parts >= 4)
+    snprintf(before_text, sizeof(before_text), "%u.%u.%u.%u", before.major, before.minor, before.patch, before.user);
+  else
+    snprintf(before_text, sizeof(before_text), "%u.%u.%u", before.major, before.minor, before.patch);
+  info_format_value(version, after_text, sizeof(after_text));
+
+  print("Updated version: %s -> %s", before_text, after_text);
+  print("Edited: %s", cmdctx->project);
+  return 0;
 }
 
 static int run_cmd_update(cmd_ctx* cmdctx) {

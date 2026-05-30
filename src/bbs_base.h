@@ -98,6 +98,9 @@ struct node {
 
   size_t txt_offset;
   size_t txt_dim;
+  size_t src_txt_offset;
+  size_t src_txt_dim;
+  uint8_t ver_parts;
 };
 
 typedef struct arena_blk arena_blk;

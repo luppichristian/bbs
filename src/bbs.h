@@ -80,19 +80,19 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                      .detailed_desc = "Explain how the generated build directory is used.\n"
                      "Describe what files are expected to appear there for configured targets and platforms."                                },
 
-    [CMD_CFGFILE] = {  .name = "cfgfile",
+    [CMD_CFGFILE] = {  .name = "project",
                      .params = "",
                      .desc = "Show help on how to write a config file for your project",
                      .detailed_desc = "Describe the main project configuration file format.\n"
                      "Explain which attributes can be declared and how bbs reads the file from the project root."                            },
 
-    [CMD_USERCFG] = {  .name = "usercfg",
+    [CMD_USERCFG] = {     .name = "user",
                      .params = "",
                      .desc = "Show help on the shared user config file",
                      .detailed_desc = "Explain how to use the shared user config file to define default settings.\n"
                      "These defaults can be reused across projects and overridden locally when needed."                                      },
 
-    [CMD_LOCALCFG] = { .name = "localcfg",
+    [CMD_LOCALCFG] = {    .name = "local",
                      .params = "",
                      .desc = "Show help on the machine-specific local config file",
                      .detailed_desc = "Explain how to use the local config file for machine-specific settings.\n"
@@ -130,11 +130,14 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                      "The optional platform selects which build output to run when multiple platforms are available."                        },
 
     [CMD_INFO] = {     .name = "info",
-                     .params = "[attribute] [-t target] [-p platform]",
-                     .desc = "Display the project attributes",
-                     .detailed_desc = "Print project or target information known to bbs.\n"
-                     "Use the optional attribute name to inspect a specific value.\n"
-                     "Provide a target or platform when the result depends on that context."                                                 },
+                     .params = "<project|user|local|toolchain> [attribute] [-m] [--attr=path] [--filter=text] [--values-only]",
+                     .desc = "Display parsed config or toolchain information",
+                     .detailed_desc = "Use 'project', 'user', or 'local' to inspect the parsed nodes from that file.\n"
+                     "Use the optional attribute argument or '--attr=path' to show only one attribute.\n"
+                     "Use '-m' or '--minimal' to print only matching attribute paths.\n"
+                     "Use '--filter=text' to show only matching attributes.\n"
+                     "Use '--values-only' to print only matching values.\n"
+                     "Use 'toolchain' to forward directly to 'bbs toolchain'."                                                               },
 
     [CMD_DIST] = {     .name = "dist",
                      .params = "[-t target] [-p platform]",
@@ -149,7 +152,7 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                      "The optional target and platform arguments restrict execution to the matching test target or cross-compilation output."},
 
     [CMD_BUMPVER] = {  .name = "bumpver",
-                     .params = "<major/minor/patch/user/all> [-t target] [-p platform]",
+                     .params = "<major/minor/patch/user/all> [project_id]",
                      .desc = "Increment the version of the project",
                      .detailed_desc = "Increment the project version according to the requested part.\n"
                      "Use major, minor, patch, or all depending on how versioning is defined for the project.\n"
@@ -161,15 +164,15 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                      .detailed_desc = "Resolve, install, or refresh external dependencies required by the current project.\n"
                      "This ensures later build, test, and dist commands can run with the expected toolchain and libraries."                  },
 
-     [CMD_TOOLCHAIN] = {.name = "toolchain",
+    [CMD_TOOLCHAIN] = {.name = "toolchain",
                      .params = "[init|clean] [-m] [--tools] [--sdks] [--type=kind] [--tool=id] [--sdk=name] [--paths-only] [--versions-only]",
                      .desc = "Show, initialize, or clean the toolchain",
                      .detailed_desc = "Without arguments, display the contents of the toolchain file if it exists,\n"
-                      "or print a message indicating the toolchain is not setup.\n"
-                      "Use 'init' to create a default toolchain file next to the bbs executable.\n"
-                      "Use 'clean' to delete the toolchain file.\n"
-                      "Use '-m' or '--minimal' for compact output.\n"
-                      "Use '--tools' or '--sdks' to print only those sections.\n"
-                      "Use '--type=c_compiler', '--tool=clang', or '--sdk=msvc' to filter the output.\n"
-                      "Use '--paths-only' or '--versions-only' for single-field output."                                                    },
+                     "or print a message indicating the toolchain is not setup.\n"
+                     "Use 'init' to create a default toolchain file next to the bbs executable.\n"
+                     "Use 'clean' to delete the toolchain file.\n"
+                     "Use '-m' or '--minimal' for compact output.\n"
+                     "Use '--tools' or '--sdks' to print only those sections.\n"
+                     "Use '--type=c_compiler', '--tool=clang', or '--sdk=msvc' to filter the output.\n"
+                     "Use '--paths-only' or '--versions-only' for single-field output."                                                      },
 };

@@ -365,6 +365,22 @@ static size_t token_len(token t) {
   return (size_t)(t.end - t.begin);
 }
 
+static size_t token_src_offset(parser* p, token t) {
+  if (t.type == TOK_STRING && t.begin > p->src)
+    return (size_t)((t.begin - 1) - p->src);
+  return (size_t)(t.begin - p->src);
+}
+
+static size_t token_src_len(token t) {
+  if (t.type == TOK_STRING) {
+    size_t len = token_len(t) + 1;
+    if (*t.end == '"')
+      ++len;
+    return len;
+  }
+  return token_len(t);
+}
+
 static const char* arena_text(const char* begin, size_t len) {
   char* out = push(len + 1);
   if (!out)
@@ -681,6 +697,7 @@ static node* node_create_ver(const char* name, ver value) {
 
   n->type = NODE_TYPE_VER;
   n->_ver = value;
+  n->ver_parts = value.user != 0 ? 4 : 3;
   return n;
 }
 
@@ -757,6 +774,7 @@ static void node_assign_scalar(node* n, token t) {
       }
 
       n->_ver = v;
+      n->ver_parts = (uint8_t)idx;
       break;
     }
     case NODE_TYPE_IDF:
@@ -799,12 +817,16 @@ static node* node_parse_named(parser* p, token name_tok) {
   token second = parser_peek(p);
   if (second.type == TOK_RPAREN && first.type != TOK_LPAREN && first.type != TOK_RPAREN) {
     node_assign_scalar(n, first);
-    n->txt_offset = (size_t)(first.begin - p->src);
+    n->txt_offset = token_src_offset(p, first);
+    n->src_txt_offset = n->txt_offset;
+    n->src_txt_dim = token_src_len(first);
     n->txt_dim = token_len(first);
     if (n->type == NODE_TYPE_STR) {
-      const char* unesc = str_unescape(n->_str, n->txt_dim, &n->txt_dim);
+      size_t unesc_len = 0;
+      const char* unesc = str_unescape(n->_str, n->txt_dim, &unesc_len);
       if (unesc)
         n->_str = unesc;
+      n->txt_dim = unesc_len;
     }
     parser_next(p);  // consume ')'
     return n;
@@ -849,12 +871,16 @@ static node* node_parse_item(parser* p) {
     return NULL;
 
   node_assign_scalar(n, t);
-  n->txt_offset = (size_t)(t.begin - p->src);
+  n->txt_offset = token_src_offset(p, t);
+  n->src_txt_offset = n->txt_offset;
+  n->src_txt_dim = token_src_len(t);
   n->txt_dim = token_len(t);
   if (n->type == NODE_TYPE_STR) {
-    const char* unesc = str_unescape(n->_str, n->txt_dim, &n->txt_dim);
+    size_t unesc_len = 0;
+    const char* unesc = str_unescape(n->_str, n->txt_dim, &unesc_len);
     if (unesc)
       n->_str = unesc;
+    n->txt_dim = unesc_len;
   }
   return n;
 }
@@ -915,7 +941,7 @@ static size_t node_plain_len(const node* n) {
     }
     case NODE_TYPE_VER: {
       char buf[32];
-      if (n->_ver.user != 0)
+      if (n->ver_parts >= 4)
         return (size_t)snprintf(buf, sizeof(buf), "%u.%u.%u.%u", n->_ver.major, n->_ver.minor, n->_ver.patch, n->_ver.user);
       return (size_t)snprintf(buf, sizeof(buf), "%u.%u.%u", n->_ver.major, n->_ver.minor, n->_ver.patch);
     }
@@ -942,7 +968,7 @@ static void node_plain_write(const node* n, char* out) {
       sprintf(out, "%g", n->_flt);
       break;
     case NODE_TYPE_VER:
-      if (n->_ver.user != 0)
+      if (n->ver_parts >= 4)
         sprintf(out, "%u.%u.%u.%u", n->_ver.major, n->_ver.minor, n->_ver.patch, n->_ver.user);
       else
         sprintf(out, "%u.%u.%u", n->_ver.major, n->_ver.minor, n->_ver.patch);
@@ -1126,55 +1152,25 @@ static const char* node_edit(node* n, const char* str) {
 
   const char* replacement = NULL;
   size_t replacement_len = 0;
+  size_t edit_offset = n->src_txt_dim ? n->src_txt_offset : n->txt_offset;
+  size_t edit_dim = n->src_txt_dim ? n->src_txt_dim : n->txt_dim;
 
   if (n->children) {
     replacement = node_write(n);
     replacement_len = strlen(replacement);
   } else {
-    switch (n->type) {
-      case NODE_TYPE_STR:
-        replacement = n->_str;
-        replacement_len = n->txt_dim;
-        break;
-      case NODE_TYPE_INT: {
-        char buf[32];
-        replacement_len = (size_t)snprintf(buf, sizeof(buf), "%lld", (long long)n->_int);
-        replacement = arena_text(buf, replacement_len);
-        break;
-      }
-      case NODE_TYPE_FLT: {
-        char buf[64];
-        replacement_len = (size_t)snprintf(buf, sizeof(buf), "%g", n->_flt);
-        replacement = arena_text(buf, replacement_len);
-        break;
-      }
-      case NODE_TYPE_VER: {
-        char buf[32];
-        if (n->_ver.user != 0)
-          replacement_len = (size_t)snprintf(buf, sizeof(buf), "%u.%u.%u.%u", n->_ver.major, n->_ver.minor, n->_ver.patch, n->_ver.user);
-        else
-          replacement_len = (size_t)snprintf(buf, sizeof(buf), "%u.%u.%u", n->_ver.major, n->_ver.minor, n->_ver.patch);
-        replacement = arena_text(buf, replacement_len);
-        break;
-      }
-      case NODE_TYPE_IDF:
-        replacement = n->_idf;
-        replacement_len = n->txt_dim;
-        break;
-      case NODE_TYPE_BOL:
-        replacement = n->_bol ? "true" : "false";
-        replacement_len = n->_bol ? 4 : 5;
-        break;
-      default:
-        replacement = n->name ? n->name : "";
-        replacement_len = n->name ? n->name_dim : 0;
-        break;
-    }
+    replacement_len = node_full_value_len(n);
+    char* out = push(replacement_len + 1);
+    if (!out)
+      return NULL;
+    node_full_value_write(n, out);
+    out[replacement_len] = '\0';
+    replacement = out;
   }
 
   size_t src_len = strlen(str);
-  size_t prefix_len = n->txt_offset;
-  size_t suffix_len = (n->txt_offset + n->txt_dim <= src_len) ? (src_len - n->txt_offset - n->txt_dim) : 0;
+  size_t prefix_len = edit_offset;
+  size_t suffix_len = (edit_offset + edit_dim <= src_len) ? (src_len - edit_offset - edit_dim) : 0;
 
   char* out = push(prefix_len + replacement_len + suffix_len + 1);
   if (!out)
@@ -1182,7 +1178,7 @@ static const char* node_edit(node* n, const char* str) {
 
   memcpy(out, str, prefix_len);
   memcpy(out + prefix_len, replacement, replacement_len);
-  memcpy(out + prefix_len + replacement_len, str + n->txt_offset + n->txt_dim, suffix_len);
+  memcpy(out + prefix_len + replacement_len, str + edit_offset + edit_dim, suffix_len);
   out[prefix_len + replacement_len + suffix_len] = '\0';
   return out;
 }
