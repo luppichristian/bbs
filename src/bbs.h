@@ -55,6 +55,7 @@ typedef enum {
 
   // Help for each command
   CMD_CLEAN = CMD_HELP_END,
+  CMD_UPDATE,
   CMD_CFG,
   CMD_BUILD,
   CMD_RUN,
@@ -62,7 +63,6 @@ typedef enum {
   CMD_DIST,
   CMD_TEST,
   CMD_BUMPVER,
-  CMD_UPDATE,
   CMD_TOOLCHAIN,
   CMD_MAX,
 } cmd;
@@ -98,15 +98,23 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                      .detailed_desc = "Explain how to use the local config file for machine-specific settings.\n"
                      "Store local paths and other overrides there when they should not be shared with the project."                          },
 
-    [CMD_CLEAN] = {    .name = "clean",
-                     .params = "",
-                     .desc = "Cleanup the directory with the build artifacts",
-                     .detailed_desc = "Remove generated build artifacts for the current project.\n"
-                     "Use this when you want to discard previous outputs and force the next build to start from a clean state."              },
+     [CMD_CLEAN] = {    .name = "clean",
+                      .params = "[project|user|local|toolchain]",
+                      .desc = "Delete selected bbs config files",
+                      .detailed_desc = "Delete one selected bbs config file.\n"
+                      "Use 'project', 'user', 'local', or 'toolchain' to clean only that file.\n"
+                      "If no argument is provided, bbs cleans both 'project' and 'local'."                                                    },
 
-    [CMD_CFG] = {      .name = "cfg",
-                     .params = "[-m] [-p] [-u] [-l] [-t]",
-                     .desc = "Show the resolved config file paths",
+     [CMD_UPDATE] = {   .name = "update",
+                      .params = "[-i|--info] [-c config]",
+                      .desc = "Set up derived project folders",
+                      .detailed_desc = "Parse and validate the project configuration, then create the derived project directories used by bbs.\n"
+                      "Use '-i' or '--info' to print the resolved parsed project state before updating.\n"
+                      "Use '-c' or '--config' to resolve the project using a specific named config for the info output."                },
+
+     [CMD_CFG] = {      .name = "cfg",
+                      .params = "[-m] [-p] [-u] [-l] [-t]",
+                      .desc = "Show the resolved config file paths",
                      .detailed_desc = "Print the resolved config file paths used by bbs.\n"
                      "Use -m or --minimal to print raw paths only.\n"
                      "Use -p or --project to print the project config path.\n"
@@ -116,40 +124,44 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                      "If none of -p, -u, -t or -l is provided, bbs prints all three paths."                                                  },
 
     [CMD_BUILD] = {    .name = "build",
-                     .params = "[-t target] [-p platform]",
+                     .params = "[-t target] [-p platform] [-c config]",
                      .desc = "Build and compile the project",
                      .detailed_desc = "Compile the selected target for the requested platform.\n"
-                     "If no target is provided, bbs uses the only project target when possible or operates on all targets.\n"
-                     "If no platform is provided, the default configured platform selection is used."                                        },
+                      "If no target is provided, bbs uses the only project target when possible or operates on all targets.\n"
+                      "If no platform is provided, the default configured platform selection is used.\n"
+                      "If no config is provided, bbs resolves the project using the 'default' config."                                   },
 
     [CMD_RUN] = {      .name = "run",
-                     .params = "[-t target] [-p platform] | [optional args]",
+                     .params = "[-t target] [-p platform] [-c config] | [optional args]",
                      .desc = "Run a built project, automatically building it if required",
-                     .detailed_desc = "Build the selected runnable target if needed, then execute it.\n"
-                     "Any remaining arguments are forwarded to the program.\n"
-                     "The optional platform selects which build output to run when multiple platforms are available."                        },
+                      .detailed_desc = "Build the selected runnable target if needed, then execute it.\n"
+                      "Any remaining arguments are forwarded to the program.\n"
+                      "The optional platform selects which build output to run when multiple platforms are available.\n"
+                      "If no config is provided, bbs resolves the project using the 'default' config."                                   },
 
-    [CMD_INFO] = {     .name = "info",
-                     .params = "<project|user|local|toolchain> [attribute] [-m] [--attr=path] [--filter=text] [--values-only]",
-                     .desc = "Display parsed config or toolchain information",
-                     .detailed_desc = "Use 'project', 'user', or 'local' to inspect the parsed nodes from that file.\n"
-                     "Use the optional attribute argument or '--attr=path' to show only one attribute.\n"
-                     "Use '-m' or '--minimal' to print only matching attribute paths.\n"
-                     "Use '--filter=text' to show only matching attributes.\n"
-                     "Use '--values-only' to print only matching values.\n"
-                     "Use 'toolchain' to forward directly to 'bbs toolchain'."                                                               },
+     [CMD_INFO] = {     .name = "info",
+                      .params = "<project|user|local|toolchain> [attribute] [-m] [--attr=path] [--filter=text] [--values-only]",
+                      .desc = "Display parsed config or toolchain information",
+                      .detailed_desc = "Use 'project', 'user', or 'local' to inspect the parsed nodes from that file.\n"
+                      "Use the optional attribute argument or '--attr=path' to show only one attribute.\n"
+                      "Use '-m' or '--minimal' to print only matching attribute paths.\n"
+                      "Use '--filter=text' to show only matching attributes.\n"
+                      "Use '--values-only' to print only matching values.\n"
+                      "Use 'toolchain' to inspect the raw parsed toolchain.bbs file just like the other config files."                    },
 
     [CMD_DIST] = {     .name = "dist",
-                     .params = "[-t target] [-p platform]",
+                     .params = "[-t target] [-p platform] [-c config]",
                      .desc = "Prepare the built project for distribution",
-                     .detailed_desc = "Collect the selected build output and prepare it for distribution.\n"
-                     "Use the optional target and platform arguments to dist a specific artifact when the project produces multiple outputs."},
+                      .detailed_desc = "Collect the selected build output and prepare it for distribution.\n"
+                      "Use the optional target and platform arguments to dist a specific artifact when the project produces multiple outputs.\n"
+                      "If no config is provided, bbs resolves the project using the 'default' config."                                   },
 
     [CMD_TEST] = {     .name = "test",
-                     .params = "[name] [-t target] [-p platform]",
+                     .params = "[name] [-t target] [-p platform] [-c config]",
                      .desc = "Run unit tests for the current project",
-                     .detailed_desc = "Run the project's test suite, or a specific named test when provided.\n"
-                     "The optional target and platform arguments restrict execution to the matching test target or cross-compilation output."},
+                      .detailed_desc = "Run the project's test suite, or a specific named test when provided.\n"
+                      "The optional target and platform arguments restrict execution to the matching test target or cross-compilation output.\n"
+                      "If no config is provided, bbs resolves the project using the 'default' config."                                   },
 
     [CMD_BUMPVER] = {  .name = "bumpver",
                      .params = "<major/minor/patch/user/all> [project_id]",
@@ -157,12 +169,6 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                      .detailed_desc = "Increment the project version according to the requested part.\n"
                      "Use major, minor, patch, or all depending on how versioning is defined for the project.\n"
                      "Optional target and platform arguments limit the scope when version data is target-specific."                          },
-
-    [CMD_UPDATE] = {   .name = "update",
-                     .params = "",
-                     .desc = "Install or update all dependencies as necessary",
-                     .detailed_desc = "Resolve, install, or refresh external dependencies required by the current project.\n"
-                     "This ensures later build, test, and dist commands can run with the expected toolchain and libraries."                  },
 
     [CMD_TOOLCHAIN] = {.name = "toolchain",
                      .params = "[init|clean] [-m] [--tools] [--sdks] [--type=kind] [--tool=id] [--sdk=name] [--paths-only] [--versions-only]",

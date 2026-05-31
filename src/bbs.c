@@ -1,5 +1,6 @@
 #include "bbs.h"
 #include "bbs_base.c"
+#include "bbs_project.c"
 #include "bbs_toolchain.c"
 
 static void print_section(const char* title) {
@@ -162,6 +163,55 @@ static int error_code(cmd c, char idx) {
   return 200 + c * 255 + idx;
 }
 
+static const char* cmdline_extract_option_value(cmdline* cl, const char* short_name, const char* long_name) {
+  if (!cl || cl->argc <= 0)
+    return NULL;
+
+  int wi = 0;
+  const char* value = NULL;
+
+  for (int ri = 0; ri < cl->argc; ++ri) {
+    const char* arg = cl->argv[ri];
+    if (!arg) {
+      cl->argv[wi++] = cl->argv[ri];
+      continue;
+    }
+
+    if (long_name && cmdline_is_longopt(arg)) {
+      const char* name = arg + 2;
+      size_t long_len = strlen(long_name);
+      if (_strnicmp(name, long_name, long_len) == 0) {
+        if (name[long_len] == '=') {
+          value = name + long_len + 1;
+          continue;
+        }
+        if (name[long_len] == '\0') {
+          if (ri + 1 < cl->argc && !cmdline_is_longopt(cl->argv[ri + 1]) && !cmdline_is_shortopt(cl->argv[ri + 1])) {
+            value = cl->argv[++ri];
+          } else {
+            warn("option '--%s' expects a value.", long_name);
+          }
+          continue;
+        }
+      }
+    }
+
+    if (short_name && cmdline_is_shortopt(arg) && strlen(arg) == 2 && arg[1] == short_name[0]) {
+      if (ri + 1 < cl->argc && !cmdline_is_longopt(cl->argv[ri + 1]) && !cmdline_is_shortopt(cl->argv[ri + 1])) {
+        value = cl->argv[++ri];
+      } else {
+        warn("option '-%s' expects a value.", short_name);
+      }
+      continue;
+    }
+
+    cl->argv[wi++] = cl->argv[ri];
+  }
+
+  cl->argc = wi;
+  return value;
+}
+
 static int run_cmd_cfg(cmd_ctx* cmdctx) {
   cmdline* cl = cmdctx->cl;
   enum {
@@ -258,13 +308,13 @@ static int run_cmd_toolchain(cmd_ctx* cmdctx) {
   };
 
   cmdopt opts[] = {
-      [MINIMAL] = {"m", "minimal"},
-      [TOOLS] = {NULL, "tools"},
-      [SDKS] = {NULL, "sdks"},
-      [TYPE] = {NULL, "type"},
-      [TOOL] = {NULL, "tool"},
-      [SDK] = {NULL, "sdk"},
-      [PATHS_ONLY] = {NULL, "paths-only"},
+      [MINIMAL] = { "m",       "minimal"},
+      [TOOLS] = {NULL,         "tools"},
+      [SDKS] = {NULL,          "sdks"},
+      [TYPE] = {NULL,          "type"},
+      [TOOL] = {NULL,          "tool"},
+      [SDK] = {NULL,           "sdk"},
+      [PATHS_ONLY] = {NULL,    "paths-only"},
       [VERSIONS_ONLY] = {NULL, "versions-only"},
   };
 
@@ -308,16 +358,120 @@ static int run_cmd_toolchain(cmd_ctx* cmdctx) {
   return 0;
 }
 
+static int clean_one_file(const char* label, const char* path, cmd c, char err_idx) {
+  if (!file_exists(path)) {
+    print("%s is not present. Nothing to clean.", label);
+    return 0;
+  }
+
+  if (!file_delete(path)) {
+    error("Failed to delete %s: %s", label, path);
+    return error_code(c, err_idx);
+  }
+
+  print("Deleted %s: %s", label, path);
+  return 0;
+}
+
 static int run_cmd_clean(cmd_ctx* cmdctx) {
-  return 0;  // TODO:
+  cmdline* cl = cmdctx->cl;
+  const char* scope = cmdline_consume_param(cl);
+  cmdline_validate(cl);
+
+  if (!scope || !scope[0]) {
+    if (!project_cleanup()) {
+      return error_code(CMD_CLEAN, 5);
+    }
+    return 0;
+  }
+
+  if (_strcmpi(scope, "project") == 0)
+    return clean_one_file("project config", cmdctx->project, CMD_CLEAN, 0);
+  if (_strcmpi(scope, "user") == 0)
+    return clean_one_file("user config", cmdctx->user, CMD_CLEAN, 2);
+  if (_strcmpi(scope, "local") == 0)
+    return clean_one_file("local config", cmdctx->local, CMD_CLEAN, 1);
+  if (_strcmpi(scope, "toolchain") == 0)
+    return clean_one_file("toolchain config", cmdctx->toolchain, CMD_CLEAN, 3);
+
+  error("Unknown clean target '%s'.", scope);
+  print("Use 'project', 'user', 'local', or 'toolchain'.");
+  return error_code(CMD_CLEAN, 4);
+}
+
+static int run_cmd_update(cmd_ctx* cmdctx) {
+  const char* config = cmdline_extract_option_value(cmdctx->cl, "c", "config");
+
+  enum {
+    INFO = 0,
+  };
+
+  cmdopt opts[] = {
+      [INFO] = {"i", "info"},
+  };
+
+  cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
+  cmdline_validate(cmdctx->cl);
+
+  if (opts[INFO].present) {
+    project proj = {0};
+    if (!project_load_config(config, &proj))
+      return error_code(CMD_UPDATE, 1);
+    project_print(&proj);
+  }
+
+   if (!project_update()) {
+    return error_code(CMD_UPDATE, 0);
+  }
+
+  return 0;
 }
 
 static int run_cmd_build(cmd_ctx* cmdctx) {
-  return 0;  // TODO:
+  const char* target = cmdline_extract_option_value(cmdctx->cl, "t", "target");
+  const char* platform = cmdline_extract_option_value(cmdctx->cl, "p", "platform");
+  const char* config = cmdline_extract_option_value(cmdctx->cl, "c", "config");
+
+  enum {
+    TARGET = 0,
+    PLATFORM,
+  };
+
+  cmdopt opts[] = {
+      [TARGET] = {"t", "target"},
+      [PLATFORM] = {"p", "platform"},
+  };
+
+  cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
+  cmdline_validate(cmdctx->cl);
+
+  if (!project_build(target, platform, config))
+    return error_code(CMD_BUILD, 0);
+
+  return 0;
 }
 
 static int run_cmd_run(cmd_ctx* cmdctx) {
-  return 0;  // TODO:
+  const char* target = cmdline_extract_option_value(cmdctx->cl, "t", "target");
+  const char* platform = cmdline_extract_option_value(cmdctx->cl, "p", "platform");
+  const char* config = cmdline_extract_option_value(cmdctx->cl, "c", "config");
+
+  enum {
+    TARGET = 0,
+    PLATFORM,
+  };
+
+  cmdopt opts[] = {
+      [TARGET] = {"t", "target"},
+      [PLATFORM] = {"p", "platform"},
+  };
+
+  cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
+
+  if (!project_run(target, platform, config))
+    return error_code(CMD_RUN, 0);
+
+  return 0;
 }
 
 static bool text_contains_ci(const char* text, const char* needle) {
@@ -697,9 +851,6 @@ static int run_cmd_info(cmd_ctx* cmdctx) {
     return error_code(CMD_INFO, 0);
   }
 
-  if (_strcmpi(scope, "toolchain") == 0)
-    return run_cmd_toolchain(cmdctx);
-
   const char* positional_attr = cmdline_consume_param(cl);
   enum {
     ATTR = 0,
@@ -709,9 +860,9 @@ static int run_cmd_info(cmd_ctx* cmdctx) {
   };
 
   cmdopt opts[] = {
-      [ATTR] = {NULL, "attr"},
-      [FILTER] = {NULL, "filter"},
-      [MINIMAL] = {"m", "minimal"},
+      [ATTR] = {NULL,        "attr"},
+      [FILTER] = {NULL,      "filter"},
+      [MINIMAL] = { "m",     "minimal"},
       [VALUES_ONLY] = {NULL, "values-only"},
   };
 
@@ -732,6 +883,8 @@ static int run_cmd_info(cmd_ctx* cmdctx) {
     return run_cmd_info_file("User File Attributes", cmdctx->user, attr_filter, text_filter, mode);
   if (_strcmpi(scope, "local") == 0)
     return run_cmd_info_file("Local File Attributes", cmdctx->local, attr_filter, text_filter, mode);
+  if (_strcmpi(scope, "toolchain") == 0)
+    return run_cmd_info_file("Toolchain File Attributes", cmdctx->toolchain, attr_filter, text_filter, mode);
 
   error("Unknown info topic '%s'.", scope);
   print("Use 'project', 'user', 'local', or 'toolchain'.");
@@ -739,11 +892,52 @@ static int run_cmd_info(cmd_ctx* cmdctx) {
 }
 
 static int run_cmd_dist(cmd_ctx* cmdctx) {
-  return 0;  // TODO:
+  const char* target = cmdline_extract_option_value(cmdctx->cl, "t", "target");
+  const char* platform = cmdline_extract_option_value(cmdctx->cl, "p", "platform");
+  const char* config = cmdline_extract_option_value(cmdctx->cl, "c", "config");
+
+  enum {
+    TARGET = 0,
+    PLATFORM,
+  };
+
+  cmdopt opts[] = {
+      [TARGET] = {"t", "target"},
+      [PLATFORM] = {"p", "platform"},
+  };
+
+  cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
+  cmdline_validate(cmdctx->cl);
+
+  if (!project_dist(target, platform, config))
+    return error_code(CMD_DIST, 0);
+
+  return 0;
 }
 
 static int run_cmd_test(cmd_ctx* cmdctx) {
-  return 0;  // TODO:
+  const char* target = cmdline_extract_option_value(cmdctx->cl, "t", "target");
+  const char* platform = cmdline_extract_option_value(cmdctx->cl, "p", "platform");
+  const char* config = cmdline_extract_option_value(cmdctx->cl, "c", "config");
+
+  enum {
+    TARGET = 0,
+    PLATFORM,
+  };
+
+  cmdopt opts[] = {
+      [TARGET] = {"t", "target"},
+      [PLATFORM] = {"p", "platform"},
+  };
+
+  cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
+  const char* test_name = cmdline_consume_param(cmdctx->cl);
+  cmdline_validate(cmdctx->cl);
+
+  if (!project_test(test_name, target, platform, config))
+    return error_code(CMD_TEST, 0);
+
+  return 0;
 }
 
 static bool bumpver_match_project_id(node* project, const char* project_id) {
@@ -911,16 +1105,14 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
   return 0;
 }
 
-static int run_cmd_update(cmd_ctx* cmdctx) {
-  return 0;  // TODO:
-}
-
 static int run_cmd(cmd c, cmd_ctx* cmdctx) {
   switch (c) {
     case CMD_CFG:
       return run_cmd_cfg(cmdctx);
     case CMD_CLEAN:
       return run_cmd_clean(cmdctx);
+    case CMD_UPDATE:
+      return run_cmd_update(cmdctx);
     case CMD_BUILD:
       return run_cmd_build(cmdctx);
     case CMD_RUN:
@@ -933,8 +1125,6 @@ static int run_cmd(cmd c, cmd_ctx* cmdctx) {
       return run_cmd_test(cmdctx);
     case CMD_BUMPVER:
       return run_cmd_bumpver(cmdctx);
-    case CMD_UPDATE:
-      return run_cmd_update(cmdctx);
     case CMD_TOOLCHAIN:
       return run_cmd_toolchain(cmdctx);
     default: {

@@ -3,6 +3,11 @@
 #include "bbs.h"
 #include "bbs_base.c"
 
+#if !defined(_WIN32)
+#  include <errno.h>
+#  include <sys/wait.h>
+#endif
+
 static bool toolchain_tool_exists(toolchain* tc, tool_type type, const char* path);
 static const char* toolchain_probe_version(const char* exe_path, const char* arg_a, const char* arg_b, const char* pat_a, const char* pat_b);
 static const char* toolchain_first_path_match(const char* pattern);
@@ -21,13 +26,30 @@ static arch toolchain_arch_from_text(const char* text);
 static void toolchain_set_tool(tool* out, const char* id, tool_type type, const char* path, const char* version);
 static int toolchain_tool_cmp(const tool* a, const tool* b);
 static int toolchain_sdk_cmp(const sdk* a, const sdk* b);
+static void toolchain_sort_tools(toolchain* tc);
+static void toolchain_sort_sdks(toolchain* tc);
 static int toolchain_env_find_index(toolchain* tc, const char* id);
 static const char* toolchain_make_env_id(const char* provider, const char* name, os target_os, arch target_arch);
 static toolchain_env* toolchain_host_env(toolchain* tc, bool ensure);
 static void toolchain_sort_tool_array(tool* items, int count);
 static void toolchain_sort_sdk_array(sdk* items, int count);
+static bool toolchain_ensure_env_capacity(toolchain* tc, int min_cap);
+static bool toolchain_env_ensure_tool_capacity(toolchain_env* env, int min_cap);
+static bool toolchain_env_ensure_sdk_capacity(toolchain_env* env, int min_cap);
+static void toolchain_snapshot_current_host_env(toolchain* tc);
 static void toolchain_discover_extra_envs(toolchain* tc);
 static void toolchain_enable_docker_buildx_linux_support(toolchain* tc);
+static void toolchain_refresh_runtime_support(toolchain* tc);
+static void toolchain_discover_tool(toolchain* tc, const tool_discover_strat* s);
+static const tool_discover_strat* toolchain_find_discover_strat(const char* id);
+static const char* toolchain_ensure_host_tool_path(toolchain* tc, const char* id);
+static bool toolchain_is_usable_host_bash_path(const char* path);
+#if defined(_WIN32)
+static char* toolchain_quote_windows_arg(const char* arg);
+static int toolchain_run_bash_windows(const char* bash_path, const char* workdir, const char* script);
+#else
+static int toolchain_run_bash_posix(const char* bash_path, const char* workdir, const char* script);
+#endif
 
 static arch toolchain_detect_host_arch(void) {
 #if defined(_M_ARM64) || defined(__aarch64__)
@@ -82,11 +104,71 @@ static const char* toolchain_get_tool_path(toolchain* tc, const char* id) {
     return NULL;
 
   for (int i = 0; i < env->tool_c; ++i) {
-    if (env->tools[i].id && _stricmp(env->tools[i].id, id) == 0)
+    if (env->tools[i].id && _stricmp(env->tools[i].id, id) == 0) {
+      if (_stricmp(id, "bash") == 0 && !toolchain_is_usable_host_bash_path(env->tools[i].path))
+        continue;
       return env->tools[i].path;
+    }
   }
 
   return NULL;
+}
+
+static const tool_discover_strat* toolchain_find_discover_strat(const char* id) {
+  if (!id || !id[0])
+    return NULL;
+
+  for (size_t i = 0; i < _countof(TOOL_DISCOVER_STRATS); ++i) {
+    if (TOOL_DISCOVER_STRATS[i].id && _stricmp(TOOL_DISCOVER_STRATS[i].id, id) == 0)
+      return &TOOL_DISCOVER_STRATS[i];
+  }
+
+  return NULL;
+}
+
+static const char* toolchain_ensure_host_tool_path(toolchain* tc, const char* id) {
+  const char* path = toolchain_get_tool_path(tc, id);
+  if (path && path[0])
+    return path;
+
+  const tool_discover_strat* strat = toolchain_find_discover_strat(id);
+  if (!strat)
+    return NULL;
+
+  toolchain_discover_tool(tc, strat);
+  toolchain_sort_tools(tc);
+  toolchain_snapshot_current_host_env(tc);
+  toolchain_refresh_runtime_support(tc);
+  return toolchain_get_tool_path(tc, id);
+}
+
+static const char* toolchain_get_host_tool_path(toolchain* tc, const char* id) {
+  return toolchain_ensure_host_tool_path(tc, id);
+}
+
+static const char* toolchain_get_bash_path(toolchain* tc) {
+  return toolchain_get_host_tool_path(tc, "bash");
+}
+
+static bool toolchain_is_usable_host_bash_path(const char* path) {
+  if (!path || !path[0])
+    return false;
+
+#if defined(_WIN32)
+  const char* norm = toolchain_norm_path(path);
+  if (norm) {
+    if (_stricmp(norm, "C:/Windows/System32/bash.exe") == 0)
+      return false;
+
+    const char* suffix = "/microsoft/windowsapps/bash.exe";
+    size_t suffix_len = strlen(suffix);
+    size_t norm_len = strlen(norm);
+    if (norm_len >= suffix_len && _stricmp(norm + norm_len - suffix_len, suffix) == 0)
+      return false;
+  }
+#endif
+
+  return true;
 }
 
 static void toolchain_set_platform_support_source(toolchain* tc, os target_os, arch target_arch, const char* source) {
@@ -117,7 +199,7 @@ static toolchain_env* toolchain_host_env(toolchain* tc, bool ensure) {
   int idx = toolchain_env_find_index(tc, toolchain_make_env_id("host", "current", tc->p_os, tc->p_arch));
   if (idx >= 0)
     return &tc->envs[idx];
-  if (!ensure || tc->env_c >= TOOLCHAIN_ENV_ARRAY_DIM)
+  if (!ensure || !toolchain_ensure_env_capacity(tc, tc->env_c + 1))
     return NULL;
 
   toolchain_env* env = &tc->envs[tc->env_c++];
@@ -128,6 +210,69 @@ static toolchain_env* toolchain_host_env(toolchain* tc, bool ensure) {
   env->p_arch = tc->p_arch;
   env->id = toolchain_make_env_id(env->provider, env->name, env->p_os, env->p_arch);
   return env;
+}
+
+static bool toolchain_ensure_env_capacity(toolchain* tc, int min_cap) {
+  if (!tc || min_cap <= 0)
+    return false;
+  if (tc->env_cap >= min_cap)
+    return true;
+
+  int new_cap = tc->env_cap > 0 ? tc->env_cap : 8;
+  while (new_cap < min_cap)
+    new_cap *= 2;
+
+  toolchain_env* items = push((size_t)new_cap * sizeof(*items));
+  if (!items)
+    return false;
+
+  if (tc->envs && tc->env_c > 0)
+    memcpy(items, tc->envs, (size_t)tc->env_c * sizeof(*items));
+  tc->envs = items;
+  tc->env_cap = new_cap;
+  return true;
+}
+
+static bool toolchain_env_ensure_tool_capacity(toolchain_env* env, int min_cap) {
+  if (!env || min_cap <= 0)
+    return false;
+  if (env->tool_cap >= min_cap)
+    return true;
+
+  int new_cap = env->tool_cap > 0 ? env->tool_cap : 16;
+  while (new_cap < min_cap)
+    new_cap *= 2;
+
+  tool* items = push((size_t)new_cap * sizeof(*items));
+  if (!items)
+    return false;
+
+  if (env->tools && env->tool_c > 0)
+    memcpy(items, env->tools, (size_t)env->tool_c * sizeof(*items));
+  env->tools = items;
+  env->tool_cap = new_cap;
+  return true;
+}
+
+static bool toolchain_env_ensure_sdk_capacity(toolchain_env* env, int min_cap) {
+  if (!env || min_cap <= 0)
+    return false;
+  if (env->sdk_cap >= min_cap)
+    return true;
+
+  int new_cap = env->sdk_cap > 0 ? env->sdk_cap : 16;
+  while (new_cap < min_cap)
+    new_cap *= 2;
+
+  sdk* items = push((size_t)new_cap * sizeof(*items));
+  if (!items)
+    return false;
+
+  if (env->sdks && env->sdk_c > 0)
+    memcpy(items, env->sdks, (size_t)env->sdk_c * sizeof(*items));
+  env->sdks = items;
+  env->sdk_cap = new_cap;
+  return true;
 }
 
 static int toolchain_env_find_index(toolchain* tc, const char* id) {
@@ -234,7 +379,7 @@ static void toolchain_add_or_replace_env(toolchain* tc, const toolchain_env* src
     return;
   }
 
-  if (tc->env_c >= TOOLCHAIN_ENV_ARRAY_DIM)
+  if (!toolchain_ensure_env_capacity(tc, tc->env_c + 1))
     return;
   tc->envs[tc->env_c++] = *src;
 }
@@ -503,7 +648,7 @@ static void toolchain_discover_wsl_env(toolchain* tc, const char* distro) {
       continue;
     if (_stricmp(s->id, "wsl") == 0 || _stricmp(s->id, "vcvarsall") == 0 || _stricmp(s->id, "docker") == 0)
       continue;
-    if (env.tool_c >= TOOL_ENV_TOOL_ARRAY_DIM)
+    if (!toolchain_env_ensure_tool_capacity(&env, env.tool_c + 1))
       break;
 
     const char* path_lines[4] = {0};
@@ -892,7 +1037,7 @@ static void toolchain_upsert_tool(toolchain* tc, const char* id, tool_type type,
     return;
   }
 
-  if (env->tool_c >= TOOL_ENV_TOOL_ARRAY_DIM)
+  if (!toolchain_env_ensure_tool_capacity(env, env->tool_c + 1))
     return;
 
   toolchain_set_tool(&env->tools[env->tool_c++], id, type, path, version);
@@ -1238,6 +1383,151 @@ static int toolchain_collect_with_system(const char* name, const char** matches,
   return out;
 }
 
+#if defined(_WIN32)
+static char* toolchain_quote_windows_arg(const char* arg) {
+  const char* src = arg ? arg : "";
+  size_t len = strlen(src);
+  size_t max_len = len * 2 + 3;
+  char* out = push(max_len);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  out[wi++] = '"';
+  size_t backslashes = 0;
+  for (size_t i = 0; i < len; ++i) {
+    char ch = src[i];
+    if (ch == '\\') {
+      ++backslashes;
+      continue;
+    }
+
+    if (ch == '"') {
+      while (backslashes > 0) {
+        out[wi++] = '\\';
+        --backslashes;
+      }
+      out[wi++] = '\\';
+      out[wi++] = '"';
+      backslashes = 0;
+      continue;
+    }
+
+    while (backslashes > 0) {
+      out[wi++] = '\\';
+      --backslashes;
+    }
+    backslashes = 0;
+    out[wi++] = ch;
+  }
+
+  while (backslashes > 0) {
+    out[wi++] = '\\';
+    out[wi++] = '\\';
+    --backslashes;
+  }
+
+  out[wi++] = '"';
+  out[wi] = '\0';
+  return out;
+}
+
+static int toolchain_run_bash_windows(const char* bash_path, const char* workdir, const char* script) {
+  if (!bash_path || !bash_path[0] || !script || !script[0])
+    return -1;
+
+  char* quoted_exe = toolchain_quote_windows_arg(bash_path);
+  char* quoted_script = toolchain_quote_windows_arg(script);
+  if (!quoted_exe || !quoted_script)
+    return -1;
+
+  size_t cmd_len = strlen(quoted_exe) + strlen(" -lc ") + strlen(quoted_script) + 1;
+  char* cmdline = push(cmd_len);
+  if (!cmdline)
+    return -1;
+  snprintf(cmdline, cmd_len, "%s -lc %s", quoted_exe, quoted_script);
+
+  STARTUPINFOA si;
+  PROCESS_INFORMATION pi;
+  memset(&si, 0, sizeof(si));
+  memset(&pi, 0, sizeof(pi));
+  si.cb = sizeof(si);
+
+  BOOL ok = CreateProcessA(bash_path,
+                           cmdline,
+                           NULL,
+                           NULL,
+                           TRUE,
+                           0,
+                           NULL,
+                           workdir && workdir[0] ? workdir : NULL,
+                           &si,
+                           &pi);
+  if (!ok)
+    return -(int)GetLastError();
+
+  WaitForSingleObject(pi.hProcess, INFINITE);
+  DWORD exit_code = 0;
+  if (!GetExitCodeProcess(pi.hProcess, &exit_code))
+    exit_code = 1;
+
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return (int)exit_code;
+}
+#else
+static int toolchain_run_bash_posix(const char* bash_path, const char* workdir, const char* script) {
+  if (!bash_path || !bash_path[0] || !script || !script[0])
+    return -1;
+
+  pid_t pid = fork();
+  if (pid < 0)
+    return -errno;
+
+  if (pid == 0) {
+    if (workdir && workdir[0] && chdir(workdir) != 0)
+      _exit(126);
+    execl(bash_path, bash_path, "-lc", script, (char*)NULL);
+    _exit(errno == ENOENT ? 127 : 126);
+  }
+
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno != EINTR)
+      return -errno;
+  }
+
+  if (WIFEXITED(status))
+    return WEXITSTATUS(status);
+  if (WIFSIGNALED(status))
+    return 128 + WTERMSIG(status);
+  return 1;
+}
+#endif
+
+static int toolchain_run_bash(toolchain* tc, const char* workdir, const char* script) {
+  if (!tc) {
+    error("Cannot run shell command without an initialized toolchain.");
+    return -1;
+  }
+  if (!script || !script[0]) {
+    error("Cannot run an empty bash command.");
+    return -1;
+  }
+
+  const char* bash_path = toolchain_get_bash_path(tc);
+  if (!bash_path || !bash_path[0]) {
+    error("Unable to find 'bash' in the current toolchain. Install Git Bash, MSYS2, or another Bash-compatible shell and regenerate the toolchain if needed.");
+    return -1;
+  }
+
+#if defined(_WIN32)
+  return toolchain_run_bash_windows(bash_path, workdir, script);
+#else
+  return toolchain_run_bash_posix(bash_path, workdir, script);
+#endif
+}
+
 static const char* toolchain_join2(const char* a, const char* b) {
   if (!a || !a[0])
     return b ? arena_text(b, strlen(b)) : NULL;
@@ -1551,7 +1841,7 @@ static bool toolchain_tool_exists(toolchain* tc, tool_type type, const char* pat
 
 static void toolchain_discover_tool(toolchain* tc, const tool_discover_strat* s) {
   toolchain_env* env = toolchain_host_env(tc, true);
-  if (!tc || !s || !env || env->tool_c >= TOOL_ENV_TOOL_ARRAY_DIM)
+  if (!tc || !s || !env)
     return;
 
   if (!toolchain_host_matches_os(s->target_os))
@@ -1595,8 +1885,10 @@ static void toolchain_discover_tool(toolchain* tc, const tool_discover_strat* s)
       toolchain_push_unique_path(matches, &match_c, _countof(matches), found[i]);
   }
 
-  for (int i = 0; i < match_c && env->tool_c < TOOL_ENV_TOOL_ARRAY_DIM; ++i) {
+  for (int i = 0; i < match_c; ++i) {
     const char* path = toolchain_norm_path(matches[i]);
+    if (_stricmp(s->id, "bash") == 0 && !toolchain_is_usable_host_bash_path(path))
+      continue;
     if (toolchain_tool_exists(tc, s->type, path))
       continue;
 
@@ -1899,7 +2191,7 @@ static const char* toolchain_probe_sdk_version(const char* base, const char* rel
 
 static void toolchain_discover_sdk(toolchain* tc, const sdk_discover_strat* s) {
   toolchain_env* env = toolchain_host_env(tc, true);
-  if (!tc || !s || !env || env->sdk_c >= TOOL_ENV_SDK_ARRAY_DIM)
+  if (!tc || !s || !env)
     return;
 
   if (!toolchain_host_matches_os(s->target_os))
@@ -1937,6 +2229,9 @@ static void toolchain_discover_sdk(toolchain* tc, const sdk_discover_strat* s) {
   }
 
   if (!best_base)
+    return;
+
+  if (!toolchain_env_ensure_sdk_capacity(env, env->sdk_c + 1))
     return;
 
   sdk* out = &env->sdks[env->sdk_c++];
@@ -2199,7 +2494,10 @@ static toolchain* toolchain_read(node* tree) {
   if (tools_n) {
     toolchain_env* host = toolchain_host_env(tc, true);
     node_foreach(tools_n, it) {
-      if (!host || host->tool_c >= TOOL_ENV_TOOL_ARRAY_DIM)
+      if (!host)
+        break;
+
+      if (!toolchain_env_ensure_tool_capacity(host, host->tool_c + 1))
         break;
 
       node* id_n = node_get_child(it, "id");
@@ -2219,7 +2517,10 @@ static toolchain* toolchain_read(node* tree) {
   if (sdks_n) {
     toolchain_env* host = toolchain_host_env(tc, true);
     node_foreach(sdks_n, it) {
-      if (!host || host->sdk_c >= TOOL_ENV_SDK_ARRAY_DIM)
+      if (!host)
+        break;
+
+      if (!toolchain_env_ensure_sdk_capacity(host, host->sdk_c + 1))
         break;
 
       sdk* s = &host->sdks[host->sdk_c++];
@@ -2244,7 +2545,7 @@ static toolchain* toolchain_read(node* tree) {
   node* envs_n = node_get_child(tree, "environments");
   if (envs_n) {
     node_foreach(envs_n, it) {
-      if (tc->env_c >= TOOLCHAIN_ENV_ARRAY_DIM)
+      if (!toolchain_ensure_env_capacity(tc, tc->env_c + 1))
         break;
 
       toolchain_env* env = &tc->envs[tc->env_c++];
@@ -2304,7 +2605,7 @@ static toolchain* toolchain_read(node* tree) {
       node* env_tools_n = node_get_child(it, "tools");
       if (env_tools_n) {
         node_foreach(env_tools_n, jt) {
-          if (env->tool_c >= TOOL_ENV_TOOL_ARRAY_DIM)
+          if (!toolchain_env_ensure_tool_capacity(env, env->tool_c + 1))
             break;
           node* env_id_n = node_get_child(jt, "id");
           node* type_n = node_get_child(jt, "type");
@@ -2321,7 +2622,7 @@ static toolchain* toolchain_read(node* tree) {
       node* env_sdks_n = node_get_child(it, "sdks");
       if (env_sdks_n) {
         node_foreach(env_sdks_n, jt) {
-          if (env->sdk_c >= TOOL_ENV_SDK_ARRAY_DIM)
+          if (!toolchain_env_ensure_sdk_capacity(env, env->sdk_c + 1))
             break;
           sdk* s = &env->sdks[env->sdk_c++];
           node* n_name = node_get_child(jt, "name");

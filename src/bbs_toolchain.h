@@ -122,13 +122,13 @@ typedef struct {
   bool supported[OS_MAX][ARCH_MAX];
   const char* support_source[OS_MAX][ARCH_MAX];
 
-#define TOOL_ENV_TOOL_ARRAY_DIM 256
-  tool tools[TOOL_ENV_TOOL_ARRAY_DIM];
+  tool* tools;
   int tool_c;
+  int tool_cap;
 
-#define TOOL_ENV_SDK_ARRAY_DIM 256
-  sdk sdks[TOOL_ENV_SDK_ARRAY_DIM];
+  sdk* sdks;
   int sdk_c;
+  int sdk_cap;
 } toolchain_env;
 
 typedef struct {
@@ -138,10 +138,14 @@ typedef struct {
   bool supported[OS_MAX][ARCH_MAX];
   const char* support_source[OS_MAX][ARCH_MAX];
 
-#define TOOLCHAIN_ENV_ARRAY_DIM 64
-  toolchain_env envs[TOOLCHAIN_ENV_ARRAY_DIM];
+  toolchain_env* envs;
   int env_c;
+  int env_cap;
 } toolchain;
+
+static const char* toolchain_get_host_tool_path(toolchain* tc, const char* id);
+static const char* toolchain_get_bash_path(toolchain* tc);
+static int toolchain_run_bash(toolchain* tc, const char* workdir, const char* script);
 
 static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
     // BUILD_SYSTEM
@@ -312,6 +316,16 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .deep_roots = "{program_files};{local_app_data};/usr;/usr/local;/opt/homebrew",
      .version_arg = "--version",
      .version_regex = "Docker version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
+     },
+    {
+     .id = "bash",
+     .type = TOOL_TYPE_MISC,
+     .target_os = OS_MAX,
+     .exe_name = "bash",
+     .dir_hints = "{program_files}\\Git\\bin;{program_files}\\Git\\usr\\bin;{program_files_x86}\\Git\\bin;{program_files_x86}\\Git\\usr\\bin;{msys2_root}\\usr\\bin;C:\\msys64\\usr\\bin;C:\\Program Files\\Git\\bin;C:\\Program Files\\Git\\usr\\bin;/bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
+     .deep_roots = "{program_files};{program_files_x86};{msys2_root};/usr;/usr/local;/opt/homebrew",
+     .version_arg = "--version",
+     .version_regex = "version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
      },
     {
      .id = "wsl",
