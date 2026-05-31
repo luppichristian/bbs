@@ -229,7 +229,7 @@ static bool project_set_config_list(project* proj, const char** configs, int con
     return false;
 
   int add_default = 0;
-  if (!configs || config_c <= 0 || !project_has_config_name(&(project){.configs = configs, .config_c = config_c}, "default"))
+  if (!configs || config_c <= 0 || !project_has_config_name(&(project) {.configs = configs, .config_c = config_c}, "default"))
     add_default = 1;
 
   int total = config_c > 0 ? config_c + add_default : 1;
@@ -373,6 +373,7 @@ static void project_set_default_target(target* out, target_type type) {
   out->opt_level = OPT_LEVEL_DEFAULT;
   out->warnings_as_errors = false;
   out->stack_size = 0;
+  out->testing = type == TARGET_TYPE_TEST;
 }
 
 static bool project_ensure_target_capacity(project* proj, int min_cap) {
@@ -655,6 +656,19 @@ static bool project_apply_target_attrs(node* scope, target* out, const char* tar
   if (text)
     out->stdver = text;
 
+  value_n = node_get_child(scope, "test_args");
+  if (value_n && !project_parse_string_list(value_n, &out->test_args, &out->test_arg_c))
+    return false;
+
+  value_n = node_get_child(scope, "testing");
+  if (value_n) {
+    if (value_n->type != NODE_TYPE_BOL) {
+      error("Attribute 'testing' must be a boolean.");
+      return false;
+    }
+    out->testing = node_get_bool(value_n);
+  }
+
   value_n = node_get_child(scope, "post_build_cmds");
   if (value_n && !project_parse_string_list(value_n, &out->post_build_cmds, &out->post_build_cmd_c))
     return false;
@@ -801,6 +815,16 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
     out->stdver = text;
     return true;
   }
+  if (_stricmp(attr_n->name, "testing") == 0) {
+    if (attr_n->type != NODE_TYPE_BOL) {
+      error("Attribute 'testing' must be a boolean.");
+      return false;
+    }
+    out->testing = node_get_bool(attr_n);
+    return true;
+  }
+  if (_stricmp(attr_n->name, "test_args") == 0)
+    return project_parse_string_list(attr_n, &out->test_args, &out->test_arg_c);
   if (_stricmp(attr_n->name, "post_build_cmds") == 0)
     return project_parse_string_list(attr_n, &out->post_build_cmds, &out->post_build_cmd_c);
   if (_stricmp(attr_n->name, "pre_build_cmds") == 0)
@@ -1153,6 +1177,7 @@ static void project_print(const project* proj) {
     print("Optimization: %s", project_opt_level_name(tgt->opt_level));
     print("Warnings As Errors: %s", tgt->warnings_as_errors ? "true" : "false");
     print("Stack Size: %zu", tgt->stack_size);
+    print("Testing: %s", tgt->testing ? "true" : "false");
     if (tgt->stdver)
       print("Std Version: %s", tgt->stdver);
     if (tgt->defines)
@@ -1169,6 +1194,7 @@ static void project_print(const project* proj) {
     project_print_list("Post Build Cmds", tgt->post_build_cmds, tgt->post_build_cmd_c);
     project_print_list("Pre Run Cmds", tgt->pre_run_cmds, tgt->pre_run_cmd_c);
     project_print_list("Post Run Cmds", tgt->post_run_cmds, tgt->post_run_cmd_c);
+    project_print_list("Test Args", tgt->test_args, tgt->test_arg_c);
     project_print_list("Pre Dist Cmds", tgt->pre_dist_cmds, tgt->pre_dist_cmd_c);
     project_print_list("Post Dist Cmds", tgt->post_dist_cmds, tgt->post_dist_cmd_c);
   }
@@ -1293,7 +1319,71 @@ static bool project_target_is_runnable(const target* tgt) {
 }
 
 static bool project_target_is_test(const target* tgt) {
-  return tgt && tgt->type == TARGET_TYPE_TEST;
+  return tgt && tgt->testing;
+}
+
+static const char* project_host_os_name(void) {
+#if defined(_WIN32)
+  return "windows";
+#elif defined(__APPLE__)
+  return "macos";
+#else
+  return "linux";
+#endif
+}
+
+static const char* project_host_arch_name(void) {
+#if defined(_M_ARM64) || defined(__aarch64__)
+  return "arm64";
+#elif defined(_M_IX86) || defined(__i386__)
+  return "x86";
+#else
+  return "x86_64";
+#endif
+}
+
+static const char* project_resolved_dir(const char* root, const char* config, const char* platform) {
+  char buf[_MAX_PATH * 2] = {0};
+  const char* cfg = config && config[0] ? config : "default";
+  const char* suffix = platform && platform[0] ? platform : NULL;
+
+  if (suffix)
+    snprintf(buf, sizeof(buf), "%s/%s-%s", root, cfg, suffix);
+  else
+    snprintf(buf, sizeof(buf), "%s/%s-%s-%s", root, cfg, project_host_os_name(), project_host_arch_name());
+
+  return arena_text(buf, strlen(buf));
+}
+
+static const char* project_join_args(const char** items, int count) {
+  if (!items || count <= 0)
+    return NULL;
+
+  size_t total = 0;
+  for (int i = 0; i < count; ++i) {
+    if (!items[i])
+      continue;
+    total += strlen(items[i]) + 1;
+  }
+  if (total == 0)
+    return NULL;
+
+  char* out = push(total + 1);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  for (int i = 0; i < count; ++i) {
+    if (!items[i])
+      continue;
+    if (wi > 0)
+      out[wi++] = ' ';
+    size_t len = strlen(items[i]);
+    memcpy(out + wi, items[i], len);
+    wi += len;
+  }
+  out[wi] = '\0';
+  return out;
 }
 
 static int project_find_target_index(const project* proj, const char* name) {
@@ -1382,12 +1472,14 @@ static void project_print_target_line(const char* action, const target* tgt) {
   print("%s target: %s (%s)", action, tgt->meta.id ? tgt->meta.id : "", project_target_type_name(tgt->type));
 }
 
-static bool project_build(const char* target_name, const char* platform, const char* config) {
+static bool project_build(const char* target_name, const char* platform, const char* config, toolchain* tc) {
+  (void)tc;
   project proj = {0};
   if (!project_load_config(config, &proj))
     return false;
 
   project_print_action_header("Build", &proj, platform);
+  print("Build dir: %s", project_resolved_dir(BUILD_DIR, proj.active_config, platform));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
@@ -1407,7 +1499,8 @@ static bool project_build(const char* target_name, const char* platform, const c
   return true;
 }
 
-static bool project_run(const char* target_name, const char* platform, const char* config) {
+static bool project_run(const char* target_name, const char* platform, const char* config, toolchain* tc) {
+  (void)tc;
   project proj = {0};
   if (!project_load_config(config, &proj))
     return false;
@@ -1439,12 +1532,26 @@ static bool project_run(const char* target_name, const char* platform, const cha
   return true;
 }
 
-static bool project_test(const char* test_name, const char* target_name, const char* platform, const char* config) {
+static bool project_test(const char* test_name, const char* target_name, const char* platform, const char* config, toolchain* tc) {
   project proj = {0};
   if (!project_load_config(config, &proj))
     return false;
+  if (!tc) {
+    error("Toolchain is not initialized.");
+    print("Run 'bbs toolchain init' first.");
+    return false;
+  }
+
+  const char* ctest = toolchain_get_host_tool_path(tc, "ctest");
+  if (!ctest || !ctest[0]) {
+    error("ctest was not found in the current toolchain.");
+    return false;
+  }
 
   project_print_action_header("Test", &proj, platform);
+  const char* build_dir = project_resolved_dir(BUILD_DIR, proj.active_config, platform);
+  print("Test dir: %s", build_dir);
+  print("Test runner: %s", ctest);
   if (test_name && test_name[0])
     print("Test name: %s", test_name);
 
@@ -1457,7 +1564,17 @@ static bool project_test(const char* test_name, const char* target_name, const c
       return false;
     }
     project_print_target_line("Test", &proj.targets[idx]);
-    return true;
+    const char* extra_args = project_join_args(proj.targets[idx].test_args, proj.targets[idx].test_arg_c);
+    char script[4096] = {0};
+    if (test_name && test_name[0] && extra_args && extra_args[0])
+      snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" -R \"%s\" %s", ctest, build_dir, test_name, extra_args);
+    else if (test_name && test_name[0])
+      snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" -R \"%s\"", ctest, build_dir, test_name);
+    else if (extra_args && extra_args[0])
+      snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" %s", ctest, build_dir, extra_args);
+    else
+      snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\"", ctest, build_dir);
+    return toolchain_run_bash(tc, NULL, script) == 0;
   }
 
   int idx = project_find_single_test_target(&proj);
@@ -1471,15 +1588,27 @@ static bool project_test(const char* test_name, const char* target_name, const c
   }
 
   project_print_target_line("Test", &proj.targets[idx]);
-  return true;
+  const char* extra_args = project_join_args(proj.targets[idx].test_args, proj.targets[idx].test_arg_c);
+  char script[4096] = {0};
+  if (test_name && test_name[0] && extra_args && extra_args[0])
+    snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" -R \"%s\" %s", ctest, build_dir, test_name, extra_args);
+  else if (test_name && test_name[0])
+    snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" -R \"%s\"", ctest, build_dir, test_name);
+  else if (extra_args && extra_args[0])
+    snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" %s", ctest, build_dir, extra_args);
+  else
+    snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\"", ctest, build_dir);
+  return toolchain_run_bash(tc, NULL, script) == 0;
 }
 
-static bool project_dist(const char* target_name, const char* platform, const char* config) {
+static bool project_dist(const char* target_name, const char* platform, const char* config, toolchain* tc) {
+  (void)tc;
   project proj = {0};
   if (!project_load_config(config, &proj))
     return false;
 
   project_print_action_header("Dist", &proj, platform);
+  print("Dist dir: %s", project_resolved_dir(DIST_DIR, proj.active_config, platform));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
@@ -1523,16 +1652,6 @@ static bool project_update(void) {
       ok = false;
     } else {
       print("Created dist directory: %s", dist_dir);
-    }
-  }
-
-  const char* local_cfg = get_path_cwd("local.bbs");
-  if (!file_exists(local_cfg)) {
-    if (!write_entire_file(local_cfg, "local (\n)\n")) {
-      error("Failed to create local config: %s", local_cfg);
-      ok = false;
-    } else {
-      print("Created local config: %s", local_cfg);
     }
   }
 

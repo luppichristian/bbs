@@ -63,7 +63,6 @@ typedef enum {
   CMD_DIST,
   CMD_TEST,
   CMD_BUMPVER,
-  CMD_TOOLCHAIN,
   CMD_MAX,
 } cmd;
 
@@ -106,11 +105,13 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                       "If no argument is provided, bbs cleans both 'project' and 'local'."                                                    },
 
      [CMD_UPDATE] = {   .name = "update",
-                      .params = "[-i|--info] [-c config]",
+                      .params = "[-i|--info] [-c config] [--init-toolchain]",
                       .desc = "Set up derived project folders",
                       .detailed_desc = "Parse and validate the project configuration, then create the derived project directories used by bbs.\n"
                       "Use '-i' or '--info' to print the resolved parsed project state before updating.\n"
-                      "Use '-c' or '--config' to resolve the project using a specific named config for the info output."                },
+                      "Use '-c' or '--config' to resolve the project using a specific named config for the info output.\n"
+                      "If the toolchain file is missing, update generates it automatically.\n"
+                      "Use '--init-toolchain' to force regeneration instead of using the cached toolchain file."                     },
 
      [CMD_CFG] = {      .name = "cfg",
                       .params = "[-m] [-p] [-u] [-l] [-t]",
@@ -164,21 +165,9 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                       "If no config is provided, bbs resolves the project using the 'default' config."                                   },
 
     [CMD_BUMPVER] = {  .name = "bumpver",
-                     .params = "<major/minor/patch/user/all> [project_id]",
-                     .desc = "Increment the version of the project",
-                     .detailed_desc = "Increment the project version according to the requested part.\n"
-                     "Use major, minor, patch, or all depending on how versioning is defined for the project.\n"
-                     "Optional target and platform arguments limit the scope when version data is target-specific."                          },
-
-    [CMD_TOOLCHAIN] = {.name = "toolchain",
-                     .params = "[init|clean] [-m] [--tools] [--sdks] [--type=kind] [--tool=id] [--sdk=name] [--paths-only] [--versions-only]",
-                     .desc = "Show, initialize, or clean the toolchain",
-                     .detailed_desc = "Without arguments, display the contents of the toolchain file if it exists,\n"
-                     "or print a message indicating the toolchain is not setup.\n"
-                     "Use 'init' to create a default toolchain file next to the bbs executable.\n"
-                     "Use 'clean' to delete the toolchain file.\n"
-                     "Use '-m' or '--minimal' for compact output.\n"
-                     "Use '--tools' or '--sdks' to print only those sections.\n"
-                     "Use '--type=c_compiler', '--tool=clang', or '--sdk=msvc' to filter the output.\n"
-                     "Use '--paths-only' or '--versions-only' for single-field output."                                                      },
+                     .params = "<major/minor/patch/user/all> [-p project_id] [-t target_id]",
+                     .desc = "Increment a project or target version",
+                     .detailed_desc = "Increment the selected version according to the requested part.\n"
+                     "Use '-p' or '--project' to choose a specific project node when the file defines more than one.\n"
+                     "Use '-t' or '--target' to bump a target-local version instead of the top-level project version."                    },
 };

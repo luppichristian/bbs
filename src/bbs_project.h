@@ -1,5 +1,6 @@
 #pragma once
 #include "bbs_base.h"
+#include "bbs_toolchain.h"
 
 #define BUILD_DIR "build"
 #define DIST_DIR  "dist"
@@ -94,6 +95,9 @@ typedef struct {
   // Other language configs
   stdlib runtime;
   const char* stdver;
+  bool testing;
+  const char** test_args;
+  int test_arg_c;
 
   // In Bash so we are cross platform
   const char** post_build_cmds;
@@ -121,3 +125,15 @@ typedef struct {
   int target_c;
   int target_cap;
 } project;
+
+static bool project_load_file_config(const char* path, const char* config, project* out);
+static bool project_load_config(const char* config, project* out);
+static bool project_load_file(const char* path, project* out);
+static bool project_load(project* out);
+static void project_print(const project* proj);
+static bool project_build(const char* target_name, const char* platform, const char* config, toolchain* tc);
+static bool project_run(const char* target_name, const char* platform, const char* config, toolchain* tc);
+static bool project_test(const char* test_name, const char* target_name, const char* platform, const char* config, toolchain* tc);
+static bool project_dist(const char* target_name, const char* platform, const char* config, toolchain* tc);
+static bool project_update(void);
+static bool project_cleanup(void);

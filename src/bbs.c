@@ -251,113 +251,6 @@ static int run_cmd_cfg(cmd_ctx* cmdctx) {
   return 0;
 }
 
-static void toolchain_cmd_build_print_opts(toolchain_print_opts* out, cmdopt* opts) {
-  if (!out || !opts)
-    return;
-
-  enum {
-    MINIMAL = 0,
-    TOOLS,
-    SDKS,
-    TYPE,
-    TOOL,
-    SDK,
-    PATHS_ONLY,
-    VERSIONS_ONLY,
-  };
-
-  memset(out, 0, sizeof(*out));
-  out->minimal = opts[MINIMAL].present;
-  out->show_tools = opts[TOOLS].present;
-  out->show_sdks = opts[SDKS].present;
-  out->paths_only = opts[PATHS_ONLY].present;
-  out->versions_only = opts[VERSIONS_ONLY].present;
-  if (!out->show_tools && !out->show_sdks)
-    out->show_tools = out->show_sdks = true;
-
-  if (out->paths_only && out->versions_only) {
-    warn("'--paths-only' and '--versions-only' cannot be used together. Using '--paths-only'.");
-    out->versions_only = false;
-  }
-
-  if (opts[TYPE].value && opts[TYPE].value[0]) {
-    const char* type = opts[TYPE].value;
-    if (_stricmp(type, "build_system") == 0 || _stricmp(type, "c_compiler") == 0 || _stricmp(type, "cpp_compiler") == 0 || _stricmp(type, "archiver") == 0 || _stricmp(type, "linker") == 0 || _stricmp(type, "misc") == 0) {
-      out->type_filter = tool_type_from_idf(type);
-      out->has_type_filter = true;
-    } else {
-      warn("ignoring unknown tool type '%s'.", type);
-    }
-  }
-  out->tool_id_filter = opts[TOOL].value;
-  out->sdk_name_filter = opts[SDK].value;
-}
-
-static int run_cmd_toolchain(cmd_ctx* cmdctx) {
-  cmdline* cl = cmdctx->cl;
-  const char* sub = cmdline_consume_param(cl);
-  enum {
-    MINIMAL = 0,
-    TOOLS,
-    SDKS,
-    TYPE,
-    TOOL,
-    SDK,
-    PATHS_ONLY,
-    VERSIONS_ONLY,
-  };
-
-  cmdopt opts[] = {
-      [MINIMAL] = { "m",       "minimal"},
-      [TOOLS] = {NULL,         "tools"},
-      [SDKS] = {NULL,          "sdks"},
-      [TYPE] = {NULL,          "type"},
-      [TOOL] = {NULL,          "tool"},
-      [SDK] = {NULL,           "sdk"},
-      [PATHS_ONLY] = {NULL,    "paths-only"},
-      [VERSIONS_ONLY] = {NULL, "versions-only"},
-  };
-
-  cmdline_consume_all_options(cl, opts, _countof(opts));
-  cmdline_validate(cl);
-
-  toolchain_print_opts print_opts = {0};
-  toolchain_cmd_build_print_opts(&print_opts, opts);
-
-  if (sub && _strcmpi(sub, "init") == 0) {
-    print("Initializing toolchain file: %s", cmdctx->toolchain);
-    toolchain* tc = toolchain_init(cmdctx->toolchain, true, cmdctx);
-    if (tc) {
-      print("Toolchain initialized successfully.");
-      toolchain_print_with_opts(tc, &print_opts);
-    }
-    return tc ? 0 : error_code(CMD_TOOLCHAIN, 0);
-  }
-
-  if (sub && _strcmpi(sub, "clean") == 0) {
-    if (!file_exists(cmdctx->toolchain)) {
-      print("Toolchain is not initialized. Nothing to clean.");
-      return 0;
-    }
-    if (!file_delete(cmdctx->toolchain)) {
-      return error_code(CMD_TOOLCHAIN, 0);
-    }
-    print("Toolchain config deleted.");
-    return 0;
-  }
-
-  if (!file_exists(cmdctx->toolchain)) {
-    print("Toolchain is not currently initialized.");
-    print("Run 'bbs toolchain init' to manually init.");
-    return 0;
-  }
-
-  toolchain* tc = toolchain_init(cmdctx->toolchain, false, cmdctx);
-  print("Current toolchain setup:");
-  toolchain_print_with_opts(tc, &print_opts);
-  return 0;
-}
-
 static int clean_one_file(const char* label, const char* path, cmd c, char err_idx) {
   if (!file_exists(path)) {
     print("%s is not present. Nothing to clean.", label);
@@ -404,10 +297,12 @@ static int run_cmd_update(cmd_ctx* cmdctx) {
 
   enum {
     INFO = 0,
+    INIT_TOOLCHAIN,
   };
 
   cmdopt opts[] = {
       [INFO] = {"i", "info"},
+      [INIT_TOOLCHAIN] = {NULL, "init-toolchain"},
   };
 
   cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
@@ -420,7 +315,11 @@ static int run_cmd_update(cmd_ctx* cmdctx) {
     project_print(&proj);
   }
 
-   if (!project_update()) {
+  if (!toolchain_init(cmdctx->toolchain, opts[INIT_TOOLCHAIN].present, cmdctx)) {
+    return error_code(CMD_UPDATE, 2);
+  }
+
+  if (!project_update()) {
     return error_code(CMD_UPDATE, 0);
   }
 
@@ -445,7 +344,7 @@ static int run_cmd_build(cmd_ctx* cmdctx) {
   cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
   cmdline_validate(cmdctx->cl);
 
-  if (!project_build(target, platform, config))
+  if (!project_build(target, platform, config, NULL))
     return error_code(CMD_BUILD, 0);
 
   return 0;
@@ -468,7 +367,7 @@ static int run_cmd_run(cmd_ctx* cmdctx) {
 
   cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
 
-  if (!project_run(target, platform, config))
+  if (!project_run(target, platform, config, NULL))
     return error_code(CMD_RUN, 0);
 
   return 0;
@@ -909,7 +808,7 @@ static int run_cmd_dist(cmd_ctx* cmdctx) {
   cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
   cmdline_validate(cmdctx->cl);
 
-  if (!project_dist(target, platform, config))
+  if (!project_dist(target, platform, config, NULL))
     return error_code(CMD_DIST, 0);
 
   return 0;
@@ -934,24 +833,39 @@ static int run_cmd_test(cmd_ctx* cmdctx) {
   const char* test_name = cmdline_consume_param(cmdctx->cl);
   cmdline_validate(cmdctx->cl);
 
-  if (!project_test(test_name, target, platform, config))
+  toolchain* tc = toolchain_init(cmdctx->toolchain, false, cmdctx);
+  if (!project_test(test_name, target, platform, config, tc))
     return error_code(CMD_TEST, 0);
 
   return 0;
 }
 
+static bool bumpver_match_meta_field(node* scope, const char* field_name, const char* value);
+
 static bool bumpver_match_project_id(node* project, const char* project_id) {
   if (!project_id || !project_id[0])
     return true;
 
-  node* id = node_get_child(project, "id");
-  if (!id)
+  return bumpver_match_meta_field(project, "id", project_id);
+}
+
+static bool bumpver_match_meta_field(node* scope, const char* field_name, const char* value) {
+  if (!scope || !field_name || !field_name[0] || !value || !value[0])
     return false;
 
-  if (id->type == NODE_TYPE_STR)
-    return strlen(project_id) == id->txt_dim && _strnicmp(project_id, id->_str, id->txt_dim) == 0;
-  if (id->type == NODE_TYPE_IDF)
-    return strlen(project_id) == id->txt_dim && _strnicmp(project_id, id->_idf, id->txt_dim) == 0;
+  node* field = node_get_child(scope, field_name);
+  if (!field) {
+    node* meta = node_get_child(scope, "meta");
+    if (meta)
+      field = node_get_child(meta, field_name);
+  }
+  if (!field)
+    return false;
+
+  if (field->type == NODE_TYPE_STR)
+    return strlen(value) == field->txt_dim && _strnicmp(value, field->_str, field->txt_dim) == 0;
+  if (field->type == NODE_TYPE_IDF)
+    return strlen(value) == field->txt_dim && _strnicmp(value, field->_idf, field->txt_dim) == 0;
   return false;
 }
 
@@ -978,6 +892,52 @@ static node* bumpver_find_project(node* tree, const char* project_id, int* out_m
   return matches == 1 ? match : NULL;
 }
 
+static bool bumpver_match_target_name(node* target, const char* target_name) {
+  if (!target_name || !target_name[0])
+    return true;
+
+  return bumpver_match_meta_field(target, "id", target_name) || bumpver_match_meta_field(target, "output", target_name) ||
+         bumpver_match_meta_field(target, "name", target_name);
+}
+
+static node* bumpver_find_target(node* project, const char* target_name, int* out_matches) {
+  node* targets = node_get_child(project, "targets");
+  node* match = NULL;
+  int matches = 0;
+  if (!targets) {
+    if (out_matches)
+      *out_matches = 0;
+    return NULL;
+  }
+
+  node_foreach(targets, child) {
+    if (!child->name)
+      continue;
+    if (!bumpver_match_target_name(child, target_name))
+      continue;
+    match = child;
+    ++matches;
+  }
+
+  if (out_matches)
+    *out_matches = matches;
+  return matches == 1 ? match : NULL;
+}
+
+static node* bumpver_find_version(node* scope) {
+  if (!scope)
+    return NULL;
+
+  node* version = node_get_child(scope, "version");
+  if (version)
+    return version;
+
+  node* meta = node_get_child(scope, "meta");
+  if (!meta)
+    return NULL;
+  return node_get_child(meta, "version");
+}
+
 static bool bumpver_inc_byte(uint8_t* value, const char* label) {
   if (!value)
     return false;
@@ -991,13 +951,22 @@ static bool bumpver_inc_byte(uint8_t* value, const char* label) {
 
 static int run_cmd_bumpver(cmd_ctx* cmdctx) {
   cmdline* cl = cmdctx->cl;
+  const char* project_id = cmdline_extract_option_value(cl, "p", "project");
+  const char* target_id = cmdline_extract_option_value(cl, "t", "target");
   const char* part = cmdline_consume_param(cl);
-  const char* project_id = cmdline_consume_param(cl);
+  const char* positional_project_id = cmdline_consume_param(cl);
   cmdline_validate(cl);
+
+  if (!project_id)
+    project_id = positional_project_id;
+  else if (positional_project_id && positional_project_id[0] && _stricmp(project_id, positional_project_id) != 0) {
+    error("Project id specified twice ('%s' and '%s').", project_id, positional_project_id);
+    return error_code(CMD_BUMPVER, 16);
+  }
 
   if (!part || !part[0]) {
     error("Missing version part.");
-    print("Use 'bbs bumpver <major|minor|patch|user|all> [project_id]'.");
+    print("Use 'bbs bumpver <major|minor|patch|user|all> [-p project_id] [-t target_id]'.");
     return error_code(CMD_BUMPVER, 0);
   }
 
@@ -1034,13 +1003,32 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
     return error_code(CMD_BUMPVER, 4);
   }
 
-  node* version = node_get_child(project, "version");
+  node* scope = project;
+  const char* scope_label = "project";
+  int target_matches = 0;
+  if (target_id && target_id[0]) {
+    node* target = bumpver_find_target(project, target_id, &target_matches);
+    if (!target) {
+      if (target_matches == 0)
+        error("No target node found matching '%s'.", target_id);
+      else
+        error("Multiple target nodes match '%s'.", target_id);
+      return error_code(CMD_BUMPVER, 17);
+    }
+    scope = target;
+    scope_label = "target";
+  }
+
+  node* version = bumpver_find_version(scope);
   if (!version) {
-    error("Project node does not define a version.");
+    if (target_id && target_id[0])
+      error("Target '%s' does not define a version.", target_id);
+    else
+      error("Project node does not define a version.");
     return error_code(CMD_BUMPVER, 5);
   }
   if (version->type != NODE_TYPE_VER) {
-    error("Project version must be a version value.");
+    error("%s version must be a version value.", scope_label);
     return error_code(CMD_BUMPVER, 6);
   }
 
@@ -1100,7 +1088,12 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
     snprintf(before_text, sizeof(before_text), "%u.%u.%u", before.major, before.minor, before.patch);
   info_format_value(version, after_text, sizeof(after_text));
 
-  print("Updated version: %s -> %s", before_text, after_text);
+  if (target_id && target_id[0])
+    print("Updated target version (%s): %s -> %s", target_id, before_text, after_text);
+  else if (project_id && project_id[0])
+    print("Updated project version (%s): %s -> %s", project_id, before_text, after_text);
+  else
+    print("Updated version: %s -> %s", before_text, after_text);
   print("Edited: %s", cmdctx->project);
   return 0;
 }
@@ -1125,8 +1118,6 @@ static int run_cmd(cmd c, cmd_ctx* cmdctx) {
       return run_cmd_test(cmdctx);
     case CMD_BUMPVER:
       return run_cmd_bumpver(cmdctx);
-    case CMD_TOOLCHAIN:
-      return run_cmd_toolchain(cmdctx);
     default: {
       print("Command '%s' is not implemented yet.", CMD_INFOS[c].name);
       return error_code(c, 1);

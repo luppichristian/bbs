@@ -189,6 +189,16 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .version_arg = "--version",
      .version_regex = "premake5? ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
      },
+    {
+     .id = "ctest",
+     .type = TOOL_TYPE_BUILD_SYSTEM,
+     .target_os = OS_MAX,
+     .exe_name = "ctest",
+     .dir_hints = "{program_files}\\CMake\\bin;{program_files_x86}\\CMake\\bin;{program_files}\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;{program_files}\\Microsoft Visual Studio\\2022\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;{program_files}\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;{user_profile}\\scoop\\apps\\cmake\\current\\bin;C:\\ProgramData\\chocolatey\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
+     .deep_roots = "{program_files};{program_files_x86};/usr;/usr/local",
+     .version_arg = "--version",
+     .version_regex = "ctest version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
+     },
 
     // C_COMPILER
     {
