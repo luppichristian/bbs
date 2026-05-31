@@ -1,6 +1,6 @@
 #pragma once
 #include "bbs_toolchain.h"
-#include "bbs.h"
+#include "bbs_cmd.h"
 #include "bbs_base.c"
 
 #if !defined(_WIN32)

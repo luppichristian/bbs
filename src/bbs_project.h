@@ -1,5 +1,6 @@
 #pragma once
 #include "bbs_base.h"
+#include "bbs_user.h"
 #include "bbs_toolchain.h"
 
 #define BUILD_DIR "build"

@@ -1,5 +1,7 @@
 #pragma once
 #include "bbs_project.h"
+#include "bbs_toolchain.c"
+#include "bbs_user.c"
 
 static bool project_parse_string_list(node* list_n, const char*** out_items, int* out_count);
 static const char* project_join_scalar_list(node* list_n, int* out_count);
@@ -1247,6 +1249,8 @@ static bool project_parse_project_node(node* project_n, const char* selected_con
 
 static bool project_load_file_config(const char* path, const char* config, project* out) {
   if (!path || !path[0] || !out)
+    return false;
+  if (!user_init())
     return false;
   if (!file_exists(path)) {
     error("Project config not found: %s", path);

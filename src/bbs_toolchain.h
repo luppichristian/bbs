@@ -143,10 +143,6 @@ typedef struct {
   int env_cap;
 } toolchain;
 
-static const char* toolchain_get_host_tool_path(toolchain* tc, const char* id);
-static const char* toolchain_get_bash_path(toolchain* tc);
-static int toolchain_run_bash(toolchain* tc, const char* workdir, const char* script);
-
 static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
     // BUILD_SYSTEM
     {
