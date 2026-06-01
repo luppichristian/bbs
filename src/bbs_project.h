@@ -3,9 +3,6 @@
 #include "bbs_toolchain.h"
 #include "bbs_user.h"
 
-#define BUILD_DIR "build"
-#define DIST_DIR  "dist"
-
 typedef struct {
   ver ver;
   const char* id;
@@ -117,6 +114,7 @@ typedef struct {
 
 typedef struct {
   meta meta;
+  user user_cfg;
 
   const char** configs;
   int config_c;

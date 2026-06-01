@@ -1,18 +1,8 @@
 #pragma once
 #include "bbs_base.h"
 
-typedef enum {
-  TOOL_TYPE_BUILD_SYSTEM,
-  TOOL_TYPE_C_COMPILER,
-  TOOL_TYPE_CPP_COMPILER,
-  TOOL_TYPE_ARCHIVERS,
-  TOOL_TYPE_LINKERS,
-  TOOL_TYPE_MISC,
-} tool_type;
-
 typedef struct {
   const char* id;
-  tool_type type;
   const char* path;
   const char* version;
 } tool;
@@ -55,7 +45,6 @@ static const char* OS_NAMES[] = {
 
 typedef struct {
   const char* id;
-  tool_type type;
   os target_os;  // OS_MAX == any
 
   // Stage 1: executable lookup in PATH/where/which.
@@ -106,17 +95,6 @@ typedef struct {
   os p_os;
 
   // Cached probe data used to rebuild support at runtime.
-  const char* probe_native_arch;
-  bool probe_has_native_gcc;
-  bool probe_has_native_gpp;
-  bool probe_has_x86_64_gcc;
-  bool probe_has_x86_64_gpp;
-  bool probe_has_x86_c_multilib;
-  bool probe_has_x86_cpp_multilib;
-  bool probe_has_arm64_gcc;
-  bool probe_has_arm64_gpp;
-  bool probe_has_arm64_c_cross;
-  bool probe_has_arm64_cpp_cross;
   const char* probe_docker_buildx_platforms;
 
   bool supported[OS_MAX][ARCH_MAX];
@@ -147,7 +125,6 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
     // BUILD_SYSTEM
     {
      .id = "cmake",
-     .type = TOOL_TYPE_BUILD_SYSTEM,
      .target_os = OS_MAX,
      .exe_name = "cmake",
      .dir_hints = "{program_files}\\CMake\\bin;{program_files_x86}\\CMake\\bin;{program_files}\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;{program_files}\\Microsoft Visual Studio\\2022\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;{program_files}\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;{user_profile}\\scoop\\apps\\cmake\\current\\bin;C:\\ProgramData\\chocolatey\\bin",
@@ -156,38 +133,7 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .version_regex = "cmake version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
      },
     {
-     .id = "make",
-     .type = TOOL_TYPE_BUILD_SYSTEM,
-     .target_os = OS_MAX,
-     .exe_name = "make",
-     .dir_hints = "{msys2_root}\\usr\\bin;{msys2_root}\\mingw64\\bin;{msys2_root}\\mingw32\\bin;C:\\msys64\\usr\\bin;C:\\msys64\\mingw64\\bin;C:\\msys64\\ucrt64\\bin;{user_profile}\\scoop\\apps\\make\\current\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
-     .deep_roots = "{msys2_root};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "GNU Make ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    {
-     .id = "ninja",
-     .type = TOOL_TYPE_BUILD_SYSTEM,
-     .target_os = OS_MAX,
-     .exe_name = "ninja",
-     .dir_hints = "{program_files}\\Ninja;{local_app_data}\\Microsoft\\WinGet\\Packages;{user_profile}\\scoop\\apps\\ninja\\current;C:\\ProgramData\\chocolatey\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
-     .deep_roots = "{program_files};{local_app_data};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    {
-     .id = "premake5",
-     .type = TOOL_TYPE_BUILD_SYSTEM,
-     .target_os = OS_MAX,
-     .exe_name = "premake5",
-     .dir_hints = "{program_files}\\Premake;{user_profile}\\tools\\premake;/usr/local/bin",
-     .deep_roots = "{program_files};{user_profile};/usr/local",
-     .version_arg = "--version",
-     .version_regex = "premake5? ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    {
      .id = "ctest",
-     .type = TOOL_TYPE_BUILD_SYSTEM,
      .target_os = OS_MAX,
      .exe_name = "ctest",
      .dir_hints = "{program_files}\\CMake\\bin;{program_files_x86}\\CMake\\bin;{program_files}\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;{program_files}\\Microsoft Visual Studio\\2022\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;{program_files}\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;{user_profile}\\scoop\\apps\\cmake\\current\\bin;C:\\ProgramData\\chocolatey\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
@@ -196,126 +142,8 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .version_regex = "ctest version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
      },
 
-    // C_COMPILER
-    {
-     .id = "gcc",
-     .type = TOOL_TYPE_C_COMPILER,
-     .target_os = OS_MAX,
-     .exe_name = "gcc",
-     .dir_hints = "{msys2_root}\\mingw64\\bin;{msys2_root}\\ucrt64\\bin;C:\\msys64\\mingw64\\bin;C:\\msys64\\ucrt64\\bin;C:\\mingw64\\bin;C:\\TDM-GCC-64\\bin;C:\\Strawberry\\c\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
-     .deep_roots = "{msys2_root};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "gcc( \\(.*\\))? ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     .version_arg_fallback = "-dumpfullversion",
-     .version_regex_fallback = "([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    {
-     .id = "clang",
-     .type = TOOL_TYPE_C_COMPILER,
-     .target_os = OS_MAX,
-     .exe_name = "clang",
-     .dir_hints = "{llvm_root}\\bin;{program_files}\\LLVM\\bin;{program_files_x86}\\LLVM\\bin;{user_profile}\\scoop\\apps\\llvm\\current\\bin;C:\\Program Files\\LLVM\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/opt/llvm/bin;/opt/homebrew/bin",
-     .deep_roots = "{llvm_root};{program_files};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "clang version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    // CPP_COMPILER
-    {
-     .id = "g++",
-     .type = TOOL_TYPE_CPP_COMPILER,
-     .target_os = OS_MAX,
-     .exe_name = "g++",
-     .dir_hints = "{msys2_root}\\mingw64\\bin;{msys2_root}\\ucrt64\\bin;C:\\msys64\\mingw64\\bin;C:\\msys64\\ucrt64\\bin;C:\\mingw64\\bin;C:\\TDM-GCC-64\\bin;C:\\Strawberry\\c\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
-     .deep_roots = "{msys2_root};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "g\\+\\+( \\(.*\\))? ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    {
-     .id = "clang++",
-     .type = TOOL_TYPE_CPP_COMPILER,
-     .target_os = OS_MAX,
-     .exe_name = "clang++",
-     .dir_hints = "{llvm_root}\\bin;{program_files}\\LLVM\\bin;{program_files_x86}\\LLVM\\bin;{user_profile}\\scoop\\apps\\llvm\\current\\bin;C:\\Program Files\\LLVM\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/opt/llvm/bin;/opt/homebrew/bin",
-     .deep_roots = "{llvm_root};{program_files};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "clang version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    // ARCHIVERS
-    {
-     .id = "ar",
-     .type = TOOL_TYPE_ARCHIVERS,
-     .target_os = OS_MAX,
-     .exe_name = "ar",
-     .dir_hints = "{msys2_root}\\usr\\bin;{msys2_root}\\mingw64\\bin;C:\\msys64\\usr\\bin;C:\\msys64\\mingw64\\bin;C:\\msys64\\ucrt64\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
-     .deep_roots = "{msys2_root};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "GNU ar(.*?) ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    {
-     .id = "llvm-ar",
-     .type = TOOL_TYPE_ARCHIVERS,
-     .target_os = OS_MAX,
-     .exe_name = "llvm-ar",
-     .dir_hints = "{llvm_root}\\bin;{program_files}\\LLVM\\bin;{program_files_x86}\\LLVM\\bin;{user_profile}\\scoop\\apps\\llvm\\current\\bin;C:\\Program Files\\LLVM\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/opt/llvm/bin;/opt/homebrew/bin",
-     .deep_roots = "{llvm_root};{program_files};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "LLVM version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    // LINKERS
-    {
-     .id = "ld",
-     .type = TOOL_TYPE_LINKERS,
-     .target_os = OS_MAX,
-     .exe_name = "ld",
-     .dir_hints = "{msys2_root}\\usr\\bin;{msys2_root}\\mingw64\\bin;C:\\msys64\\usr\\bin;C:\\msys64\\mingw64\\bin;C:\\msys64\\ucrt64\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
-     .deep_roots = "{msys2_root};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "GNU ld(.*?) ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    {
-     .id = "lld",
-     .type = TOOL_TYPE_LINKERS,
-     .target_os = OS_MAX,
-     .exe_name = "lld",
-     .dir_hints = "{llvm_root}\\bin;{program_files}\\LLVM\\bin;{program_files_x86}\\LLVM\\bin;{user_profile}\\scoop\\apps\\llvm\\current\\bin;C:\\Program Files\\LLVM\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/opt/llvm/bin;/opt/homebrew/bin",
-     .deep_roots = "{llvm_root};{program_files};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "LLD ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    // MISC
-    {
-     .id = "objdump",
-     .type = TOOL_TYPE_MISC,
-     .target_os = OS_MAX,
-     .exe_name = "objdump",
-     .dir_hints = "{msys2_root}\\usr\\bin;{msys2_root}\\mingw64\\bin;C:\\msys64\\usr\\bin;C:\\msys64\\mingw64\\bin;C:\\msys64\\ucrt64\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
-     .deep_roots = "{msys2_root};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "objdump(.*?) ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    {
-     .id = "nm",
-     .type = TOOL_TYPE_MISC,
-     .target_os = OS_MAX,
-     .exe_name = "nm",
-     .dir_hints = "{msys2_root}\\usr\\bin;{msys2_root}\\mingw64\\bin;C:\\msys64\\usr\\bin;C:\\msys64\\mingw64\\bin;C:\\msys64\\ucrt64\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
-     .deep_roots = "{msys2_root};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "nm(.*?) ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    {
-     .id = "strings",
-     .type = TOOL_TYPE_MISC,
-     .target_os = OS_MAX,
-     .exe_name = "strings",
-     .dir_hints = "{msys2_root}\\usr\\bin;{msys2_root}\\mingw64\\bin;C:\\msys64\\usr\\bin;C:\\msys64\\mingw64\\bin;C:\\msys64\\ucrt64\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
-     .deep_roots = "{msys2_root};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "strings(.*?) ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
     {
      .id = "docker",
-     .type = TOOL_TYPE_MISC,
      .target_os = OS_MAX,
      .exe_name = "docker",
      .dir_hints = "{program_files}\\Docker\\Docker\\resources\\bin;{local_app_data}\\Programs\\Docker\\Docker\\resources\\bin;C:\\Program Files\\Docker\\Docker\\resources\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
@@ -325,7 +153,6 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      },
     {
      .id = "bash",
-     .type = TOOL_TYPE_MISC,
      .target_os = OS_MAX,
      .exe_name = "bash",
      .dir_hints = "{program_files}\\Git\\bin;{program_files}\\Git\\usr\\bin;{program_files_x86}\\Git\\bin;{program_files_x86}\\Git\\usr\\bin;{msys2_root}\\usr\\bin;C:\\msys64\\usr\\bin;C:\\Program Files\\Git\\bin;C:\\Program Files\\Git\\usr\\bin;/bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
@@ -335,7 +162,6 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      },
     {
      .id = "wsl",
-     .type = TOOL_TYPE_MISC,
      .target_os = OS_WINDOWS,
      .exe_name = "wsl",
      .dir_hints = "C:\\Windows\\System32;{user_profile}\\AppData\\Local\\Microsoft\\WindowsApps",
@@ -346,18 +172,7 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .version_regex_fallback = "Default Version: ([0-9]+)",
      },
     {
-     .id = "readelf",
-     .type = TOOL_TYPE_MISC,
-     .target_os = OS_MAX,
-     .exe_name = "readelf",
-     .dir_hints = "{msys2_root}\\usr\\bin;{msys2_root}\\mingw64\\bin;C:\\msys64\\usr\\bin;C:\\msys64\\mingw64\\bin;C:\\msys64\\ucrt64\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
-     .deep_roots = "{msys2_root};/usr;/usr/local",
-     .version_arg = "--version",
-     .version_regex = "readelf(.*?) ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
-     },
-    {
      .id = "vcvarsall",
-     .type = TOOL_TYPE_MISC,
      .target_os = OS_WINDOWS,
      .exe_name = "vcvarsall.bat",
      .dir_hints = "{program_files}\\Microsoft Visual Studio;{program_files_x86}\\Microsoft Visual Studio",

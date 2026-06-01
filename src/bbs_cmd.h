@@ -39,13 +39,13 @@ static cfg_info CFG_INFOS[] = {
                      "Values from 'user.bbs' can be overridden by 'local.bbs' in a specific project."                               },
 
     [CFG_LOCAL] = {.loc = CFG_LOC_CWD,
-                     .filename = "local.bbs",
-                     .desc = "Machine-specific project overrides",
-                     .detailed_desc = "Machine-specific project overrides.\n"
-                     "Keep it in the project root directory, next to 'project.bbs'.\n"
-                     "Use it for machine-specific settings that should not be shared with the rest of the project.\n"
-                     "Values in 'local.bbs' can override the defaults from 'user.bbs'.\n"
-                     "In normal projects this file should usually be added to .gitignore."                                          },
+                      .filename = "local.bbs",
+                      .desc = "Machine-specific user overrides",
+                      .detailed_desc = "Machine-specific user overrides.\n"
+                      "Keep it in the project root directory, next to 'project.bbs'.\n"
+                      "Use it for machine-specific overrides to your 'user.bbs' defaults that should not be shared.\n"
+                      "Values in 'local.bbs' can override the defaults from 'user.bbs'.\n"
+                      "In normal projects this file should usually be added to .gitignore."                                          },
 
     [CFG_TOOLCHAIN] = {.loc = CFG_LOC_EXE,
                      .filename = "toolchain.bbs",

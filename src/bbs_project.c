@@ -5,6 +5,7 @@
 
 static bool project_parse_string_list(node* list_n, const char*** out_items, int* out_count);
 static const char* project_join_scalar_list(node* list_n, int* out_count);
+static bool project_load_user_config(user* out);
 
 static bool project_has_ver(ver v) {
   return v.major != 0 || v.minor != 0 || v.patch != 0 || v.user != 0;
@@ -1285,7 +1286,10 @@ static bool project_load_file_config(const char* path, const char* config, proje
     return false;
   }
 
-  return project_parse_project_node(project_n, config, out);
+  if (!project_parse_project_node(project_n, config, out))
+    return false;
+
+  return project_load_user_config(&out->user_cfg);
 }
 
 static bool project_load_config(const char* config, project* out) {
@@ -1298,6 +1302,21 @@ static bool project_load_file(const char* path, project* out) {
 
 static bool project_load(project* out) {
   return project_load_config(NULL, out);
+}
+
+static bool project_load_user_config(user* out) {
+  if (!out)
+    return false;
+
+  user* cfg = user_init(NULL);
+  if (!cfg)
+    return false;
+
+  if (!user_load_paths(get_path_exe(CFG_INFOS[CFG_USER].filename), get_path_cwd(CFG_INFOS[CFG_LOCAL].filename), cfg))
+    return false;
+
+  *out = *cfg;
+  return true;
 }
 
 static bool project_target_matches_name(const target* tgt, const char* name) {
@@ -1469,7 +1488,7 @@ static bool project_build(const char* target_name, const char* platform, const c
     return false;
 
   project_print_action_header("Build", &proj, platform);
-  print("Build dir: %s", project_resolved_dir(BUILD_DIR, proj.active_config, platform));
+  print("Build dir: %s", project_resolved_dir(proj.user_cfg.builddir, proj.active_config, platform));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
@@ -1539,7 +1558,7 @@ static bool project_test(const char* test_name, const char* target_name, const c
   }
 
   project_print_action_header("Test", &proj, platform);
-  const char* build_dir = project_resolved_dir(BUILD_DIR, proj.active_config, platform);
+  const char* build_dir = project_resolved_dir(proj.user_cfg.builddir, proj.active_config, platform);
   print("Test dir: %s", build_dir);
   print("Test runner: %s", ctest);
   if (test_name && test_name[0])
@@ -1598,7 +1617,7 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     return false;
 
   project_print_action_header("Dist", &proj, platform);
-  print("Dist dir: %s", project_resolved_dir(DIST_DIR, proj.active_config, platform));
+  print("Dist dir: %s", project_resolved_dir(proj.user_cfg.distdir, proj.active_config, platform));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
@@ -1625,7 +1644,7 @@ static bool project_update(void) {
   if (!project_load(&proj))
     return false;
 
-  const char* build_dir = get_path_cwd(BUILD_DIR);
+  const char* build_dir = get_path_cwd(proj.user_cfg.builddir);
   if (!dir_exists(build_dir)) {
     if (!dir_create(build_dir)) {
       error("Failed to create build directory: %s", build_dir);
@@ -1635,7 +1654,7 @@ static bool project_update(void) {
     }
   }
 
-  const char* dist_dir = get_path_cwd(DIST_DIR);
+  const char* dist_dir = get_path_cwd(proj.user_cfg.distdir);
   if (!dir_exists(dist_dir)) {
     if (!dir_create(dist_dir)) {
       error("Failed to create dist directory: %s", dist_dir);
@@ -1655,7 +1674,11 @@ static bool project_update(void) {
 static bool project_cleanup(void) {
   bool ok = true;
 
-  const char* build_dir = get_path_cwd(BUILD_DIR);
+  user cfg = {0};
+  if (!project_load_user_config(&cfg))
+    return false;
+
+  const char* build_dir = get_path_cwd(cfg.builddir);
   if (dir_exists(build_dir)) {
     if (!dir_delete(build_dir)) {
       error("Failed to delete build directory: %s", build_dir);
@@ -1665,7 +1688,7 @@ static bool project_cleanup(void) {
     }
   }
 
-  const char* dist_dir = get_path_cwd(DIST_DIR);
+  const char* dist_dir = get_path_cwd(cfg.distdir);
   if (dir_exists(dist_dir)) {
     if (!dir_delete(dist_dir)) {
       error("Failed to delete dist directory: %s", dist_dir);
