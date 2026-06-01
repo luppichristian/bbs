@@ -345,9 +345,10 @@ static int run_cmd_update(cmd_ctx* cmdctx) {
     project_print(&proj);
   }
 
-  if (!toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), opts[INIT_TOOLCHAIN].present, cmdctx))
+  toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), opts[INIT_TOOLCHAIN].present, cmdctx);
+  if (!tc)
     return error_code(CMD_UPDATE, 2);
-  if (!project_update())
+  if (!project_update(tc))
     return error_code(CMD_UPDATE, 0);
 
   return 0;
@@ -371,7 +372,8 @@ static int run_cmd_build(cmd_ctx* cmdctx) {
   cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
   cmdline_validate(cmdctx->cl);
 
-  if (!project_build(target, platform, config, NULL))
+  toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  if (!project_build(target, platform, config, tc))
     return error_code(CMD_BUILD, 0);
   return 0;
 }
@@ -393,7 +395,8 @@ static int run_cmd_run(cmd_ctx* cmdctx) {
 
   cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
 
-  if (!project_run(target, platform, config, NULL))
+  toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  if (!project_run(target, platform, config, tc))
     return error_code(CMD_RUN, 0);
   return 0;
 }

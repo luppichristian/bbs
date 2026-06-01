@@ -34,10 +34,9 @@
 #define ANSI_CYAN    "\x1b[36m"
 #define ANSI_WHITE   "\x1b[37m"
 
-#define LABEL_INFO    ANSI_FG_TEXT
-#define LABEL_WARN    ANSI_BOLD ANSI_FG_WARN "[warn]" ANSI_RESET " " ANSI_FG_TEXT
-#define LABEL_ERROR   ANSI_BOLD ANSI_FG_ERROR "[error]" ANSI_RESET " " ANSI_FG_TEXT
-#define LABEL_SUCCESS ANSI_BOLD ANSI_FG_SUCCESS "[ ok ]" ANSI_RESET " " ANSI_FG_TEXT
+#define LABEL_WARN  ANSI_BOLD ANSI_FG_WARN "[warn]" ANSI_RESET " " ANSI_FG_TEXT
+#define LABEL_ERROR ANSI_BOLD ANSI_FG_ERROR "[error]" ANSI_RESET " " ANSI_FG_TEXT
+#define LABEL_DONE  ANSI_BOLD ANSI_FG_SUCCESS "[done]" ANSI_RESET " " ANSI_FG_TEXT
 
 typedef struct {
   const char* short_name;  // "a"

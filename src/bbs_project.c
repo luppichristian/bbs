@@ -1364,35 +1364,1093 @@ static const char* project_resolved_dir(const char* root, const char* config, co
   return arena_text(buf, strlen(buf));
 }
 
-static const char* project_join_args(const char** items, int count) {
-  if (!items || count <= 0)
-    return NULL;
+static const char* project_build_dir_name(const char* config, const char* platform) {
+  char buf[_MAX_PATH] = {0};
+  const char* cfg = config && config[0] ? config : "default";
+  const char* suffix = platform && platform[0] ? platform : NULL;
+  if (!suffix)
+    snprintf(buf, sizeof(buf), "%s-%s-%s", cfg, project_host_os_name(), project_host_arch_name());
+  else
+    snprintf(buf, sizeof(buf), "%s-%s", cfg, suffix);
+  return arena_text(buf, strlen(buf));
+}
 
-  size_t total = 0;
-  for (int i = 0; i < count; ++i) {
-    if (!items[i])
-      continue;
-    total += strlen(items[i]) + 1;
+typedef struct {
+  char* data;
+  size_t len;
+  size_t cap;
+} project_textbuf;
+
+static bool project_textbuf_reserve(project_textbuf* buf, size_t extra) {
+  if (!buf)
+    return false;
+
+  size_t need = buf->len + extra + 1;
+  if (need <= buf->cap)
+    return true;
+
+  size_t new_cap = buf->cap > 0 ? buf->cap : 4096;
+  while (new_cap < need)
+    new_cap *= 2;
+
+  char* next = realloc(buf->data, new_cap);
+  if (!next)
+    return false;
+
+  buf->data = next;
+  buf->cap = new_cap;
+  return true;
+}
+
+static bool project_textbuf_append(project_textbuf* buf, const char* text) {
+  if (!buf || !text)
+    return false;
+
+  size_t len = strlen(text);
+  if (!project_textbuf_reserve(buf, len))
+    return false;
+
+  memcpy(buf->data + buf->len, text, len);
+  buf->len += len;
+  buf->data[buf->len] = '\0';
+  return true;
+}
+
+static bool project_textbuf_appendf(project_textbuf* buf, const char* fmt, ...) {
+  if (!buf || !fmt)
+    return false;
+
+  va_list args;
+  va_start(args, fmt);
+  va_list args_copy;
+  va_copy(args_copy, args);
+  int need = vsnprintf(NULL, 0, fmt, args_copy);
+  va_end(args_copy);
+  if (need < 0) {
+    va_end(args);
+    return false;
   }
-  if (total == 0)
+
+  if (!project_textbuf_reserve(buf, (size_t)need)) {
+    va_end(args);
+    return false;
+  }
+
+  vsnprintf(buf->data + buf->len, buf->cap - buf->len, fmt, args);
+  va_end(args);
+  buf->len += (size_t)need;
+  return true;
+}
+
+static const char* project_dup_text(const char* text) {
+  if (!text)
+    text = "";
+
+  size_t len = strlen(text);
+  char* out = malloc(len + 1);
+  if (!out)
     return NULL;
 
-  char* out = push(total + 1);
+  memcpy(out, text, len + 1);
+  return out;
+}
+
+static const char* project_normalize_slashes(const char* text) {
+  if (!text)
+    return project_dup_text("");
+
+  size_t len = strlen(text);
+  char* out = malloc(len + 1);
+  if (!out)
+    return NULL;
+
+  for (size_t i = 0; i < len; ++i)
+    out[i] = text[i] == '\\' ? '/' : text[i];
+  out[len] = '\0';
+  return out;
+}
+
+static const char* project_escape_cmake_string(const char* text) {
+  if (!text)
+    return project_dup_text("");
+
+  size_t len = 0;
+  for (const char* p = text; *p; ++p) {
+    if (*p == '\\' || *p == '"')
+      len += 2;
+    else
+      len += 1;
+  }
+
+  char* out = malloc(len + 1);
   if (!out)
     return NULL;
 
   size_t wi = 0;
-  for (int i = 0; i < count; ++i) {
-    if (!items[i])
-      continue;
-    if (wi > 0)
-      out[wi++] = ' ';
-    size_t len = strlen(items[i]);
-    memcpy(out + wi, items[i], len);
-    wi += len;
+  for (const char* p = text; *p; ++p) {
+    if (*p == '\\' || *p == '"')
+      out[wi++] = '\\';
+    out[wi++] = *p;
   }
   out[wi] = '\0';
   return out;
+}
+
+static bool project_write_file_if_changed(const char* path, const char* text, bool* changed) {
+  if (changed)
+    *changed = false;
+  if (!path || !text)
+    return false;
+
+  const char* current = file_exists(path) ? read_entire_file(path) : NULL;
+  if (current && strcmp(current, text) == 0)
+    return true;
+
+  if (!write_entire_file(path, text))
+    return false;
+
+  if (changed)
+    *changed = true;
+  return true;
+}
+
+static const char* project_cmake_path_text(const char* path) {
+  const char* norm = project_normalize_slashes(path);
+  if (!norm)
+    return NULL;
+  return project_escape_cmake_string(norm);
+}
+
+static bool project_text_has_wildcards(const char* text) {
+  return text && (strchr(text, '*') || strchr(text, '?'));
+}
+
+static const char* project_platform_id(os target_os, arch target_arch) {
+  char buf[64] = {0};
+  snprintf(buf, sizeof(buf), "%s-%s", OS_NAMES[target_os], ARCH_NAMES[target_arch]);
+  return arena_text(buf, strlen(buf));
+}
+
+static const char* project_default_platform_id(void) {
+  return project_platform_id((os)toolchain_detect_host_os(), (arch)toolchain_detect_host_arch());
+}
+
+static bool project_parse_platform_id(const char* platform, os* out_os, arch* out_arch) {
+  if (out_os)
+    *out_os = OS_MAX;
+  if (out_arch)
+    *out_arch = ARCH_MAX;
+  if (!platform || !platform[0])
+    return false;
+
+  const char* dash = strchr(platform, '-');
+  if (!dash || dash == platform || !dash[1])
+    return false;
+
+  char os_name[32] = {0};
+  size_t os_len = (size_t)(dash - platform);
+  if (os_len >= sizeof(os_name))
+    return false;
+  memcpy(os_name, platform, os_len);
+  os_name[os_len] = '\0';
+
+  const char* arch_name = dash + 1;
+  int osi = -1;
+  int ai = -1;
+  for (int i = 0; i < OS_MAX; ++i)
+    if (_stricmp(os_name, OS_NAMES[i]) == 0)
+      osi = i;
+  for (int i = 0; i < ARCH_MAX; ++i)
+    if (_stricmp(arch_name, ARCH_NAMES[i]) == 0)
+      ai = i;
+
+  if (osi < 0 || ai < 0)
+    return false;
+
+  if (out_os)
+    *out_os = (os)osi;
+  if (out_arch)
+    *out_arch = (arch)ai;
+  return true;
+}
+
+static const char* project_resolve_platform_id(const char* platform, toolchain* tc) {
+  const char* resolved = platform && platform[0] ? platform : project_default_platform_id();
+  os target_os = OS_MAX;
+  arch target_arch = ARCH_MAX;
+  if (!project_parse_platform_id(resolved, &target_os, &target_arch)) {
+    error("Invalid platform '%s'. Expected '<os>-<arch>'.", resolved);
+    return NULL;
+  }
+
+  if (tc && !tc->supported[target_os][target_arch]) {
+    error("Platform '%s' is not supported by the current toolchain.", resolved);
+    return NULL;
+  }
+
+  return resolved;
+}
+
+static const char* project_cmake_config_name(const char* config) {
+  if (!config || !config[0])
+    return "Debug";
+  if (_stricmp(config, "release") == 0 || _stricmp(config, "dist") == 0 || _stricmp(config, "shipping") == 0)
+    return "Release";
+  if (_stricmp(config, "minsizerel") == 0 || _stricmp(config, "minsize") == 0)
+    return "MinSizeRel";
+  if (_stricmp(config, "relwithdebinfo") == 0 || _stricmp(config, "profile") == 0)
+    return "RelWithDebInfo";
+  return "Debug";
+}
+
+static const char* project_cmake_arch_name(arch value) {
+  switch (value) {
+    case ARCH_X86:
+      return "Win32";
+    case ARCH_ARM64:
+      return "ARM64";
+    default:
+      return "x64";
+  }
+}
+
+static const char* project_cmake_c_standard(const char* stdver) {
+  if (!stdver || !stdver[0])
+    return NULL;
+  if (_stricmp(stdver, "c89") == 0 || _stricmp(stdver, "c90") == 0)
+    return "90";
+  if (_stricmp(stdver, "c99") == 0)
+    return "99";
+  if (_stricmp(stdver, "c11") == 0)
+    return "11";
+  if (_stricmp(stdver, "c17") == 0 || _stricmp(stdver, "c18") == 0)
+    return "17";
+  if (_stricmp(stdver, "c23") == 0)
+    return "23";
+  return NULL;
+}
+
+static const char* project_cmake_cpp_standard(const char* stdver) {
+  if (!stdver || !stdver[0])
+    return NULL;
+  if (_stricmp(stdver, "c++98") == 0 || _stricmp(stdver, "cpp98") == 0)
+    return "98";
+  if (_stricmp(stdver, "c++11") == 0 || _stricmp(stdver, "cpp11") == 0)
+    return "11";
+  if (_stricmp(stdver, "c++14") == 0 || _stricmp(stdver, "cpp14") == 0)
+    return "14";
+  if (_stricmp(stdver, "c++17") == 0 || _stricmp(stdver, "cpp17") == 0)
+    return "17";
+  if (_stricmp(stdver, "c++20") == 0 || _stricmp(stdver, "cpp20") == 0)
+    return "20";
+  if (_stricmp(stdver, "c++23") == 0 || _stricmp(stdver, "cpp23") == 0)
+    return "23";
+  return NULL;
+}
+
+static bool project_append_cmake_warning_level(project_textbuf* buf, const char* target_name, const char* scope, warning_level level) {
+  if (!buf || !target_name || level == WARNING_LEVEL_DEFAULT)
+    return true;
+
+  switch (level) {
+    case WARNING_LEVEL_NONE:
+      return project_textbuf_appendf(buf,
+                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/W0> $<$<CXX_COMPILER_ID:MSVC>:/W0> "
+                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-w> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-w>)\n",
+                                     target_name,
+                                     scope);
+    case WARNING_LEVEL_LOW:
+      return project_textbuf_appendf(buf,
+                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/W1> $<$<CXX_COMPILER_ID:MSVC>:/W1> "
+                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wall> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall>)\n",
+                                     target_name,
+                                     scope);
+    case WARNING_LEVEL_MEDIUM:
+      return project_textbuf_appendf(buf,
+                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/W2> $<$<CXX_COMPILER_ID:MSVC>:/W2> "
+                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wall> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall>)\n",
+                                     target_name,
+                                     scope);
+    case WARNING_LEVEL_HIGH:
+      return project_textbuf_appendf(buf,
+                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/W3> $<$<CXX_COMPILER_ID:MSVC>:/W3> "
+                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wall> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall>)\n",
+                                     target_name,
+                                     scope);
+    case WARNING_LEVEL_PEDANTIC:
+      return project_textbuf_appendf(buf,
+                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/W4> $<$<CXX_COMPILER_ID:MSVC>:/W4> "
+                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>)\n",
+                                     target_name,
+                                     scope);
+    default:
+      return true;
+  }
+}
+
+static bool project_append_cmake_opt_level(project_textbuf* buf, const char* target_name, const char* scope, opt_level level) {
+  if (!buf || !target_name || level == OPT_LEVEL_DEFAULT)
+    return true;
+
+  switch (level) {
+    case OPT_LEVEL_NONE:
+      return project_textbuf_appendf(buf,
+                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/Od> $<$<CXX_COMPILER_ID:MSVC>:/Od> "
+                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-O0> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O0>)\n",
+                                     target_name,
+                                     scope);
+    case OPT_LEVEL_DEBUG:
+      return project_textbuf_appendf(buf,
+                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/Od> $<$<CXX_COMPILER_ID:MSVC>:/Od> "
+                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Og> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Og>)\n",
+                                     target_name,
+                                     scope);
+    case OPT_LEVEL_SIZE:
+      return project_textbuf_appendf(buf,
+                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/O1> $<$<CXX_COMPILER_ID:MSVC>:/O1> "
+                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Os> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Os>)\n",
+                                     target_name,
+                                     scope);
+    case OPT_LEVEL_SPEED_1:
+      return project_textbuf_appendf(buf,
+                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/O1> $<$<CXX_COMPILER_ID:MSVC>:/O1> "
+                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-O1> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O1>)\n",
+                                     target_name,
+                                     scope);
+    case OPT_LEVEL_SPEED_2:
+      return project_textbuf_appendf(buf,
+                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/O2> $<$<CXX_COMPILER_ID:MSVC>:/O2> "
+                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-O2> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O2>)\n",
+                                     target_name,
+                                     scope);
+    case OPT_LEVEL_SPEED_3:
+    case OPT_LEVEL_AGGRESSIVE:
+      return project_textbuf_appendf(buf,
+                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/Ox> $<$<CXX_COMPILER_ID:MSVC>:/Ox> "
+                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-O3> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O3>)\n",
+                                     target_name,
+                                     scope);
+    default:
+      return true;
+  }
+}
+
+static const char* project_build_root_abs(const project* proj) {
+  return get_path_cwd(proj && proj->user_cfg.builddir ? proj->user_cfg.builddir : DEF_BUILD_DIR);
+}
+
+static const char* project_build_file_abs(const project* proj, const char* filename) {
+  return toolchain_join2(project_build_root_abs(proj), filename);
+}
+
+static const char* project_build_binary_dir_abs(const project* proj, const char* config, const char* platform) {
+  return get_path_cwd(project_resolved_dir(proj && proj->user_cfg.builddir ? proj->user_cfg.builddir : DEF_BUILD_DIR, config, platform));
+}
+
+static bool project_ensure_dir_exists(const char* path, const char* label) {
+  if (!path || !path[0])
+    return false;
+  if (dir_exists(path))
+    return true;
+  if (!dir_create(path)) {
+    error("Failed to create %s: %s", label ? label : "directory", path);
+    return false;
+  }
+  print("Created %s: %s", label ? label : "directory", path);
+  return true;
+}
+
+static const char* project_cmake_var_name(const char* text) {
+  char buf[256] = {0};
+  size_t wi = 0;
+  if (!text || !text[0])
+    text = "target";
+
+  for (size_t i = 0; text[i] && wi + 1 < sizeof(buf); ++i) {
+    unsigned char ch = (unsigned char)text[i];
+    buf[wi++] = isalnum(ch) ? (char)toupper(ch) : '_';
+  }
+  buf[wi] = '\0';
+  return arena_text(buf, strlen(buf));
+}
+
+static const char* project_cmake_define_name(const char* prefix, const char* text) {
+  char buf[256] = {0};
+  size_t wi = 0;
+  if (prefix && prefix[0]) {
+    for (size_t i = 0; prefix[i] && wi + 1 < sizeof(buf); ++i)
+      buf[wi++] = prefix[i];
+  }
+  if (wi > 0 && wi + 1 < sizeof(buf))
+    buf[wi++] = '_';
+  if (!text || !text[0])
+    text = "ITEM";
+  for (size_t i = 0; text[i] && wi + 1 < sizeof(buf); ++i) {
+    unsigned char ch = (unsigned char)text[i];
+    buf[wi++] = isalnum(ch) ? (char)toupper(ch) : '_';
+  }
+  buf[wi] = '\0';
+  return arena_text(buf, strlen(buf));
+}
+
+static bool project_append_cmake_toolchain_kv(project_textbuf* buf, const char* key, const char* value) {
+  if (!buf || !key || !key[0] || !value || !value[0])
+    return true;
+  const char* esc = project_cmake_path_text(value);
+  if (!esc)
+    return false;
+  return project_textbuf_appendf(buf, "set(%s \"%s\" CACHE STRING \"Generated by bbs\")\n", key, esc);
+}
+
+static bool project_append_cmake_target(project_textbuf* buf, const project* proj, const target* tgt, const char* bash_path) {
+  if (!buf || !tgt || !tgt->meta.id)
+    return false;
+
+  const char* target_name = project_escape_cmake_string(tgt->meta.id);
+  const char* output_name = project_escape_cmake_string(tgt->output ? tgt->output : tgt->meta.id);
+  const char* var_name = project_cmake_var_name(tgt->meta.id);
+  const char* scope = tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE";
+  if (!target_name || !output_name || !var_name)
+    return false;
+
+  if (!project_textbuf_appendf(buf, "set(BBS_%s_SOURCES)\n", var_name))
+    return false;
+  for (int i = 0; i < tgt->unit_c; ++i) {
+    const char* unit = tgt->units[i] ? tgt->units[i] : "";
+    const char* cmake_unit = project_cmake_path_text(unit);
+    if (!cmake_unit)
+      return false;
+    if (project_text_has_wildcards(unit)) {
+      if (!project_textbuf_appendf(buf,
+                                   "file(GLOB_RECURSE BBS_%s_GLOB_%d CONFIGURE_DEPENDS \"${BBS_PROJECT_ROOT}/%s\")\n"
+                                   "list(APPEND BBS_%s_SOURCES ${BBS_%s_GLOB_%d})\n",
+                                   var_name,
+                                   i,
+                                   cmake_unit,
+                                   var_name,
+                                   var_name,
+                                   i))
+        return false;
+    } else {
+      if (!project_textbuf_appendf(buf, "list(APPEND BBS_%s_SOURCES \"${BBS_PROJECT_ROOT}/%s\")\n", var_name, cmake_unit))
+        return false;
+    }
+  }
+  if (!project_textbuf_append(buf, "\n"))
+    return false;
+
+  switch (tgt->type) {
+    case TARGET_TYPE_CONSOLE:
+    case TARGET_TYPE_TEST:
+      if (!project_textbuf_appendf(buf, "add_executable(%s ${BBS_%s_SOURCES})\n", target_name, var_name))
+        return false;
+      break;
+    case TARGET_TYPE_CONSOLELESS:
+      if (!project_textbuf_appendf(buf,
+                                   "add_executable(%s ${BBS_%s_SOURCES})\n"
+                                   "set_target_properties(%s PROPERTIES WIN32_EXECUTABLE ON)\n",
+                                   target_name,
+                                   var_name,
+                                   target_name))
+        return false;
+      break;
+    case TARGET_TYPE_HEADER_LIB:
+      if (!project_textbuf_appendf(buf,
+                                   "add_library(%s INTERFACE)\n"
+                                   "target_sources(%s INTERFACE ${BBS_%s_SOURCES})\n",
+                                   target_name,
+                                   target_name,
+                                   var_name))
+        return false;
+      break;
+    case TARGET_TYPE_STATIC_LIB:
+      if (!project_textbuf_appendf(buf, "add_library(%s STATIC ${BBS_%s_SOURCES})\n", target_name, var_name))
+        return false;
+      break;
+    case TARGET_TYPE_DYN_LIB:
+      if (!project_textbuf_appendf(buf, "add_library(%s SHARED ${BBS_%s_SOURCES})\n", target_name, var_name))
+        return false;
+      break;
+    case TARGET_TYPE_OBJ_LIB:
+      if (!project_textbuf_appendf(buf, "add_library(%s OBJECT ${BBS_%s_SOURCES})\n", target_name, var_name))
+        return false;
+      break;
+    case TARGET_TYPE_DRIVER:
+      if (!project_textbuf_appendf(buf, "add_library(%s MODULE ${BBS_%s_SOURCES})\n", target_name, var_name))
+        return false;
+      break;
+    default:
+      error("Unsupported target type '%s'.", project_target_type_name(tgt->type));
+      return false;
+  }
+
+  if (tgt->type != TARGET_TYPE_HEADER_LIB) {
+    if (!project_textbuf_appendf(buf,
+                                 "set_target_properties(%s PROPERTIES OUTPUT_NAME \"%s\" "
+                                 "RUNTIME_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}/bin/$<CONFIG>\" "
+                                 "LIBRARY_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}/lib/$<CONFIG>\" "
+                                 "ARCHIVE_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}/lib/$<CONFIG>\")\n",
+                                 target_name,
+                                 output_name))
+      return false;
+  } else {
+    if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES OUTPUT_NAME \"%s\")\n", target_name, output_name))
+      return false;
+  }
+
+  if (tgt->lang == LANG_CPP) {
+    if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES LINKER_LANGUAGE CXX)\n", target_name))
+      return false;
+  }
+
+  if (tgt->lang == LANG_C && tgt->stdver) {
+    const char* std = project_cmake_c_standard(tgt->stdver);
+    if (std)
+      if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES C_STANDARD %s C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)\n", target_name, std))
+        return false;
+  }
+  if (tgt->lang == LANG_CPP && tgt->stdver) {
+    const char* std = project_cmake_cpp_standard(tgt->stdver);
+    if (std)
+      if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES CXX_STANDARD %s CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)\n", target_name, std))
+        return false;
+  }
+
+  if (tgt->type != TARGET_TYPE_HEADER_LIB && tgt->runtime != STDLIB_NONE) {
+    const char* runtime = tgt->runtime == STDLIB_STATIC ? "MultiThreaded$<$<CONFIG:Debug>:Debug>" : "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL";
+    if (!project_textbuf_appendf(buf, "set_property(TARGET %s PROPERTY MSVC_RUNTIME_LIBRARY \"%s\")\n", target_name, runtime))
+      return false;
+  }
+
+  for (int i = 0; i < tgt->include_dir_c; ++i) {
+    const char* dir = project_cmake_path_text(tgt->include_dirs[i] ? tgt->include_dirs[i] : "");
+    if (!dir)
+      return false;
+    if (!project_textbuf_appendf(buf, "target_include_directories(%s %s \"${BBS_PROJECT_ROOT}/%s\")\n", target_name, scope, dir))
+      return false;
+  }
+  for (int i = 0; i < tgt->link_dir_c; ++i) {
+    const char* dir = project_cmake_path_text(tgt->link_dirs[i] ? tgt->link_dirs[i] : "");
+    if (!dir)
+      return false;
+    if (!project_textbuf_appendf(buf, "target_link_directories(%s %s \"${BBS_PROJECT_ROOT}/%s\")\n", target_name, scope, dir))
+      return false;
+  }
+  for (int i = 0; i < tgt->link_libs_count; ++i) {
+    const char* lib = project_escape_cmake_string(tgt->link_libs[i] ? tgt->link_libs[i] : "");
+    if (!lib)
+      return false;
+    if (!project_textbuf_appendf(buf, "target_link_libraries(%s %s \"%s\")\n", target_name, scope, lib))
+      return false;
+  }
+
+  if (tgt->defines && tgt->defines[0]) {
+    const char* defs = project_escape_cmake_string(tgt->defines);
+    if (!defs)
+      return false;
+    if (!project_textbuf_appendf(buf,
+                                 "set(BBS_%s_DEFINES \"%s\")\n"
+                                 "separate_arguments(BBS_%s_DEFINES NATIVE_COMMAND \"${BBS_%s_DEFINES}\")\n"
+                                 "target_compile_definitions(%s %s ${BBS_%s_DEFINES})\n",
+                                 var_name,
+                                 defs,
+                                 var_name,
+                                 var_name,
+                                 target_name,
+                                 scope,
+                                 var_name))
+      return false;
+  }
+
+  if (tgt->additional_compile_args && tgt->additional_compile_args[0]) {
+    const char* args = project_escape_cmake_string(tgt->additional_compile_args);
+    if (!args)
+      return false;
+    if (!project_textbuf_appendf(buf,
+                                 "set(BBS_%s_COMPILE_ARGS \"%s\")\n"
+                                 "separate_arguments(BBS_%s_COMPILE_ARGS NATIVE_COMMAND \"${BBS_%s_COMPILE_ARGS}\")\n"
+                                 "target_compile_options(%s %s ${BBS_%s_COMPILE_ARGS})\n",
+                                 var_name,
+                                 args,
+                                 var_name,
+                                 var_name,
+                                 target_name,
+                                 scope,
+                                 var_name))
+      return false;
+  }
+
+  if (tgt->additional_link_args && tgt->additional_link_args[0] && tgt->type != TARGET_TYPE_HEADER_LIB) {
+    const char* args = project_escape_cmake_string(tgt->additional_link_args);
+    if (!args)
+      return false;
+    if (!project_textbuf_appendf(buf,
+                                 "set(BBS_%s_LINK_ARGS \"%s\")\n"
+                                 "separate_arguments(BBS_%s_LINK_ARGS NATIVE_COMMAND \"${BBS_%s_LINK_ARGS}\")\n"
+                                 "target_link_options(%s PRIVATE ${BBS_%s_LINK_ARGS})\n",
+                                 var_name,
+                                 args,
+                                 var_name,
+                                 var_name,
+                                 target_name,
+                                 var_name))
+      return false;
+  }
+
+  if (tgt->warnings_as_errors)
+    if (!project_textbuf_appendf(buf,
+                                 "target_compile_options(%s %s "
+                                 "$<$<C_COMPILER_ID:MSVC>:/WX> $<$<CXX_COMPILER_ID:MSVC>:/WX> "
+                                 "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Werror> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Werror>)\n",
+                                 target_name,
+                                 scope))
+      return false;
+
+  if (!project_append_cmake_warning_level(buf, target_name, scope, tgt->warning_level))
+    return false;
+  if (!project_append_cmake_opt_level(buf, target_name, scope, tgt->opt_level))
+    return false;
+
+  if (tgt->stack_size > 0 && tgt->type != TARGET_TYPE_HEADER_LIB)
+    if (!project_textbuf_appendf(buf,
+                                 "target_link_options(%s PRIVATE $<$<C_COMPILER_ID:MSVC>:/STACK:%zu> $<$<CXX_COMPILER_ID:MSVC>:/STACK:%zu>)\n",
+                                 target_name,
+                                 tgt->stack_size,
+                                 tgt->stack_size))
+      return false;
+
+  if (proj && proj->meta.id && proj->meta.id[0]) {
+    const char* proj_id = project_escape_cmake_string(proj->meta.id);
+    if (!proj_id)
+      return false;
+    if (!project_textbuf_appendf(buf, "target_compile_definitions(%s %s BBS_PROJECT_ID=\"%s\")\n", target_name, scope, proj_id))
+      return false;
+  }
+
+  if (tgt->pre_build_cmd_c > 0 && tgt->type != TARGET_TYPE_HEADER_LIB) {
+    for (int i = 0; i < tgt->pre_build_cmd_c; ++i) {
+      const char* cmd = project_escape_cmake_string(tgt->pre_build_cmds[i] ? tgt->pre_build_cmds[i] : "");
+      const char* bash = project_cmake_path_text(bash_path);
+      if (!cmd || !bash)
+        return false;
+      if (!project_textbuf_appendf(buf,
+                                   "add_custom_command(TARGET %s PRE_BUILD COMMAND \"%s\" -lc \"%s\" VERBATIM)\n",
+                                   target_name,
+                                   bash,
+                                   cmd))
+        return false;
+    }
+  }
+  if (tgt->post_build_cmd_c > 0 && tgt->type != TARGET_TYPE_HEADER_LIB) {
+    for (int i = 0; i < tgt->post_build_cmd_c; ++i) {
+      const char* cmd = project_escape_cmake_string(tgt->post_build_cmds[i] ? tgt->post_build_cmds[i] : "");
+      const char* bash = project_cmake_path_text(bash_path);
+      if (!cmd || !bash)
+        return false;
+      if (!project_textbuf_appendf(buf,
+                                   "add_custom_command(TARGET %s POST_BUILD COMMAND \"%s\" -lc \"%s\" VERBATIM)\n",
+                                   target_name,
+                                   bash,
+                                   cmd))
+        return false;
+    }
+  }
+
+  if (tgt->testing && project_target_is_runnable(tgt)) {
+    if (!project_textbuf_appendf(buf, "add_test(NAME \"%s\" COMMAND $<TARGET_FILE:%s>", target_name, target_name))
+      return false;
+    for (int i = 0; i < tgt->test_arg_c; ++i) {
+      const char* arg = project_escape_cmake_string(tgt->test_args[i] ? tgt->test_args[i] : "");
+      if (!arg)
+        return false;
+      if (!project_textbuf_appendf(buf, " \"%s\"", arg))
+        return false;
+    }
+    if (!project_textbuf_append(buf, ")\n"))
+      return false;
+  }
+
+  return project_textbuf_append(buf, "\n");
+}
+
+static bool project_generate_cmakelists(const project* proj, toolchain* tc, bool* changed) {
+  if (!proj || !tc)
+    return false;
+
+  const char* path = project_build_file_abs(proj, "CMakeLists.txt");
+  const char* proj_id = project_escape_cmake_string(proj->meta.id ? proj->meta.id : "bbs_project");
+  const char* bash_path = toolchain_get_host_tool_path(tc, "bash");
+  if (!path || !proj_id)
+    return false;
+
+  project_textbuf buf = {0};
+  bool has_cpp = false;
+  for (int i = 0; i < proj->target_c; ++i)
+    if (proj->targets[i].lang == LANG_CPP)
+      has_cpp = true;
+
+  if (!project_textbuf_append(&buf, "cmake_minimum_required(VERSION 3.20)\n\n"))
+    return false;
+  if (!project_textbuf_appendf(&buf, "project(%s LANGUAGES C%s)\n\n", proj_id, has_cpp ? " CXX" : ""))
+    return false;
+  if (!project_textbuf_append(&buf,
+                              "set(BBS_PROJECT_ROOT \"${CMAKE_CURRENT_SOURCE_DIR}/..\")\n"
+                              "include(CTest)\n"
+                              "enable_testing()\n\n"))
+    return false;
+
+  for (int i = 0; i < proj->target_c; ++i)
+    if (!project_append_cmake_target(&buf, proj, &proj->targets[i], bash_path))
+      return false;
+
+  if (!project_write_file_if_changed(path, buf.data ? buf.data : "", changed)) {
+    error("Failed to write CMakeLists.txt: %s", path);
+    free(buf.data);
+    return false;
+  }
+
+  free(buf.data);
+  return true;
+}
+
+static bool project_generate_toolchain_file(const project* proj, toolchain* tc, bool* changed) {
+  if (!proj || !tc)
+    return false;
+
+  const char* path = project_build_file_abs(proj, "bbs-toolchain.cmake");
+  if (!path)
+    return false;
+
+  project_textbuf buf = {0};
+  if (!project_textbuf_append(&buf,
+                              "if(NOT DEFINED BBS_TARGET_OS)\n"
+                              "  set(BBS_TARGET_OS \"windows\")\n"
+                              "endif()\n"
+                              "if(NOT DEFINED BBS_TARGET_ARCH)\n"
+                              "  set(BBS_TARGET_ARCH \"x86_64\")\n"
+                              "endif()\n\n"
+                              "if(BBS_TARGET_OS STREQUAL \"windows\")\n"
+                              "  set(CMAKE_SYSTEM_NAME Windows)\n"
+                              "elseif(BBS_TARGET_OS STREQUAL \"linux\")\n"
+                              "  set(CMAKE_SYSTEM_NAME Linux)\n"
+                              "elseif(BBS_TARGET_OS STREQUAL \"macos\")\n"
+                              "  set(CMAKE_SYSTEM_NAME Darwin)\n"
+                              "endif()\n\n"
+                              "if(BBS_TARGET_ARCH STREQUAL \"x86_64\")\n"
+                              "  set(CMAKE_SYSTEM_PROCESSOR x86_64)\n"
+                              "elseif(BBS_TARGET_ARCH STREQUAL \"x86\")\n"
+                              "  set(CMAKE_SYSTEM_PROCESSOR x86)\n"
+                              "elseif(BBS_TARGET_ARCH STREQUAL \"arm64\")\n"
+                              "  set(CMAKE_SYSTEM_PROCESSOR arm64)\n"
+                              "endif()\n\n"))
+    return false;
+
+  toolchain_env* env = toolchain_host_env(tc, false);
+  if (env) {
+    for (int i = 0; i < env->tool_c; ++i) {
+      const char* key = project_cmake_define_name("BBS_TOOL", env->tools[i].id);
+      if (!project_append_cmake_toolchain_kv(&buf, key, env->tools[i].path))
+        return false;
+    }
+    for (int i = 0; i < env->sdk_c; ++i) {
+      const char* name = env->sdks[i].name;
+      const char* prefix = project_cmake_define_name("BBS_SDK", name);
+      if (!project_append_cmake_toolchain_kv(&buf, project_cmake_define_name(prefix, "ROOT"), env->sdks[i].base_path))
+        return false;
+      if (!project_append_cmake_toolchain_kv(&buf, project_cmake_define_name(prefix, "INCLUDE"), env->sdks[i].inc_path))
+        return false;
+      if (!project_append_cmake_toolchain_kv(&buf, project_cmake_define_name(prefix, "SOURCE"), env->sdks[i].src_path))
+        return false;
+      if (!project_append_cmake_toolchain_kv(&buf, project_cmake_define_name(prefix, "LIB"), env->sdks[i].lib_path))
+        return false;
+      if (!project_append_cmake_toolchain_kv(&buf, project_cmake_define_name(prefix, "BIN"), env->sdks[i].bin_path))
+        return false;
+
+      if (name && _stricmp(name, "vulkan_sdk") == 0)
+        if (!project_append_cmake_toolchain_kv(&buf, "VULKAN_SDK", env->sdks[i].base_path))
+          return false;
+      if (name && _stricmp(name, "windows_sdk") == 0)
+        if (!project_append_cmake_toolchain_kv(&buf, "CMAKE_WINDOWS_KITS_10_DIR", env->sdks[i].base_path))
+          return false;
+    }
+  }
+
+  if (!project_write_file_if_changed(path, buf.data ? buf.data : "", changed)) {
+    error("Failed to write toolchain file: %s", path);
+    free(buf.data);
+    return false;
+  }
+
+  free(buf.data);
+  return true;
+}
+
+static bool project_generate_presets(const project* proj, toolchain* tc, bool* changed) {
+  if (!proj || !tc)
+    return false;
+
+  const char* path = project_build_file_abs(proj, "CMakePresets.json");
+  if (!path)
+    return false;
+
+  project_textbuf buf = {0};
+  if (!project_textbuf_append(&buf,
+                              "{\n"
+                              "  \"version\": 6,\n"
+                              "  \"cmakeMinimumRequired\": {\n"
+                              "    \"major\": 3,\n"
+                              "    \"minor\": 20,\n"
+                              "    \"patch\": 0\n"
+                              "  },\n"
+                              "  \"configurePresets\": [\n"))
+    return false;
+
+  bool first = true;
+  for (int ci = 0; ci < proj->config_c; ++ci) {
+    for (int osi = 0; osi < OS_MAX; ++osi) {
+      for (int ai = 0; ai < ARCH_MAX; ++ai) {
+        if (!tc->supported[osi][ai])
+          continue;
+
+        const char* platform_id = project_platform_id((os)osi, (arch)ai);
+        const char* build_dir = project_escape_cmake_string(project_resolved_dir("${sourceDir}", proj->configs[ci], platform_id));
+        const char* preset = project_escape_cmake_string(project_build_dir_name(proj->configs[ci], platform_id));
+        const char* cmake_cfg = project_cmake_config_name(proj->configs[ci]);
+        const char* cmake_arch = project_cmake_arch_name((arch)ai);
+        if (!platform_id || !build_dir || !preset || !cmake_cfg || !cmake_arch)
+          return false;
+
+        if (!first && !project_textbuf_append(&buf, ",\n"))
+          return false;
+        first = false;
+
+        if (!project_textbuf_appendf(&buf,
+                                     "    {\n"
+                                     "      \"name\": \"%s\",\n"
+                                     "      \"binaryDir\": \"%s\",\n"
+                                     "      \"architecture\": {\n"
+                                     "        \"value\": \"%s\",\n"
+                                     "        \"strategy\": \"set\"\n"
+                                     "      },\n"
+                                     "      \"cacheVariables\": {\n"
+                                     "        \"CMAKE_TOOLCHAIN_FILE\": \"${sourceDir}/bbs-toolchain.cmake\",\n"
+                                     "        \"BBS_TARGET_OS\": \"%s\",\n"
+                                     "        \"BBS_TARGET_ARCH\": \"%s\"\n"
+                                     "      }\n"
+                                     "    }",
+                                     preset,
+                                     build_dir,
+                                     cmake_arch,
+                                     OS_NAMES[osi],
+                                     ARCH_NAMES[ai]))
+          return false;
+      }
+    }
+  }
+
+  if (!project_textbuf_append(&buf, "\n  ],\n  \"buildPresets\": [\n"))
+    return false;
+
+  first = true;
+  for (int ci = 0; ci < proj->config_c; ++ci) {
+    for (int osi = 0; osi < OS_MAX; ++osi) {
+      for (int ai = 0; ai < ARCH_MAX; ++ai) {
+        if (!tc->supported[osi][ai])
+          continue;
+
+        const char* platform_id = project_platform_id((os)osi, (arch)ai);
+        const char* preset = project_escape_cmake_string(project_build_dir_name(proj->configs[ci], platform_id));
+        const char* cmake_cfg = project_cmake_config_name(proj->configs[ci]);
+        if (!preset)
+          return false;
+        if (!first && !project_textbuf_append(&buf, ",\n"))
+          return false;
+        first = false;
+        if (!project_textbuf_appendf(&buf,
+                                     "    {\n"
+                                     "      \"name\": \"build-%s\",\n"
+                                     "      \"configurePreset\": \"%s\",\n"
+                                     "      \"configuration\": \"%s\"\n"
+                                     "    }",
+                                     preset,
+                                     preset,
+                                     cmake_cfg))
+          return false;
+      }
+    }
+  }
+
+  if (!project_textbuf_append(&buf, "\n  ],\n  \"testPresets\": [\n"))
+    return false;
+
+  first = true;
+  for (int ci = 0; ci < proj->config_c; ++ci) {
+    for (int osi = 0; osi < OS_MAX; ++osi) {
+      for (int ai = 0; ai < ARCH_MAX; ++ai) {
+        if (!tc->supported[osi][ai])
+          continue;
+
+        const char* platform_id = project_platform_id((os)osi, (arch)ai);
+        const char* preset = project_escape_cmake_string(project_build_dir_name(proj->configs[ci], platform_id));
+        const char* cmake_cfg = project_cmake_config_name(proj->configs[ci]);
+        if (!preset)
+          return false;
+        if (!first && !project_textbuf_append(&buf, ",\n"))
+          return false;
+        first = false;
+        if (!project_textbuf_appendf(&buf,
+                                     "    {\n"
+                                     "      \"name\": \"test-%s\",\n"
+                                     "      \"configurePreset\": \"%s\",\n"
+                                     "      \"configuration\": \"%s\",\n"
+                                     "      \"output\": {\n"
+                                     "        \"outputOnFailure\": true\n"
+                                     "      }\n"
+                                     "    }",
+                                     preset,
+                                     preset,
+                                     cmake_cfg))
+          return false;
+      }
+    }
+  }
+
+  if (!project_textbuf_append(&buf, "\n  ]\n}\n"))
+    return false;
+
+  if (!project_write_file_if_changed(path, buf.data ? buf.data : "", changed)) {
+    error("Failed to write CMakePresets.json: %s", path);
+    free(buf.data);
+    return false;
+  }
+
+  free(buf.data);
+  return true;
+}
+
+static bool project_prepare_backend(const project* proj, toolchain* tc, const char* platform, bool ensure_output_dir, bool* backend_changed) {
+  if (backend_changed)
+    *backend_changed = false;
+  if (!proj) {
+    error("Project is not initialized.");
+    return false;
+  }
+  if (!tc) {
+    error("Toolchain is not initialized.");
+    print("Run 'bbs update --init-toolchain' first.");
+    return false;
+  }
+
+  const char* build_root = project_build_root_abs(proj);
+  const char* dist_root = get_path_cwd(proj->user_cfg.distdir);
+  if (!project_ensure_dir_exists(build_root, "build directory"))
+    return false;
+  if (!project_ensure_dir_exists(dist_root, "dist directory"))
+    return false;
+
+  if (ensure_output_dir) {
+    const char* build_dir = project_build_binary_dir_abs(proj, proj->active_config, platform);
+    if (!project_ensure_dir_exists(build_dir, "build output directory"))
+      return false;
+  }
+
+  bool toolchain_changed = false;
+  bool cmakelists_changed = false;
+  bool presets_changed = false;
+  if (!project_generate_toolchain_file(proj, tc, &toolchain_changed) ||
+      !project_generate_cmakelists(proj, tc, &cmakelists_changed) ||
+      !project_generate_presets(proj, tc, &presets_changed))
+    return false;
+
+  if (backend_changed)
+    *backend_changed = toolchain_changed || cmakelists_changed || presets_changed;
+  return true;
+}
+
+static bool project_needs_configure(const project* proj, const char* platform, bool backend_changed) {
+  if (!proj)
+    return true;
+  if (backend_changed)
+    return true;
+
+  const char* build_dir = project_build_binary_dir_abs(proj, proj->active_config, platform);
+  const char* cache_path = toolchain_join2(build_dir, "CMakeCache.txt");
+  if (!file_exists(cache_path))
+    return true;
+
+  platform_timestamp cache_ts = file_timestamp(cache_path);
+  if (cache_ts == 0)
+    return true;
+
+  const char* project_path = get_path_cwd("project.bbs");
+  if (file_timestamp(project_path) > cache_ts)
+    return true;
+  if (file_timestamp(project_build_file_abs(proj, "CMakeLists.txt")) > cache_ts)
+    return true;
+  if (file_timestamp(project_build_file_abs(proj, "CMakePresets.json")) > cache_ts)
+    return true;
+  if (file_timestamp(project_build_file_abs(proj, "bbs-toolchain.cmake")) > cache_ts)
+    return true;
+  return false;
+}
+
+static bool project_run_cmake_preset(toolchain* tc, const project* proj, const char* preset) {
+  const char* cmake = toolchain_get_host_tool_path(tc, "cmake");
+  const char* build_root = project_build_root_abs(proj);
+  char script[4096] = {0};
+  if (!cmake || !cmake[0]) {
+    error("cmake was not found in the current toolchain.");
+    return false;
+  }
+  snprintf(script, sizeof(script), "\"%s\" --preset \"%s\"", cmake, preset);
+  return toolchain_run_bash(tc, build_root, script) == 0;
+}
+
+static bool project_run_cmake_build(toolchain* tc, const project* proj, const char* preset, const char* target_name) {
+  const char* cmake = toolchain_get_host_tool_path(tc, "cmake");
+  const char* build_root = project_build_root_abs(proj);
+  char script[4096] = {0};
+  if (!cmake || !cmake[0]) {
+    error("cmake was not found in the current toolchain.");
+    return false;
+  }
+  if (target_name && target_name[0])
+    snprintf(script, sizeof(script), "\"%s\" --build --preset \"build-%s\" --target \"%s\"", cmake, preset, target_name);
+  else
+    snprintf(script, sizeof(script), "\"%s\" --build --preset \"build-%s\"", cmake, preset);
+  return toolchain_run_bash(tc, build_root, script) == 0;
+}
+
+static bool project_run_ctest_preset(toolchain* tc, const project* proj, const char* preset, const char* test_name) {
+  const char* ctest = toolchain_get_host_tool_path(tc, "ctest");
+  const char* build_root = project_build_root_abs(proj);
+  char script[4096] = {0};
+  if (!ctest || !ctest[0]) {
+    error("ctest was not found in the current toolchain.");
+    return false;
+  }
+  if (test_name && test_name[0])
+    snprintf(script, sizeof(script), "\"%s\" --preset \"test-%s\" -R \"%s\"", ctest, preset, test_name);
+  else
+    snprintf(script, sizeof(script), "\"%s\" --preset \"test-%s\"", ctest, preset);
+  return toolchain_run_bash(tc, build_root, script) == 0;
+}
+
+static const char* project_target_executable_abs(const project* proj, const target* tgt, const char* platform) {
+  if (!proj || !tgt)
+    return NULL;
+
+  const char* build_dir = project_build_binary_dir_abs(proj, proj->active_config, platform);
+  const char* bin_dir = toolchain_join2(build_dir, "bin");
+  bin_dir = toolchain_join2(bin_dir, project_cmake_config_name(proj->active_config));
+
+  char file_name[512] = {0};
+  os target_os = OS_MAX;
+  arch target_arch = ARCH_MAX;
+  if (!project_parse_platform_id(platform, &target_os, &target_arch))
+    return NULL;
+  snprintf(file_name, sizeof(file_name), "%s%s", tgt->output ? tgt->output : tgt->meta.id, target_os == OS_WINDOWS ? ".exe" : "");
+  return toolchain_join2(bin_dir, file_name);
 }
 
 static int project_find_target_index(const project* proj, const char* name) {
@@ -1482,62 +2540,114 @@ static void project_print_target_line(const char* action, const target* tgt) {
 }
 
 static bool project_build(const char* target_name, const char* platform, const char* config, toolchain* tc) {
-  (void)tc;
   project proj = {0};
   if (!project_load_config(config, &proj))
     return false;
 
-  project_print_action_header("Build", &proj, platform);
-  print("Build dir: %s", project_resolved_dir(proj.user_cfg.builddir, proj.active_config, platform));
+  const char* platform_id = project_resolve_platform_id(platform, tc);
+  if (!platform_id)
+    return false;
+  bool backend_changed = false;
+  if (!project_prepare_backend(&proj, tc, platform_id, true, &backend_changed))
+    return false;
+
+  const char* preset = project_build_dir_name(proj.active_config, platform_id);
+
+  project_print_action_header("Build", &proj, platform_id);
+  print("Build dir: %s", project_resolved_dir(proj.user_cfg.builddir, proj.active_config, platform_id));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
       return false;
     project_print_target_line("Build", &proj.targets[idx]);
-    return true;
+    if (!project_run_cmake_preset(tc, &proj, preset))
+      return false;
+    return project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id);
   }
 
-  if (proj.target_c == 1) {
+  if (proj.target_c == 1)
     project_print_target_line("Build", &proj.targets[0]);
-    return true;
+  else {
+    print("Build targets:");
+    for (int i = 0; i < proj.target_c; ++i)
+      print("  - %s (%s)", proj.targets[i].meta.id ? proj.targets[i].meta.id : "", project_target_type_name(proj.targets[i].type));
   }
 
-  print("Build targets:");
-  for (int i = 0; i < proj.target_c; ++i)
-    print("  - %s (%s)", proj.targets[i].meta.id ? proj.targets[i].meta.id : "", project_target_type_name(proj.targets[i].type));
-  return true;
+  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset))
+    return false;
+  return project_run_cmake_build(tc, &proj, preset, NULL);
 }
 
 static bool project_run(const char* target_name, const char* platform, const char* config, toolchain* tc) {
-  (void)tc;
   project proj = {0};
   if (!project_load_config(config, &proj))
     return false;
 
-  project_print_action_header("Run", &proj, platform);
+  const char* platform_id = project_resolve_platform_id(platform, tc);
+  if (!platform_id)
+    return false;
+  os target_os = OS_MAX;
+  arch target_arch = ARCH_MAX;
+  if (!project_parse_platform_id(platform_id, &target_os, &target_arch))
+    return false;
+  if (target_os != tc->p_os || target_arch != tc->p_arch) {
+    error("Run only supports host-native outputs. Requested '%s' but host is '%s'.", platform_id, project_default_platform_id());
+    return false;
+  }
+
+  bool backend_changed = false;
+  if (!project_prepare_backend(&proj, tc, platform_id, true, &backend_changed))
+    return false;
+
+  const char* preset = project_build_dir_name(proj.active_config, platform_id);
+
+  project_print_action_header("Run", &proj, platform_id);
+  int idx = -1;
   if (target_name && target_name[0]) {
-    int idx = project_find_target_index(&proj, target_name);
+    idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
       return false;
     if (!project_target_is_runnable(&proj.targets[idx])) {
       error("Target '%s' is not runnable.", target_name);
       return false;
     }
-    project_print_target_line("Run", &proj.targets[idx]);
-    return true;
-  }
-
-  int idx = project_find_single_runnable_target(&proj);
-  if (idx == -2) {
-    error("Multiple runnable targets found. Use '-t target'.");
-    return false;
-  }
-  if (idx < 0) {
-    error("No runnable targets found.");
-    return false;
+  } else {
+    idx = project_find_single_runnable_target(&proj);
+    if (idx == -2) {
+      error("Multiple runnable targets found. Use '-t target'.");
+      return false;
+    }
+    if (idx < 0) {
+      error("No runnable targets found.");
+      return false;
+    }
   }
 
   project_print_target_line("Run", &proj.targets[idx]);
+  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset))
+    return false;
+  if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id))
+    return false;
+
+  for (int i = 0; i < proj.targets[idx].pre_run_cmd_c; ++i)
+    if (toolchain_run_bash(tc, NULL, proj.targets[idx].pre_run_cmds[i]) != 0)
+      return false;
+
+  const char* exe_path = project_target_executable_abs(&proj, &proj.targets[idx], platform_id);
+  if (!exe_path || !file_exists(exe_path)) {
+    error("Built executable not found: %s", exe_path ? exe_path : "");
+    return false;
+  }
+
+  char script[4096] = {0};
+  snprintf(script, sizeof(script), "\"%s\"", exe_path);
+  if (toolchain_run_bash(tc, NULL, script) != 0)
+    return false;
+
+  for (int i = 0; i < proj.targets[idx].post_run_cmd_c; ++i)
+    if (toolchain_run_bash(tc, NULL, proj.targets[idx].post_run_cmds[i]) != 0)
+      return false;
+
   return true;
 }
 
@@ -1551,16 +2661,18 @@ static bool project_test(const char* test_name, const char* target_name, const c
     return false;
   }
 
-  const char* ctest = toolchain_get_host_tool_path(tc, "ctest");
-  if (!ctest || !ctest[0]) {
-    error("ctest was not found in the current toolchain.");
+  const char* platform_id = project_resolve_platform_id(platform, tc);
+  if (!platform_id)
     return false;
-  }
+  bool backend_changed = false;
+  if (!project_prepare_backend(&proj, tc, platform_id, true, &backend_changed))
+    return false;
 
-  project_print_action_header("Test", &proj, platform);
-  const char* build_dir = project_resolved_dir(proj.user_cfg.builddir, proj.active_config, platform);
+  const char* preset = project_build_dir_name(proj.active_config, platform_id);
+
+  project_print_action_header("Test", &proj, platform_id);
+  const char* build_dir = project_resolved_dir(proj.user_cfg.builddir, proj.active_config, platform_id);
   print("Test dir: %s", build_dir);
-  print("Test runner: %s", ctest);
   if (test_name && test_name[0])
     print("Test name: %s", test_name);
 
@@ -1573,17 +2685,11 @@ static bool project_test(const char* test_name, const char* target_name, const c
       return false;
     }
     project_print_target_line("Test", &proj.targets[idx]);
-    const char* extra_args = project_join_args(proj.targets[idx].test_args, proj.targets[idx].test_arg_c);
-    char script[4096] = {0};
-    if (test_name && test_name[0] && extra_args && extra_args[0])
-      snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" -R \"%s\" %s", ctest, build_dir, test_name, extra_args);
-    else if (test_name && test_name[0])
-      snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" -R \"%s\"", ctest, build_dir, test_name);
-    else if (extra_args && extra_args[0])
-      snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" %s", ctest, build_dir, extra_args);
-    else
-      snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\"", ctest, build_dir);
-    return toolchain_run_bash(tc, NULL, script) == 0;
+    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset))
+      return false;
+    if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id))
+      return false;
+    return project_run_ctest_preset(tc, &proj, preset, test_name);
   }
 
   int idx = project_find_single_test_target(&proj);
@@ -1597,17 +2703,11 @@ static bool project_test(const char* test_name, const char* target_name, const c
   }
 
   project_print_target_line("Test", &proj.targets[idx]);
-  const char* extra_args = project_join_args(proj.targets[idx].test_args, proj.targets[idx].test_arg_c);
-  char script[4096] = {0};
-  if (test_name && test_name[0] && extra_args && extra_args[0])
-    snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" -R \"%s\" %s", ctest, build_dir, test_name, extra_args);
-  else if (test_name && test_name[0])
-    snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" -R \"%s\"", ctest, build_dir, test_name);
-  else if (extra_args && extra_args[0])
-    snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\" %s", ctest, build_dir, extra_args);
-  else
-    snprintf(script, sizeof(script), "\"%s\" --test-dir \"%s\"", ctest, build_dir);
-  return toolchain_run_bash(tc, NULL, script) == 0;
+  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset))
+    return false;
+  if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id))
+    return false;
+  return project_run_ctest_preset(tc, &proj, preset, test_name);
 }
 
 static bool project_dist(const char* target_name, const char* platform, const char* config, toolchain* tc) {
@@ -1637,36 +2737,16 @@ static bool project_dist(const char* target_name, const char* platform, const ch
   return true;
 }
 
-static bool project_update(void) {
+static bool project_update(toolchain* tc) {
   bool ok = true;
 
   project proj = {0};
   if (!project_load(&proj))
     return false;
 
-  const char* build_dir = get_path_cwd(proj.user_cfg.builddir);
-  if (!dir_exists(build_dir)) {
-    if (!dir_create(build_dir)) {
-      error("Failed to create build directory: %s", build_dir);
-      ok = false;
-    } else {
-      print("Created build directory: %s", build_dir);
-    }
-  }
-
-  const char* dist_dir = get_path_cwd(proj.user_cfg.distdir);
-  if (!dir_exists(dist_dir)) {
-    if (!dir_create(dist_dir)) {
-      error("Failed to create dist directory: %s", dist_dir);
-      ok = false;
-    } else {
-      print("Created dist directory: %s", dist_dir);
-    }
-  }
-
-  if (ok) {
+  ok = project_prepare_backend(&proj, tc, NULL, false, NULL);
+  if (ok)
     print("Project update completed for %d target(s).", proj.target_c);
-  }
 
   return ok;
 }

@@ -69,9 +69,7 @@ static void release(void) {
 static void print(const char* fmt, ...) {
   va_list list;
   va_start(list, fmt);
-  fputs(LABEL_INFO, stdout);
   vfprintf(stdout, fmt, list);
-  fputs(ANSI_RESET, stdout);
   fputc('\n', stdout);
   va_end(list);
 }
@@ -92,6 +90,47 @@ static void warn(const char* fmt, ...) {
   fputs(ANSI_RESET, stderr);
   fputc('\n', stderr);
   va_end(list);
+}
+
+static platform_timestamp now_ms(void) {
+  return platform_now_ms();
+}
+
+static void format_elapsed_ms(platform_timestamp elapsed_ms, char* out, size_t out_dim) {
+  if (!out || out_dim == 0)
+    return;
+
+  if (elapsed_ms < 1000) {
+    snprintf(out, out_dim, "%llums", elapsed_ms);
+    return;
+  }
+
+  if (elapsed_ms < 60000) {
+    unsigned long long whole = elapsed_ms / 1000ULL;
+    unsigned long long frac = (elapsed_ms % 1000ULL) / 10ULL;
+    if (frac > 0)
+      snprintf(out, out_dim, "%llu.%02llus", whole, frac);
+    else
+      snprintf(out, out_dim, "%llus", whole);
+    return;
+  }
+
+  unsigned long long total_sec = elapsed_ms / 1000ULL;
+  unsigned long long min = total_sec / 60ULL;
+  unsigned long long sec = total_sec % 60ULL;
+  snprintf(out, out_dim, "%llumin %llus", min, sec);
+}
+
+static void print_done_elapsed(platform_timestamp started_ms) {
+  char elapsed[64] = {0};
+  platform_timestamp finished_ms = now_ms();
+  platform_timestamp delta = finished_ms >= started_ms ? finished_ms - started_ms : 0;
+  format_elapsed_ms(delta, elapsed, sizeof(elapsed));
+
+  fputs(LABEL_DONE, stdout);
+  fprintf(stdout, "Command executed in %s", elapsed);
+  fputs(ANSI_RESET, stdout);
+  fputc('\n', stdout);
 }
 
 static bool cmdline_empty(cmdline* cl) {
@@ -1271,6 +1310,10 @@ static const char* get_path_exe(const char* filename) {
 
 static bool file_exists(const char* path) {
   return platform_file_exists(path);
+}
+
+static platform_timestamp file_timestamp(const char* path) {
+  return platform_file_timestamp(path);
 }
 
 static bool file_delete(const char* path) {

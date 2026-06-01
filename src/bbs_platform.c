@@ -109,6 +109,41 @@ static bool platform_file_delete(const char* path) {
 #endif
 }
 
+static platform_timestamp platform_file_timestamp(const char* path) {
+  if (!path || !path[0])
+    return 0;
+
+#if defined(_WIN32)
+  WIN32_FILE_ATTRIBUTE_DATA data;
+  if (!GetFileAttributesExA(path, GetFileExInfoStandard, &data))
+    return 0;
+  ULARGE_INTEGER ts;
+  ts.LowPart = data.ftLastWriteTime.dwLowDateTime;
+  ts.HighPart = data.ftLastWriteTime.dwHighDateTime;
+  return (platform_timestamp)ts.QuadPart;
+#else
+  struct stat st;
+  if (stat(path, &st) != 0)
+    return 0;
+#  if defined(__APPLE__)
+  return (platform_timestamp)st.st_mtimespec.tv_sec * 1000000000ULL + (platform_timestamp)st.st_mtimespec.tv_nsec;
+#  else
+  return (platform_timestamp)st.st_mtim.tv_sec * 1000000000ULL + (platform_timestamp)st.st_mtim.tv_nsec;
+#  endif
+#endif
+}
+
+static platform_timestamp platform_now_ms(void) {
+#if defined(_WIN32)
+  return (platform_timestamp)GetTickCount64();
+#else
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    return 0;
+  return (platform_timestamp)ts.tv_sec * 1000ULL + (platform_timestamp)(ts.tv_nsec / 1000000ULL);
+#endif
+}
+
 static bool platform_dir_exists(const char* path) {
   if (!path || !path[0])
     return false;

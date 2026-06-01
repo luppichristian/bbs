@@ -1,0 +1,36 @@
+project(
+  configs(
+    debug
+  )
+
+  meta(
+    id(hello_world)
+    name("Hello World Example")
+    ver(0.1.0)
+  )
+
+  targets(
+    console(
+      output(hello_world)
+      include_dirs(
+        src
+      )
+      units(
+        src/main.c
+        src/app.c
+      )
+    )
+
+    test(
+      output(hello_world_test)
+      testing(true)
+      include_dirs(
+        src
+      )
+      units(
+        tests/test_main.c
+        src/app.c
+      )
+    )
+  )
+)
