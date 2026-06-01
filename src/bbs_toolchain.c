@@ -1,12 +1,7 @@
 #pragma once
 #include "bbs_toolchain.h"
-#include "bbs_cmd.h"
 #include "bbs_base.c"
-
-#if !defined(_WIN32)
-#  include <errno.h>
-#  include <sys/wait.h>
-#endif
+#include "bbs_cmd.h"
 
 static bool toolchain_tool_exists(toolchain* tc, tool_type type, const char* path);
 static const char* toolchain_probe_version(const char* exe_path, const char* arg_a, const char* arg_b, const char* pat_a, const char* pat_b);
@@ -44,31 +39,23 @@ static void toolchain_discover_tool(toolchain* tc, const tool_discover_strat* s)
 static const tool_discover_strat* toolchain_find_discover_strat(const char* id);
 static const char* toolchain_ensure_host_tool_path(toolchain* tc, const char* id);
 static bool toolchain_is_usable_host_bash_path(const char* path);
-#if defined(_WIN32)
-static char* toolchain_quote_windows_arg(const char* arg);
-static int toolchain_run_bash_windows(const char* bash_path, const char* workdir, const char* script);
-#else
-static int toolchain_run_bash_posix(const char* bash_path, const char* workdir, const char* script);
-#endif
 
 static arch toolchain_detect_host_arch(void) {
-#if defined(_M_ARM64) || defined(__aarch64__)
-  return ARCH_ARM64;
-#elif defined(_M_IX86) || defined(__i386__)
-  return ARCH_X86;
-#else
+  const char* name = platform_host_arch_name();
+  if (_stricmp(name, "arm64") == 0)
+    return ARCH_ARM64;
+  if (_stricmp(name, "x86") == 0)
+    return ARCH_X86;
   return ARCH_X86_64;
-#endif
 }
 
 static os toolchain_detect_host_os(void) {
-#if defined(_WIN32)
-  return OS_WINDOWS;
-#elif defined(__APPLE__)
-  return OS_MACOS;
-#else
+  const char* name = platform_host_os_name();
+  if (_stricmp(name, "windows") == 0)
+    return OS_WINDOWS;
+  if (_stricmp(name, "macos") == 0)
+    return OS_MACOS;
   return OS_LINUX;
-#endif
 }
 
 typedef struct {
@@ -151,24 +138,7 @@ static const char* toolchain_get_bash_path(toolchain* tc) {
 }
 
 static bool toolchain_is_usable_host_bash_path(const char* path) {
-  if (!path || !path[0])
-    return false;
-
-#if defined(_WIN32)
-  const char* norm = toolchain_norm_path(path);
-  if (norm) {
-    if (_stricmp(norm, "C:/Windows/System32/bash.exe") == 0)
-      return false;
-
-    const char* suffix = "/microsoft/windowsapps/bash.exe";
-    size_t suffix_len = strlen(suffix);
-    size_t norm_len = strlen(norm);
-    if (norm_len >= suffix_len && _stricmp(norm + norm_len - suffix_len, suffix) == 0)
-      return false;
-  }
-#endif
-
-  return true;
+  return platform_is_usable_bash_path(path);
 }
 
 static void toolchain_set_platform_support_source(toolchain* tc, os target_os, arch target_arch, const char* source) {
@@ -513,11 +483,13 @@ static void toolchain_refresh_runtime_support(toolchain* tc) {
 }
 
 static int toolchain_collect_wsl_distros(const char** distros, int max_distros) {
-#if defined(_WIN32)
   if (!distros || max_distros <= 0)
     return 0;
 
-  const char* cmd = "reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss /s /v DistributionName 2>nul";
+  const char* cmd = platform_wsl_distro_query_command();
+  if (!cmd)
+    return 0;
+
   const char* lines[64] = {0};
   int line_c = toolchain_run_collect_lines(cmd, lines, _countof(lines));
   int out = 0;
@@ -539,11 +511,6 @@ static int toolchain_collect_wsl_distros(const char** distros, int max_distros) 
     distros[out++] = arena_text(reg_sz, strlen(reg_sz));
   }
   return out;
-#else
-  (void)distros;
-  (void)max_distros;
-  return 0;
-#endif
 }
 
 static arch toolchain_arch_from_text(const char* text) {
@@ -569,7 +536,6 @@ static int toolchain_wsl_collect_lines(const char* wsl_cmd, const char* distro, 
 }
 
 static void toolchain_discover_wsl_env(toolchain* tc, const char* distro) {
-#if defined(_WIN32)
   if (!tc)
     return;
 
@@ -672,10 +638,6 @@ static void toolchain_discover_wsl_env(toolchain* tc, const char* distro) {
   toolchain_sort_tool_array(env.tools, env.tool_c);
   toolchain_sort_sdk_array(env.sdks, env.sdk_c);
   toolchain_add_or_replace_env(tc, &env);
-#else
-  (void)tc;
-  (void)distro;
-#endif
 }
 
 static void toolchain_capture_host_docker_probe(toolchain* tc) {
@@ -713,11 +675,8 @@ static void toolchain_discover_extra_envs(toolchain* tc) {
   if (!tc)
     return;
 
-#if defined(_WIN32)
-  toolchain_discover_wsl_env(tc, "");
-#else
-  (void)tc;
-#endif
+  if (platform_supports_wsl())
+    toolchain_discover_wsl_env(tc, "");
 }
 
 static void toolchain_enable_docker_buildx_linux_support(toolchain* tc) {
@@ -824,25 +783,7 @@ static bool toolchain_path_name_matches(const char* path, const char* exe_name) 
   if (!base || !base[0])
     return false;
 
-#if defined(_WIN32)
-  if (_stricmp(base, exe_name) == 0)
-    return strchr(exe_name, '.') != NULL;
-
-  if (!strchr(exe_name, '.')) {
-    char cand[128] = {0};
-    const char* exts[] = {".exe"};
-    for (size_t i = 0; i < _countof(exts); ++i) {
-      snprintf(cand, sizeof(cand), "%s%s", exe_name, exts[i]);
-      if (_stricmp(base, cand) == 0)
-        return true;
-    }
-  }
-#else
-  if (_stricmp(base, exe_name) == 0)
-    return true;
-#endif
-
-  return false;
+  return platform_executable_name_matches(base, exe_name);
 }
 
 static int toolchain_parse_version_part(const char** text) {
@@ -979,7 +920,6 @@ static tool_type toolchain_type_from_path_and_id(const char* path, const char* i
 }
 
 static const char* toolchain_probe_file_version(const char* path) {
-#if defined(_WIN32)
   if (!path || !path[0])
     return NULL;
 
@@ -988,12 +928,9 @@ static const char* toolchain_probe_file_version(const char* path) {
     return NULL;
 
   char cmd[2048] = {0};
-  snprintf(cmd, sizeof(cmd), "powershell -NoProfile -Command \"(Get-Item '%s').VersionInfo.FileVersion\" 2>nul", path);
+  if (!platform_build_file_version_command(cmd, sizeof(cmd), path))
+    return NULL;
   return toolchain_run_extract_version(cmd);
-#else
-  (void)path;
-  return NULL;
-#endif
 }
 
 static void toolchain_set_tool(tool* out, const char* id, tool_type type, const char* path, const char* version) {
@@ -1228,21 +1165,13 @@ static bool toolchain_run_first_line(const char* cmd, char* out, size_t out_dim)
   if (!cmd || !out || out_dim == 0)
     return false;
 
-#if defined(_WIN32)
-  FILE* pipe = _popen(cmd, "r");
-#else
-  FILE* pipe = popen(cmd, "r");
-#endif
+  FILE* pipe = platform_popen_read(cmd);
   if (!pipe)
     return false;
 
   out[0] = '\0';
   bool ok = fgets(out, (int)out_dim, pipe) != NULL;
-#if defined(_WIN32)
-  _pclose(pipe);
-#else
-  pclose(pipe);
-#endif
+  platform_pclose_read(pipe);
   return ok;
 }
 
@@ -1250,11 +1179,7 @@ static int toolchain_run_collect_lines(const char* cmd, const char** lines, int 
   if (!cmd || !cmd[0] || !lines || max_lines <= 0)
     return 0;
 
-#if defined(_WIN32)
-  FILE* pipe = _popen(cmd, "r");
-#else
-  FILE* pipe = popen(cmd, "r");
-#endif
+  FILE* pipe = platform_popen_read(cmd);
   if (!pipe)
     return 0;
 
@@ -1266,11 +1191,7 @@ static int toolchain_run_collect_lines(const char* cmd, const char** lines, int 
       lines[count++] = arena_text(trimmed, strlen(trimmed));
   }
 
-#if defined(_WIN32)
-  _pclose(pipe);
-#else
-  pclose(pipe);
-#endif
+  platform_pclose_read(pipe);
   return count;
 }
 
@@ -1278,11 +1199,7 @@ static const char* toolchain_run_extract_version(const char* cmd) {
   if (!cmd || !cmd[0])
     return NULL;
 
-#if defined(_WIN32)
-  FILE* pipe = _popen(cmd, "r");
-#else
-  FILE* pipe = popen(cmd, "r");
-#endif
+  FILE* pipe = platform_popen_read(cmd);
   if (!pipe)
     return NULL;
 
@@ -1299,11 +1216,7 @@ static const char* toolchain_run_extract_version(const char* cmd) {
       break;
   }
 
-#if defined(_WIN32)
-  _pclose(pipe);
-#else
-  pclose(pipe);
-#endif
+  platform_pclose_read(pipe);
   return found;
 }
 
@@ -1311,11 +1224,7 @@ static const char* toolchain_run_extract_version_pat(const char* cmd, const char
   if (!cmd || !cmd[0])
     return NULL;
 
-#if defined(_WIN32)
-  FILE* pipe = _popen(cmd, "r");
-#else
-  FILE* pipe = popen(cmd, "r");
-#endif
+  FILE* pipe = platform_popen_read(cmd);
   if (!pipe)
     return NULL;
 
@@ -1332,11 +1241,7 @@ static const char* toolchain_run_extract_version_pat(const char* cmd, const char
       break;
   }
 
-#if defined(_WIN32)
-  _pclose(pipe);
-#else
-  pclose(pipe);
-#endif
+  platform_pclose_read(pipe);
   return found;
 }
 
@@ -1345,11 +1250,8 @@ static const char* toolchain_find_with_system(const char* name) {
     return NULL;
 
   char cmd[512] = {0};
-#if defined(_WIN32)
-  snprintf(cmd, sizeof(cmd), "where %s 2>nul", name);
-#else
-  snprintf(cmd, sizeof(cmd), "which %s 2>/dev/null", name);
-#endif
+  if (!platform_build_find_command(cmd, sizeof(cmd), name, false))
+    return NULL;
 
   char line[_MAX_PATH * 2] = {0};
   if (!toolchain_run_first_line(cmd, line, sizeof(line)))
@@ -1366,11 +1268,8 @@ static int toolchain_collect_with_system(const char* name, const char** matches,
     return 0;
 
   char cmd[512] = {0};
-#if defined(_WIN32)
-  snprintf(cmd, sizeof(cmd), "where %s 2>nul", name);
-#else
-  snprintf(cmd, sizeof(cmd), "which -a %s 2>/dev/null", name);
-#endif
+  if (!platform_build_find_command(cmd, sizeof(cmd), name, true))
+    return 0;
 
   const char* lines[64] = {0};
   int count = toolchain_run_collect_lines(cmd, lines, _countof(lines));
@@ -1382,129 +1281,6 @@ static int toolchain_collect_with_system(const char* name, const char** matches,
 
   return out;
 }
-
-#if defined(_WIN32)
-static char* toolchain_quote_windows_arg(const char* arg) {
-  const char* src = arg ? arg : "";
-  size_t len = strlen(src);
-  size_t max_len = len * 2 + 3;
-  char* out = push(max_len);
-  if (!out)
-    return NULL;
-
-  size_t wi = 0;
-  out[wi++] = '"';
-  size_t backslashes = 0;
-  for (size_t i = 0; i < len; ++i) {
-    char ch = src[i];
-    if (ch == '\\') {
-      ++backslashes;
-      continue;
-    }
-
-    if (ch == '"') {
-      while (backslashes > 0) {
-        out[wi++] = '\\';
-        --backslashes;
-      }
-      out[wi++] = '\\';
-      out[wi++] = '"';
-      backslashes = 0;
-      continue;
-    }
-
-    while (backslashes > 0) {
-      out[wi++] = '\\';
-      --backslashes;
-    }
-    backslashes = 0;
-    out[wi++] = ch;
-  }
-
-  while (backslashes > 0) {
-    out[wi++] = '\\';
-    out[wi++] = '\\';
-    --backslashes;
-  }
-
-  out[wi++] = '"';
-  out[wi] = '\0';
-  return out;
-}
-
-static int toolchain_run_bash_windows(const char* bash_path, const char* workdir, const char* script) {
-  if (!bash_path || !bash_path[0] || !script || !script[0])
-    return -1;
-
-  char* quoted_exe = toolchain_quote_windows_arg(bash_path);
-  char* quoted_script = toolchain_quote_windows_arg(script);
-  if (!quoted_exe || !quoted_script)
-    return -1;
-
-  size_t cmd_len = strlen(quoted_exe) + strlen(" -lc ") + strlen(quoted_script) + 1;
-  char* cmdline = push(cmd_len);
-  if (!cmdline)
-    return -1;
-  snprintf(cmdline, cmd_len, "%s -lc %s", quoted_exe, quoted_script);
-
-  STARTUPINFOA si;
-  PROCESS_INFORMATION pi;
-  memset(&si, 0, sizeof(si));
-  memset(&pi, 0, sizeof(pi));
-  si.cb = sizeof(si);
-
-  BOOL ok = CreateProcessA(bash_path,
-                           cmdline,
-                           NULL,
-                           NULL,
-                           TRUE,
-                           0,
-                           NULL,
-                           workdir && workdir[0] ? workdir : NULL,
-                           &si,
-                           &pi);
-  if (!ok)
-    return -(int)GetLastError();
-
-  WaitForSingleObject(pi.hProcess, INFINITE);
-  DWORD exit_code = 0;
-  if (!GetExitCodeProcess(pi.hProcess, &exit_code))
-    exit_code = 1;
-
-  CloseHandle(pi.hThread);
-  CloseHandle(pi.hProcess);
-  return (int)exit_code;
-}
-#else
-static int toolchain_run_bash_posix(const char* bash_path, const char* workdir, const char* script) {
-  if (!bash_path || !bash_path[0] || !script || !script[0])
-    return -1;
-
-  pid_t pid = fork();
-  if (pid < 0)
-    return -errno;
-
-  if (pid == 0) {
-    if (workdir && workdir[0] && chdir(workdir) != 0)
-      _exit(126);
-    execl(bash_path, bash_path, "-lc", script, (char*)NULL);
-    _exit(errno == ENOENT ? 127 : 126);
-  }
-
-  int status = 0;
-  while (waitpid(pid, &status, 0) < 0) {
-    if (errno != EINTR)
-      return -errno;
-  }
-
-  if (WIFEXITED(status))
-    return WEXITSTATUS(status);
-  if (WIFSIGNALED(status))
-    return 128 + WTERMSIG(status);
-  return 1;
-}
-#endif
-
 static int toolchain_run_bash(toolchain* tc, const char* workdir, const char* script) {
   if (!tc) {
     error("Cannot run shell command without an initialized toolchain.");
@@ -1521,11 +1297,7 @@ static int toolchain_run_bash(toolchain* tc, const char* workdir, const char* sc
     return -1;
   }
 
-#if defined(_WIN32)
-  return toolchain_run_bash_windows(bash_path, workdir, script);
-#else
-  return toolchain_run_bash_posix(bash_path, workdir, script);
-#endif
+  return platform_run_bash(bash_path, workdir, script);
 }
 
 static const char* toolchain_join2(const char* a, const char* b) {
@@ -1591,19 +1363,14 @@ static const char* toolchain_find_in_hint_dirs(const char* exe_name, const char*
 
     const char* dir = toolchain_trim_line(next);
     if (dir[0]) {
-      const char* full = toolchain_join2(dir, exe_name);
-#if defined(_WIN32)
-      if (file_exists(full))
-        return arena_text(full, strlen(full));
-      if (!strchr(exe_name, '.')) {
-        const char* full_exe = toolchain_join2(dir, toolchain_append_text(exe_name, ".exe"));
-        if (file_exists(full_exe))
-          return arena_text(full_exe, strlen(full_exe));
+      const char* candidates[2] = {0};
+      char storage[2][128] = {{0}};
+      int candidate_c = platform_executable_candidates(exe_name, candidates, storage, _countof(storage));
+      for (int i = 0; i < candidate_c; ++i) {
+        const char* full = toolchain_join2(dir, candidates[i]);
+        if (file_exists(full))
+          return arena_text(full, strlen(full));
       }
-#else
-      if (file_exists(full))
-        return arena_text(full, strlen(full));
-#endif
     }
 
     if (!semi)
@@ -1637,17 +1404,14 @@ static int toolchain_collect_in_hint_dirs(const char* exe_name, const char* hint
 
     const char* dir = toolchain_trim_line(next);
     if (dir[0]) {
-      const char* full = toolchain_join2(dir, exe_name);
-      if (full && file_exists(full))
-        toolchain_push_unique_path(matches, &out, max_matches, full);
-
-#if defined(_WIN32)
-      if (!strchr(exe_name, '.')) {
-        const char* full_exe = toolchain_join2(dir, toolchain_append_text(exe_name, ".exe"));
-        if (full_exe && file_exists(full_exe))
-          toolchain_push_unique_path(matches, &out, max_matches, full_exe);
+      const char* candidates[2] = {0};
+      char storage[2][128] = {{0}};
+      int candidate_c = platform_executable_candidates(exe_name, candidates, storage, _countof(storage));
+      for (int i = 0; i < candidate_c; ++i) {
+        const char* full = toolchain_join2(dir, candidates[i]);
+        if (full && file_exists(full))
+          toolchain_push_unique_path(matches, &out, max_matches, full);
       }
-#endif
     }
 
     if (!semi || out >= max_matches)
@@ -1659,18 +1423,15 @@ static int toolchain_collect_in_hint_dirs(const char* exe_name, const char* hint
 }
 
 static const char* toolchain_find_with_vswhere_vcvarsall(void) {
-#if defined(_WIN32)
-  const char* pf86 = getenv("ProgramFiles(x86)");
-  if (!pf86 || !pf86[0])
-    return NULL;
-
   char vswhere[_MAX_PATH] = {0};
-  snprintf(vswhere, sizeof(vswhere), "%s\\Microsoft Visual Studio\\Installer\\vswhere.exe", pf86);
+  if (!platform_find_vswhere(vswhere, sizeof(vswhere)))
+    return NULL;
   if (!file_exists(vswhere))
     return NULL;
 
   char cmd[2048] = {0};
-  snprintf(cmd, sizeof(cmd), "\"%s\" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>nul", vswhere);
+  if (!platform_build_vswhere_install_command(cmd, sizeof(cmd), vswhere))
+    return NULL;
 
   char line[1024] = {0};
   if (!toolchain_run_first_line(cmd, line, sizeof(line)))
@@ -1682,23 +1443,19 @@ static const char* toolchain_find_with_vswhere_vcvarsall(void) {
   const char* vcvars = toolchain_join2(install, "VC/Auxiliary/Build/vcvarsall.bat");
   if (vcvars && file_exists(vcvars))
     return toolchain_norm_path(vcvars);
-#endif
   return NULL;
 }
 
 static const char* toolchain_find_msvc_root_with_vswhere(void) {
-#if defined(_WIN32)
-  const char* pf86 = getenv("ProgramFiles(x86)");
-  if (!pf86 || !pf86[0])
-    return NULL;
-
   char vswhere[_MAX_PATH] = {0};
-  snprintf(vswhere, sizeof(vswhere), "%s\\Microsoft Visual Studio\\Installer\\vswhere.exe", pf86);
+  if (!platform_find_vswhere(vswhere, sizeof(vswhere)))
+    return NULL;
   if (!file_exists(vswhere))
     return NULL;
 
   char cmd[2048] = {0};
-  snprintf(cmd, sizeof(cmd), "\"%s\" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>nul", vswhere);
+  if (!platform_build_vswhere_install_command(cmd, sizeof(cmd), vswhere))
+    return NULL;
 
   char line[1024] = {0};
   if (!toolchain_run_first_line(cmd, line, sizeof(line)))
@@ -1712,7 +1469,8 @@ static const char* toolchain_find_msvc_root_with_vswhere(void) {
     return NULL;
 
   char list_cmd[2048] = {0};
-  snprintf(list_cmd, sizeof(list_cmd), "dir /b /ad \"%s\" 2>nul", tools);
+  if (!platform_build_dir_list_command(list_cmd, sizeof(list_cmd), tools))
+    return NULL;
   if (!toolchain_run_first_line(list_cmd, line, sizeof(line)))
     return NULL;
 
@@ -1721,8 +1479,6 @@ static const char* toolchain_find_msvc_root_with_vswhere(void) {
     return NULL;
 
   return toolchain_norm_path(toolchain_join2(tools, ver_dir));
-#endif
-  return NULL;
 }
 
 static int toolchain_collect_deep_tool_paths(const char* exe_name, const char* roots, const char** matches, int max_matches) {
@@ -1749,30 +1505,14 @@ static int toolchain_collect_deep_tool_paths(const char* exe_name, const char* r
     if (root[0] && dir_exists(root)) {
       char cmd[4096] = {0};
       const char* lines[64] = {0};
-#if defined(_WIN32)
-      snprintf(cmd, sizeof(cmd), "where /r \"%s\" %s 2>nul", root, exe_name);
-      int line_c = toolchain_run_collect_lines(cmd, lines, _countof(lines));
-      for (int i = 0; i < line_c && out < max_matches; ++i) {
-        if (file_exists(lines[i]) && toolchain_path_name_matches(lines[i], exe_name))
-          toolchain_push_unique_path(matches, &out, max_matches, lines[i]);
-      }
+      if (!platform_build_recursive_find_command(cmd, sizeof(cmd), root, exe_name))
+        break;
 
-      if (out < max_matches && !strstr(exe_name, ".exe")) {
-        snprintf(cmd, sizeof(cmd), "where /r \"%s\" %s.exe 2>nul", root, exe_name);
-        line_c = toolchain_run_collect_lines(cmd, lines, _countof(lines));
-        for (int i = 0; i < line_c && out < max_matches; ++i) {
-          if (file_exists(lines[i]) && toolchain_path_name_matches(lines[i], exe_name))
-            toolchain_push_unique_path(matches, &out, max_matches, lines[i]);
-        }
-      }
-#else
-      snprintf(cmd, sizeof(cmd), "find \"%s\" -type f \\( -name '%s' -o -name '%s.exe' \\) 2>/dev/null", root, exe_name, exe_name);
       int line_c = toolchain_run_collect_lines(cmd, lines, _countof(lines));
       for (int i = 0; i < line_c && out < max_matches; ++i) {
         if (file_exists(lines[i]) && toolchain_path_name_matches(lines[i], exe_name))
           toolchain_push_unique_path(matches, &out, max_matches, lines[i]);
       }
-#endif
     }
 
     if (!semi || out >= max_matches)
@@ -1815,15 +1555,7 @@ static bool toolchain_host_matches_os(os target_os) {
   if (target_os == OS_MAX)
     return true;
 
-#if defined(_WIN32)
-  return target_os == OS_WINDOWS;
-#elif defined(__linux__)
-  return target_os == OS_LINUX;
-#elif defined(__APPLE__)
-  return target_os == OS_MACOS;
-#else
-  return false;
-#endif
+  return _stricmp(platform_host_os_name(), OS_NAMES[target_os]) == 0;
 }
 
 static bool toolchain_tool_exists(toolchain* tc, tool_type type, const char* path) {
@@ -2053,41 +1785,9 @@ static int toolchain_collect_path_matches(const char* pattern, const char** matc
     return 0;
 
   char cmd[2048] = {0};
-  bool recursive = strstr(pattern, "**") != NULL;
-#if defined(_WIN32)
-  if (recursive) {
-    char win_pat[2048] = {0};
-    strncpy(win_pat, pattern, sizeof(win_pat) - 1);
-    while (strstr(win_pat, "**")) {
-      char* star = strstr(win_pat, "**");
-      star[0] = '*';
-      memmove(star + 1, star + 2, strlen(star + 2) + 1);
-    }
-    snprintf(cmd, sizeof(cmd), "dir /s /b \"%s\" 2>nul", win_pat);
-  } else {
-    snprintf(cmd, sizeof(cmd), dirs_only ? "for /d %%i in (\"%s\") do @echo %%~fi" : "for %%i in (\"%s\") do @echo %%~fi", pattern);
-  }
-#else
-  if (recursive) {
-    const char* wildcard = strchr(pattern, '*');
-    size_t prefix_len = wildcard ? (size_t)(wildcard - pattern) : strlen(pattern);
-    while (prefix_len > 0 && pattern[prefix_len - 1] != '/' && pattern[prefix_len - 1] != '\\')
-      --prefix_len;
+  if (!platform_build_pattern_match_command(cmd, sizeof(cmd), pattern, dirs_only))
+    return 0;
 
-    char root[1024] = {0};
-    if (prefix_len == 0) {
-      strcpy(root, ".");
-    } else {
-      if (prefix_len >= sizeof(root))
-        prefix_len = sizeof(root) - 1;
-      memcpy(root, pattern, prefix_len);
-      root[prefix_len] = '\0';
-    }
-    snprintf(cmd, sizeof(cmd), "find \"%s\" %s-path '%s' 2>/dev/null", root, dirs_only ? "-type d " : "", pattern);
-  } else {
-    snprintf(cmd, sizeof(cmd), "ls -d %s 2>/dev/null", pattern);
-  }
-#endif
   const char* lines[64] = {0};
   int line_c = toolchain_run_collect_lines(cmd, lines, _countof(lines));
   int out = 0;
@@ -2554,10 +2254,10 @@ static toolchain* toolchain_read(node* tree) {
       node* id_n = node_get_child(it, "id");
       node* provider_n = node_get_child(it, "provider");
       node* name_n = node_get_child(it, "name");
-    node* host_n = node_get_child(it, "host");
-    env->id = id_n ? node_get_str(id_n) : NULL;
-    env->provider = provider_n ? node_get_str(provider_n) : NULL;
-    env->name = name_n ? node_get_str(name_n) : NULL;
+      node* host_n = node_get_child(it, "host");
+      env->id = id_n ? node_get_str(id_n) : NULL;
+      env->provider = provider_n ? node_get_str(provider_n) : NULL;
+      env->name = name_n ? node_get_str(name_n) : NULL;
       env->p_os = OS_WINDOWS;
       env->p_arch = ARCH_X86_64;
 
@@ -2685,16 +2385,46 @@ static node* toolchain_write(toolchain* tc) {
         toolchain_push_child_back(probes_n, node_create_str("native_arch", env->probe_native_arch));
         has_probes = true;
       }
-      if (env->probe_has_native_gcc) { toolchain_push_child_back(probes_n, node_create_bool("has_native_gcc", true)); has_probes = true; }
-      if (env->probe_has_native_gpp) { toolchain_push_child_back(probes_n, node_create_bool("has_native_gpp", true)); has_probes = true; }
-      if (env->probe_has_x86_64_gcc) { toolchain_push_child_back(probes_n, node_create_bool("has_x86_64_gcc", true)); has_probes = true; }
-      if (env->probe_has_x86_64_gpp) { toolchain_push_child_back(probes_n, node_create_bool("has_x86_64_gpp", true)); has_probes = true; }
-      if (env->probe_has_x86_c_multilib) { toolchain_push_child_back(probes_n, node_create_bool("has_x86_c_multilib", true)); has_probes = true; }
-      if (env->probe_has_x86_cpp_multilib) { toolchain_push_child_back(probes_n, node_create_bool("has_x86_cpp_multilib", true)); has_probes = true; }
-      if (env->probe_has_arm64_gcc) { toolchain_push_child_back(probes_n, node_create_bool("has_arm64_gcc", true)); has_probes = true; }
-      if (env->probe_has_arm64_gpp) { toolchain_push_child_back(probes_n, node_create_bool("has_arm64_gpp", true)); has_probes = true; }
-      if (env->probe_has_arm64_c_cross) { toolchain_push_child_back(probes_n, node_create_bool("has_arm64_c_cross", true)); has_probes = true; }
-      if (env->probe_has_arm64_cpp_cross) { toolchain_push_child_back(probes_n, node_create_bool("has_arm64_cpp_cross", true)); has_probes = true; }
+      if (env->probe_has_native_gcc) {
+        toolchain_push_child_back(probes_n, node_create_bool("has_native_gcc", true));
+        has_probes = true;
+      }
+      if (env->probe_has_native_gpp) {
+        toolchain_push_child_back(probes_n, node_create_bool("has_native_gpp", true));
+        has_probes = true;
+      }
+      if (env->probe_has_x86_64_gcc) {
+        toolchain_push_child_back(probes_n, node_create_bool("has_x86_64_gcc", true));
+        has_probes = true;
+      }
+      if (env->probe_has_x86_64_gpp) {
+        toolchain_push_child_back(probes_n, node_create_bool("has_x86_64_gpp", true));
+        has_probes = true;
+      }
+      if (env->probe_has_x86_c_multilib) {
+        toolchain_push_child_back(probes_n, node_create_bool("has_x86_c_multilib", true));
+        has_probes = true;
+      }
+      if (env->probe_has_x86_cpp_multilib) {
+        toolchain_push_child_back(probes_n, node_create_bool("has_x86_cpp_multilib", true));
+        has_probes = true;
+      }
+      if (env->probe_has_arm64_gcc) {
+        toolchain_push_child_back(probes_n, node_create_bool("has_arm64_gcc", true));
+        has_probes = true;
+      }
+      if (env->probe_has_arm64_gpp) {
+        toolchain_push_child_back(probes_n, node_create_bool("has_arm64_gpp", true));
+        has_probes = true;
+      }
+      if (env->probe_has_arm64_c_cross) {
+        toolchain_push_child_back(probes_n, node_create_bool("has_arm64_c_cross", true));
+        has_probes = true;
+      }
+      if (env->probe_has_arm64_cpp_cross) {
+        toolchain_push_child_back(probes_n, node_create_bool("has_arm64_cpp_cross", true));
+        has_probes = true;
+      }
       if (env->probe_docker_buildx_platforms) {
         toolchain_push_child_back(probes_n, node_create_str("docker_buildx_platforms", env->probe_docker_buildx_platforms));
         has_probes = true;

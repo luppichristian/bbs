@@ -1,12 +1,13 @@
 #pragma once
 
+#include "bbs_platform.h"
+
 #define VER_MAJOR 0
 #define VER_MINOR 0
 
 #define ARENA_DIM (1024 * 1024 * 4)  // 4 megabytes, sizeof each block
 
 #include <ctype.h>
-#include <direct.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>

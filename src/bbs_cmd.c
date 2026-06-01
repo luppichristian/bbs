@@ -17,6 +17,57 @@ static void print_indented_text(const char* text) {
   printf("\n");
 }
 
+static const char* cfg_loc_label(cfg_loc loc) {
+  switch (loc) {
+    case CFG_LOC_CWD:
+      return "project root";
+    case CFG_LOC_EXE:
+      return "bbs executable directory";
+    default:
+      return "unknown location";
+  }
+}
+
+static const char* cmdctx_cfg_path(cmd_ctx* cmdctx, cfg c) {
+  return cmdctx->cfg_paths[c];
+}
+
+static cfg parse_cfg_name(const char* name) {
+  if (!name)
+    return CFG_MAX;
+
+  for (int i = 0; i < CFG_MAX; ++i) {
+    const cfg_info info = CFG_INFOS[i];
+    if (info.filename && _stricmp(name, info.filename) == 0)
+      return (cfg)i;
+
+    const char* dot = info.filename ? strchr(info.filename, '.') : NULL;
+    size_t name_len = dot ? (size_t)(dot - info.filename) : (info.filename ? strlen(info.filename) : 0);
+    if (info.filename && strlen(name) == name_len && _strnicmp(name, info.filename, name_len) == 0)
+      return (cfg)i;
+  }
+
+  return CFG_MAX;
+}
+
+static void print_cfg_help(cfg c) {
+  const cfg_info info = CFG_INFOS[c];
+
+  print_section("CONFIG");
+  print("  %s", info.filename);
+
+  print_section("DESCRIPTION");
+  print("  %s", info.desc);
+
+  if (info.detailed_desc && info.detailed_desc[0] != '\0') {
+    print_section("DETAILS");
+    print_indented_text(info.detailed_desc);
+  }
+
+  print_section("LOCATION");
+  print("  Expected in the %s.", cfg_loc_label(info.loc));
+}
+
 static void format_cmd_usage(char* out, size_t out_size, cmd command) {
   const cmd_info info = CMD_INFOS[command];
 
@@ -63,19 +114,19 @@ static void print_usage(void) {
 
   print_section("USAGE");
   print("  bbs <command> [arguments]");
-  print("  bbs %s [command/topic]", CMD_INFOS[CMD_DEFAULT].name);
+  print("  bbs %s [command/topic]", CMD_INFOS[CMD_HELP].name);
 
   print_section("GET STARTED");
-  print("  Create '{PROJECT_DIR}/%s' in the project root directory.", PROJ_FILENAME);
-  print("  Store shared user defaults next to the bbs executable as '{BBS_DIR}/%s'.", USER_FILENAME);
-  print("  Store machine-specific project overrides in '{PROJECT_DIR}/%s'.", LOCAL_FILENAME);
+  print("  Create '{PROJECT_DIR}/%s' in the %s.", CFG_INFOS[CFG_PROJECT].filename, cfg_loc_label(CFG_INFOS[CFG_PROJECT].loc));
+  print("  Store shared user defaults as '{BBS_DIR}/%s' in the %s.", CFG_INFOS[CFG_USER].filename, cfg_loc_label(CFG_INFOS[CFG_USER].loc));
+  print("  Store machine-specific project overrides as '{PROJECT_DIR}/%s' in the %s.", CFG_INFOS[CFG_LOCAL].filename, cfg_loc_label(CFG_INFOS[CFG_LOCAL].loc));
 
   print_section("NEXT STEP");
-  print("  Run 'bbs %s' to see all commands and help topics.", CMD_INFOS[CMD_DEFAULT].name);
+  print("  Run 'bbs %s' to see all commands and config topics.", CMD_INFOS[CMD_HELP].name);
 }
 
 static cmd parse_cmd_name(const char* name) {
-  for (int i = CMD_DEFAULT + 1; i < CMD_MAX; ++i) {
+  for (int i = CMD_HELP; i < CMD_MAX; ++i) {
     if (CMD_INFOS[i].name && _strcmpi(name, CMD_INFOS[i].name) == 0)
       return (cmd)i;
   }
@@ -84,56 +135,40 @@ static cmd parse_cmd_name(const char* name) {
 }
 
 static void print_help(int argc, char** argv) {
-  cmd help_page = CMD_DEFAULT;
+  cmd help_page = CMD_HELP;
+  cfg cfg_page = CFG_MAX;
   if (argc > 2) {
     help_page = parse_cmd_name(argv[2]);
-    if (help_page == CMD_MAX) {
-      warn("'bbs help %s' is not a recognized command. Showing general help instead", argv[2]);
-      help_page = CMD_DEFAULT;
-    }
+    if (help_page == CMD_MAX)
+      cfg_page = parse_cfg_name(argv[2]);
+    if (help_page == CMD_MAX && cfg_page == CFG_MAX)
+      warn("'bbs help %s' is not a recognized command or config. Showing general help instead", argv[2]);
   }
 
   print(ANSI_BOLD "Better Build System v%u.%u" ANSI_RESET, VER_MAJOR, VER_MINOR);
-  switch (help_page) {
-    case CMD_DEFAULT:
-      print_section("COMMANDS");
-      for (int i = CMD_HELP_END; i < CMD_MAX; ++i)
-        print_cmd_help((cmd)i);
-      break;
-    case CMD_BUILDIR:
-      print_cmd_detailed_help(help_page);
-      print_section("TOPIC NOTES");
-      print("  The build directory contains generated files and compiled artifacts.");
-      print("  bbs keeps source files in the project tree and writes derived outputs under the configured build directory.");
-      print("  Clean this directory when you want to remove cached outputs or force a full rebuild.");
-      break;
-    case CMD_CFGFILE:
-      print_cmd_detailed_help(help_page);
-      print_section("TOPIC NOTES");
-      print("  '%s' is the main project configuration file.", PROJ_FILENAME);
-      print("  Keep it in the project root and declare project metadata, targets, platforms, and build settings there.");
-      print("  bbs reads this file first, then applies defaults from '%s' and overrides from '%s' when present.", USER_FILENAME, LOCAL_FILENAME);
-      break;
-    case CMD_LOCALCFG:
-      print_cmd_detailed_help(help_page);
-      print_section("TOPIC NOTES");
-      print("  '%s' stores user config variables and project attributes specific to this machine.", LOCAL_FILENAME);
-      print("  Keep it in the project root directory, next to '%s'.", PROJ_FILENAME);
-      print("  Values in '%s' can override the defaults from '%s'.", LOCAL_FILENAME, USER_FILENAME);
-      print("  In normal projects this file should usually be added to .gitignore.");
-      print("  Use it for machine-specific settings that should not be shared with the rest of the project.");
-      break;
-    case CMD_USERCFG:
-      print_cmd_detailed_help(help_page);
-      print_section("TOPIC NOTES");
-      print("  '%s' stores shared user config defaults.", USER_FILENAME);
-      print("  Use it to define your preferred defaults across projects.");
-      print("  Values from '%s' can be overridden by '%s' in a specific project.", USER_FILENAME, LOCAL_FILENAME);
-      print("  Keep it next to the bbs executable so those defaults are available everywhere you run bbs.");
-      break;
-    default:
-      print_cmd_detailed_help(help_page);
-      break;
+  if (help_page != CMD_MAX)
+    switch (help_page) {
+      case CMD_HELP:
+        print_section("COMMANDS");
+        for (int i = CMD_HELP; i < CMD_MAX; ++i)
+          print_cmd_help((cmd)i);
+        print_section("CONFIGS");
+        for (int i = 0; i < CFG_MAX; ++i)
+          print("  bbs help %-29.*s %s", (int)(strchr(CFG_INFOS[i].filename, '.') - CFG_INFOS[i].filename), CFG_INFOS[i].filename, CFG_INFOS[i].desc);
+        break;
+      default:
+        print_cmd_detailed_help(help_page);
+        break;
+    }
+  else if (cfg_page != CFG_MAX) {
+    print_cfg_help(cfg_page);
+  } else {
+    print_section("COMMANDS");
+    for (int i = CMD_HELP; i < CMD_MAX; ++i)
+      print_cmd_help((cmd)i);
+    print_section("CONFIGS");
+    for (int i = 0; i < CFG_MAX; ++i)
+      print("  bbs help %-29.*s %s", (int)(strchr(CFG_INFOS[i].filename, '.') - CFG_INFOS[i].filename), CFG_INFOS[i].filename, CFG_INFOS[i].desc);
   }
 
   print_section("NOTES");
@@ -141,12 +176,14 @@ static void print_help(int argc, char** argv) {
   print("  All commands operate on the project rooted at the current working directory.");
   print("  The build system is initialized automatically when a command runs.");
   print("  [-t target] can be inferred when the project only has one target; otherwise bbs operates on all targets.");
-  print("  [-p platform] selects one of the platforms declared in '%s'.", PROJ_FILENAME);
+  print("  [-p platform] selects one of the platforms declared in '%s'.", CFG_INFOS[CFG_PROJECT].filename);
 
   print_section("MORE HELP");
-  for (int i = CMD_DEFAULT + 1; i < CMD_HELP_END; ++i)
+  for (int i = CMD_CLEAN; i < CMD_MAX; ++i)
     print("  bbs help %-29s %s", CMD_INFOS[i].name, CMD_INFOS[i].desc);
-  print("  bbs %s <command>", CMD_INFOS[CMD_DEFAULT].name);
+  for (int i = 0; i < CFG_MAX; ++i)
+    print("  bbs help %-29.*s %s", (int)(strchr(CFG_INFOS[i].filename, '.') - CFG_INFOS[i].filename), CFG_INFOS[i].filename, CFG_INFOS[i].desc);
+  print("  bbs %s <command>", CMD_INFOS[CMD_HELP].name);
 }
 
 static int error_code(cmd c, char idx) {
@@ -226,15 +263,15 @@ static int run_cmd_cfg(cmd_ctx* cmdctx) {
     opts[PROJECT].present = opts[USER].present = opts[LOCAL].present = opts[TOOLCHAIN].present = true;
 
   if (opts[0].present) {
-    if (opts[PROJECT].present) print("%s", cmdctx->project);
-    if (opts[USER].present) print("%s", cmdctx->user);
-    if (opts[LOCAL].present) print("%s", cmdctx->local);
-    if (opts[TOOLCHAIN].present) print("%s", cmdctx->toolchain);
+    if (opts[PROJECT].present) print("%s", cmdctx_cfg_path(cmdctx, CFG_PROJECT));
+    if (opts[USER].present) print("%s", cmdctx_cfg_path(cmdctx, CFG_USER));
+    if (opts[LOCAL].present) print("%s", cmdctx_cfg_path(cmdctx, CFG_LOCAL));
+    if (opts[TOOLCHAIN].present) print("%s", cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN));
   } else {
-    if (opts[PROJECT].present) print("  Project config: %s", cmdctx->project);
-    if (opts[USER].present) print("  User config:    %s", cmdctx->user);
-    if (opts[LOCAL].present) print("  Local config:   %s", cmdctx->local);
-    if (opts[TOOLCHAIN].present) print("  Toolchain config:   %s", cmdctx->toolchain);
+    if (opts[PROJECT].present) print("  Project config: %s", cmdctx_cfg_path(cmdctx, CFG_PROJECT));
+    if (opts[USER].present) print("  User config:    %s", cmdctx_cfg_path(cmdctx, CFG_USER));
+    if (opts[LOCAL].present) print("  Local config:   %s", cmdctx_cfg_path(cmdctx, CFG_LOCAL));
+    if (opts[TOOLCHAIN].present) print("  Toolchain config:   %s", cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN));
   }
 
   return 0;
@@ -266,14 +303,19 @@ static int run_cmd_clean(cmd_ctx* cmdctx) {
     return 0;
   }
 
-  if (_strcmpi(scope, "project") == 0)
-    return clean_one_file("project config", cmdctx->project, CMD_CLEAN, 0);
-  if (_strcmpi(scope, "user") == 0)
-    return clean_one_file("user config", cmdctx->user, CMD_CLEAN, 2);
-  if (_strcmpi(scope, "local") == 0)
-    return clean_one_file("local config", cmdctx->local, CMD_CLEAN, 1);
-  if (_strcmpi(scope, "toolchain") == 0)
-    return clean_one_file("toolchain config", cmdctx->toolchain, CMD_CLEAN, 3);
+  cfg c = parse_cfg_name(scope);
+  switch (c) {
+    case CFG_PROJECT:
+      return clean_one_file("project config", cmdctx_cfg_path(cmdctx, c), CMD_CLEAN, 0);
+    case CFG_LOCAL:
+      return clean_one_file("local config", cmdctx_cfg_path(cmdctx, c), CMD_CLEAN, 1);
+    case CFG_USER:
+      return clean_one_file("user config", cmdctx_cfg_path(cmdctx, c), CMD_CLEAN, 2);
+    case CFG_TOOLCHAIN:
+      return clean_one_file("toolchain config", cmdctx_cfg_path(cmdctx, c), CMD_CLEAN, 3);
+    default:
+      break;
+  }
 
   error("Unknown clean target '%s'.", scope);
   print("Use 'project', 'user', 'local', or 'toolchain'.");
@@ -303,7 +345,7 @@ static int run_cmd_update(cmd_ctx* cmdctx) {
     project_print(&proj);
   }
 
-  if (!toolchain_init(cmdctx->toolchain, opts[INIT_TOOLCHAIN].present, cmdctx))
+  if (!toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), opts[INIT_TOOLCHAIN].present, cmdctx))
     return error_code(CMD_UPDATE, 2);
   if (!project_update())
     return error_code(CMD_UPDATE, 0);
@@ -754,14 +796,19 @@ static int run_cmd_info(cmd_ctx* cmdctx) {
   else if (opts[MINIMAL].present)
     mode = INFO_PRINT_MINIMAL;
 
-  if (_strcmpi(scope, "project") == 0)
-    return run_cmd_info_file("Project File Attributes", cmdctx->project, attr_filter, text_filter, mode);
-  if (_strcmpi(scope, "user") == 0)
-    return run_cmd_info_file("User File Attributes", cmdctx->user, attr_filter, text_filter, mode);
-  if (_strcmpi(scope, "local") == 0)
-    return run_cmd_info_file("Local File Attributes", cmdctx->local, attr_filter, text_filter, mode);
-  if (_strcmpi(scope, "toolchain") == 0)
-    return run_cmd_info_file("Toolchain File Attributes", cmdctx->toolchain, attr_filter, text_filter, mode);
+  cfg c = parse_cfg_name(scope);
+  switch (c) {
+    case CFG_PROJECT:
+      return run_cmd_info_file("Project File Attributes", cmdctx_cfg_path(cmdctx, c), attr_filter, text_filter, mode);
+    case CFG_USER:
+      return run_cmd_info_file("User File Attributes", cmdctx_cfg_path(cmdctx, c), attr_filter, text_filter, mode);
+    case CFG_LOCAL:
+      return run_cmd_info_file("Local File Attributes", cmdctx_cfg_path(cmdctx, c), attr_filter, text_filter, mode);
+    case CFG_TOOLCHAIN:
+      return run_cmd_info_file("Toolchain File Attributes", cmdctx_cfg_path(cmdctx, c), attr_filter, text_filter, mode);
+    default:
+      break;
+  }
 
   error("Unknown info topic '%s'.", scope);
   print("Use 'project', 'user', 'local', or 'toolchain'.");
@@ -810,7 +857,7 @@ static int run_cmd_test(cmd_ctx* cmdctx) {
   const char* test_name = cmdline_consume_param(cmdctx->cl);
   cmdline_validate(cmdctx->cl);
 
-  toolchain* tc = toolchain_init(cmdctx->toolchain, false, cmdctx);
+  toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
   if (!project_test(test_name, target, platform, config, tc))
     return error_code(CMD_TEST, 0);
   return 0;
@@ -946,20 +993,21 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
     return error_code(CMD_BUMPVER, 0);
   }
 
-  if (!file_exists(cmdctx->project)) {
-    error("Project file not found: %s", cmdctx->project);
+  const char* project_path = cmdctx_cfg_path(cmdctx, CFG_PROJECT);
+  if (!file_exists(project_path)) {
+    error("Project file not found: %s", project_path);
     return error_code(CMD_BUMPVER, 1);
   }
 
-  const char* text = read_entire_file(cmdctx->project);
+  const char* text = read_entire_file(project_path);
   if (!text) {
-    error("Failed to read '%s'.", cmdctx->project);
+    error("Failed to read '%s'.", project_path);
     return error_code(CMD_BUMPVER, 2);
   }
 
   node* tree = node_parse(text);
   if (!tree) {
-    error("Failed to parse '%s'.", cmdctx->project);
+    error("Failed to parse '%s'.", project_path);
     return error_code(CMD_BUMPVER, 3);
   }
 
@@ -972,7 +1020,7 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
       else
         error("Multiple project nodes found with id '%s'.", project_id);
     } else if (matches == 0) {
-      error("No top-level project node found in '%s'.", cmdctx->project);
+      error("No top-level project node found in '%s'.", project_path);
     } else {
       error("Multiple top-level project nodes found. Specify [project_id].");
     }
@@ -1050,8 +1098,8 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
     error("Failed to update the version text region.");
     return error_code(CMD_BUMPVER, 14);
   }
-  if (!write_entire_file(cmdctx->project, updated)) {
-    error("Failed to write '%s'.", cmdctx->project);
+  if (!write_entire_file(project_path, updated)) {
+    error("Failed to write '%s'.", project_path);
     return error_code(CMD_BUMPVER, 15);
   }
 
@@ -1069,7 +1117,7 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
     print("Updated project version (%s): %s -> %s", project_id, before_text, after_text);
   else
     print("Updated version: %s -> %s", before_text, after_text);
-  print("Edited: %s", cmdctx->project);
+  print("Edited: %s", project_path);
   return 0;
 }
 
@@ -1101,7 +1149,7 @@ static int run_cmd(cmd c, cmd_ctx* cmdctx) {
 
 static int print_unrecognized_command(const char* name) {
   error("'%s' is not a recognized command.", name);
-  print("Run 'bbs %s' to see the list of available commands.", CMD_INFOS[CMD_DEFAULT].name);
+  print("Run 'bbs %s' to see the list of available commands.", CMD_INFOS[CMD_HELP].name);
   return 2;
 }
 
@@ -1116,19 +1164,9 @@ static cmd_ctx* init_cmd_ctx(int argc, char** argv) {
   cmdline_pop(cmdctx->cl);
   cmdline_pop(cmdctx->cl);
 
-  enum {
-    DEBUG = 0,
-  };
-
-  cmdopt base_opts[] = {
-      [DEBUG] = {"d", "debug"}
-  };
-  cmdline_consume_all_options(cmdctx->cl, base_opts, 1);
-  cmdctx->debug = base_opts[DEBUG].present;
-
-  cmdctx->project = get_path_cwd(PROJ_FILENAME);
-  cmdctx->user = get_path_exe(USER_FILENAME);
-  cmdctx->local = get_path_cwd(LOCAL_FILENAME);
-  cmdctx->toolchain = get_path_exe(TOOLCHAIN_FILENAME);
+  for (int i = 0; i < CFG_MAX; ++i) {
+    const cfg_info info = CFG_INFOS[i];
+    cmdctx->cfg_paths[i] = info.loc == CFG_LOC_CWD ? get_path_cwd(info.filename) : get_path_exe(info.filename);
+  }
   return cmdctx;
 }

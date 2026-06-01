@@ -1250,8 +1250,6 @@ static bool project_parse_project_node(node* project_n, const char* selected_con
 static bool project_load_file_config(const char* path, const char* config, project* out) {
   if (!path || !path[0] || !out)
     return false;
-  if (!user_init())
-    return false;
   if (!file_exists(path)) {
     error("Project config not found: %s", path);
     return false;
@@ -1327,23 +1325,11 @@ static bool project_target_is_test(const target* tgt) {
 }
 
 static const char* project_host_os_name(void) {
-#if defined(_WIN32)
-  return "windows";
-#elif defined(__APPLE__)
-  return "macos";
-#else
-  return "linux";
-#endif
+  return platform_host_os_name();
 }
 
 static const char* project_host_arch_name(void) {
-#if defined(_M_ARM64) || defined(__aarch64__)
-  return "arm64";
-#elif defined(_M_IX86) || defined(__i386__)
-  return "x86";
-#else
-  return "x86_64";
-#endif
+  return platform_host_arch_name();
 }
 
 static const char* project_resolved_dir(const char* root, const char* config, const char* platform) {

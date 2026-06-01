@@ -1,26 +1,6 @@
 #pragma once
 #include "bbs_base.h"
-
-#if defined(_WIN32)
-#  include <io.h>
-#  include <windows.h>
-#  define access _access
-#  define F_OK   0
-#elif defined(__APPLE__)
-#  include <mach-o/dyld.h>
-#  include <unistd.h>
-#else
-#  include <unistd.h>
-#endif
-
-#if !defined(_WIN32)
-#  include <dirent.h>
-#  include <sys/stat.h>
-#endif
-
-#if !defined(_WIN32) && !defined(_MAX_PATH)
-#  define _MAX_PATH 4096
-#endif
+#include "bbs_platform.c"
 
 static arena garena = {0};
 static const char* arena_text(const char* begin, size_t len);
@@ -1282,134 +1262,29 @@ static bool write_entire_file(const char* p, const char* text) {
 }
 
 static const char* get_path_cwd(const char* filename) {
-  char cwd[_MAX_PATH] = {0};
-  if (!_getcwd(cwd, sizeof(cwd))) {
-    cwd[0] = '\0';
-  }
-
-  size_t len = strlen(cwd) + 1 + strlen(filename) + 1;
-  char* out = push(len);
-  snprintf(out, len, "%s\\%s", cwd, filename);
-  return out;
+  return platform_path_cwd(filename, push);
 }
 
 static const char* get_path_exe(const char* filename) {
-  char exe_path[_MAX_PATH] = {0};
-  char exe_dir[_MAX_PATH] = {0};
-  bool got_path = false;
-
-#if defined(_WIN32)
-  if (GetModuleFileNameA(NULL, exe_path, sizeof(exe_path))) {
-    got_path = true;
-  }
-#elif defined(__linux__)
-  ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-  if (len != -1) {
-    exe_path[len] = '\0';
-    got_path = true;
-  }
-#elif defined(__APPLE__)
-  uint32_t size = sizeof(exe_path);
-  if (_NSGetExecutablePath(exe_path, &size) == 0) {
-    char* resolved = realpath(exe_path, NULL);
-    if (resolved) {
-      strncpy(exe_path, resolved, sizeof(exe_path) - 1);
-      exe_path[sizeof(exe_path) - 1] = '\0';
-      free(resolved);
-    }
-    got_path = true;
-  }
-#endif
-
-  if (got_path) {
-    snprintf(exe_dir, sizeof(exe_dir), "%s", exe_path);
-    char* last_slash = strrchr(exe_dir, '\\');
-    if (!last_slash) last_slash = strrchr(exe_dir, '/');
-    if (last_slash) *last_slash = '\0';
-  }
-
-  size_t len = strlen(exe_dir) + 1 + strlen(filename) + 1;
-  char* out = push(len);
-  snprintf(out, len, "%s\\%s", exe_dir, filename);
-  return out;
+  return platform_path_exe(filename, push);
 }
 
 static bool file_exists(const char* path) {
-  return access(path, F_OK) == 0;
+  return platform_file_exists(path);
 }
 
 static bool file_delete(const char* path) {
-#if defined(_WIN32)
-  return DeleteFileA(path) != 0;
-#else
-  return unlink(path) == 0;
-#endif
+  return platform_file_delete(path);
 }
 
 static bool dir_exists(const char* path) {
-#if defined(_WIN32)
-  DWORD attr = GetFileAttributesA(path);
-  return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
-#else
-  struct stat st;
-  return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-#endif
+  return platform_dir_exists(path);
 }
 
 static bool dir_create(const char* path) {
-#if defined(_WIN32)
-  return CreateDirectoryA(path, NULL) != 0;
-#else
-  return mkdir(path, 0755) == 0;
-#endif
+  return platform_dir_create(path);
 }
-static bool dir_delete(const char* path) {  // Delete directory and all its contents
-#if defined(_WIN32)
-  char search_path[_MAX_PATH];
-  snprintf(search_path, sizeof(search_path), "%s\\*", path);
 
-  WIN32_FIND_DATAA ffd;
-  HANDLE hFind = FindFirstFileA(search_path, &ffd);
-  if (hFind == INVALID_HANDLE_VALUE) return false;
-
-  do {
-    if (strcmp(ffd.cFileName, ".") == 0 || strcmp(ffd.cFileName, "..") == 0)
-      continue;
-
-    char full_path[_MAX_PATH];
-    snprintf(full_path, sizeof(full_path), "%s\\%s", path, ffd.cFileName);
-
-    if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-      dir_delete(full_path);
-    } else {
-      DeleteFileA(full_path);
-    }
-  } while (FindNextFileA(hFind, &ffd) != 0);
-
-  FindClose(hFind);
-  return RemoveDirectoryA(path) != 0;
-#else
-  DIR* dir = opendir(path);
-  if (!dir) return false;
-
-  struct dirent* entry;
-  while ((entry = readdir(dir)) != NULL) {
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-      continue;
-
-    char full_path[_MAX_PATH];
-    snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
-
-    struct stat st;
-    if (stat(full_path, &st) == 0) {
-      if (S_ISDIR(st.st_mode)) {
-        dir_delete(full_path);
-      } else {
-        unlink(full_path);
-      }
-    }
-  }
-  closedir(dir);
-  return rmdir(path) == 0;
-#endif
+static bool dir_delete(const char* path) {
+  return platform_dir_delete(path);
 }
