@@ -610,7 +610,7 @@ static token lexer_next(parser* p) {
 
   t.type = TOK_NAME;
   t.begin = p->cur;
-  while (*p->cur && !isspace((unsigned char)*p->cur) && *p->cur != '(' && *p->cur != ')' && *p->cur != '"' && *p->cur != ',')
+  while (*p->cur && !isspace((unsigned char)*p->cur) && *p->cur != '(' && *p->cur != ')' && *p->cur != '"' && *p->cur != ',' && *p->cur != '#')
     ++p->cur;
   t.end = p->cur;
   return t;

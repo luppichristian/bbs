@@ -649,6 +649,465 @@ static int run_cmd_update(cmd_ctx* cmdctx) {
   return 0;
 }
 
+static const char* gen_gitignore_text(void) {
+  return "build/\n"
+         "dist/\n"
+         "gen/\n"
+         "\n"
+         "# bbs local overrides\n"
+         "local.bbs\n"
+         "toolchain.bbs\n"
+         "\n"
+         "# CMake-generated files\n"
+         "cmake-build-*/\n"
+         "CMakeFiles/\n"
+         "CMakeCache.txt\n"
+         "CTestTestfile.cmake\n"
+         "cmake_install.cmake\n"
+         "compile_commands.json\n"
+         "install_manifest.txt\n"
+         "\n"
+         "# Visual Studio and IDE state\n"
+         ".vs/\n"
+         ".vscode/\n"
+         ".idea/\n"
+         "*.sln\n"
+         "*.vcxproj\n"
+         "*.vcxproj.filters\n"
+         "*.vcxproj.user\n"
+         "\n"
+         "# Native build outputs\n"
+         "*.o\n"
+         "*.obj\n"
+         "*.a\n"
+         "*.lib\n"
+         "*.dll\n"
+         "*.dylib\n"
+         "*.so\n"
+         "*.exe\n"
+         "*.exp\n"
+         "*.ilk\n"
+         "*.out\n"
+         "*.pdb\n"
+         "\n"
+         "# Logs and OS metadata\n"
+         "*.log\n"
+         "Thumbs.db\n"
+         ".DS_Store\n";
+}
+
+static bool gen_ensure_dir_tree(const char* path, const char* label) {
+  if (!path || !path[0])
+    return true;
+  if (dir_exists(path))
+    return true;
+
+  size_t len = strlen(path);
+  char* buf = push(len + 1);
+  if (!buf)
+    return false;
+  memcpy(buf, path, len + 1);
+
+  size_t start = 0;
+  if (len >= 3 && buf[1] == ':' && (buf[2] == '\\' || buf[2] == '/'))
+    start = 3;
+  else if (len >= 1 && (buf[0] == '\\' || buf[0] == '/'))
+    start = 1;
+
+  for (size_t i = start; i < len; ++i) {
+    if (buf[i] != '\\' && buf[i] != '/')
+      continue;
+    if (i == 0)
+      continue;
+
+    char saved = buf[i];
+    buf[i] = '\0';
+    if (buf[0] && !dir_exists(buf) && !dir_create(buf)) {
+      error("Failed to create %s: %s", label ? label : "directory", buf);
+      return false;
+    }
+    buf[i] = saved;
+  }
+
+  if (!dir_exists(buf) && !dir_create(buf)) {
+    error("Failed to create %s: %s", label ? label : "directory", buf);
+    return false;
+  }
+
+  return true;
+}
+
+static bool gen_ensure_parent_dir(const char* path) {
+  const char* parent = project_path_parent(path);
+  if (!parent || !parent[0])
+    return true;
+  return gen_ensure_dir_tree(parent, "generator output directory");
+}
+
+static int gen_write_text_file(const char* path, const char* text, bool override_existing, cmd c, char err_idx_base) {
+  if (!path || !path[0] || !text)
+    return error_code(c, err_idx_base);
+
+  if (file_exists(path) && !override_existing) {
+    error("Refusing to overwrite existing file: %s", path);
+    print("Use '-o' or '--override' to overwrite it.");
+    return error_code(c, err_idx_base + 1);
+  }
+  if (!gen_ensure_parent_dir(path))
+    return error_code(c, err_idx_base + 2);
+  if (!write_entire_file(path, text)) {
+    error("Failed to write '%s'.", path);
+    return error_code(c, err_idx_base + 3);
+  }
+
+  print("Generated %s", path);
+  return 0;
+}
+
+static int gen_copy_output_file(const char* src, const char* dst, bool override_existing, cmd c, char err_idx_base) {
+  if (!src || !src[0] || !dst || !dst[0])
+    return error_code(c, err_idx_base);
+
+  if (!file_exists(src)) {
+    error("Generator source file does not exist: %s", src);
+    return error_code(c, err_idx_base + 1);
+  }
+  if (file_exists(dst) && !override_existing) {
+    error("Refusing to overwrite existing file: %s", dst);
+    print("Use '-o' or '--override' to overwrite it.");
+    return error_code(c, err_idx_base + 2);
+  }
+  if (!gen_ensure_parent_dir(dst))
+    return error_code(c, err_idx_base + 3);
+  if (!project_copy_file(src, dst)) {
+    error("Failed to copy '%s' to '%s'.", src, dst);
+    return error_code(c, err_idx_base + 4);
+  }
+
+  print("Generated %s", dst);
+  return 0;
+}
+
+static bool gen_append_github_command_steps(project_textbuf* buf, const char* title, const char* windows_cmd, const char* unix_cmd) {
+  return project_textbuf_appendf(buf,
+                                 "      - name: %s (Windows)\n"
+                                 "        if: runner.os == 'Windows'\n"
+                                 "        shell: pwsh\n"
+                                 "        run: |\n"
+                                 "          %s\n"
+                                 "\n"
+                                 "      - name: %s (Unix)\n"
+                                 "        if: runner.os != 'Windows'\n"
+                                 "        shell: bash\n"
+                                 "        run: |\n"
+                                 "          %s\n"
+                                 "\n",
+                                 title,
+                                 windows_cmd,
+                                 title,
+                                 unix_cmd);
+}
+
+static bool gen_append_github_checkout_bbs_step(project_textbuf* buf) {
+  return project_textbuf_append(buf,
+                                "      - name: Checkout bbs\n"
+                                "        uses: actions/checkout@v4\n"
+                                "        with:\n"
+                                "          repository: luppichristian/bbs\n"
+                                "          path: .bbs-bootstrap\n"
+                                "\n");
+}
+
+static const char* gen_trim_text(const char* text) {
+  if (!text)
+    return NULL;
+
+  while (*text && isspace((unsigned char)*text))
+    ++text;
+
+  size_t len = strlen(text);
+  while (len > 0 && isspace((unsigned char)text[len - 1]))
+    --len;
+
+  return arena_text(text, len);
+}
+
+static bool gen_parse_github_platforms(const char* csv, const char*** out_platforms, int* out_count) {
+  if (!out_platforms || !out_count)
+    return false;
+  *out_platforms = NULL;
+  *out_count = 0;
+
+  if (!csv || !csv[0])
+    return true;
+
+  int count = 1;
+  for (const char* p = csv; *p; ++p)
+    if (*p == ',')
+      ++count;
+
+  const char** items = push(sizeof(*items) * (size_t)count);
+  if (!items)
+    return false;
+
+  int out = 0;
+  const char* begin = csv;
+  for (const char* p = csv;; ++p) {
+    if (*p != ',' && *p != '\0')
+      continue;
+
+    const char* raw = arena_text(begin, (size_t)(p - begin));
+    const char* platform = gen_trim_text(raw);
+    if (!platform || !platform[0]) {
+      error("Empty platform entry in '--platform'.");
+      return false;
+    }
+
+    os target_os = OS_MAX;
+    arch target_arch = ARCH_MAX;
+    if (!project_parse_platform_id(platform, &target_os, &target_arch)) {
+      error("Invalid platform '%s'. Expected '<os>-<arch>'.", platform);
+      return false;
+    }
+
+    for (int i = 0; i < out; ++i) {
+      if (_stricmp(items[i], platform) == 0) {
+        error("Duplicate platform '%s' in '--platform'.", platform);
+        return false;
+      }
+    }
+
+    items[out++] = platform;
+    if (*p == '\0')
+      break;
+    begin = p + 1;
+  }
+
+  *out_platforms = items;
+  *out_count = out;
+  return true;
+}
+
+static const char* gen_github_runner_for_platform(const char* platform) {
+  os target_os = OS_MAX;
+  arch target_arch = ARCH_MAX;
+  if (!project_parse_platform_id(platform, &target_os, &target_arch))
+    return NULL;
+
+  switch (target_os) {
+    case OS_WINDOWS:
+      if (target_arch == ARCH_X86_64 || target_arch == ARCH_X86)
+        return "windows-latest";
+      break;
+    case OS_LINUX:
+      if (target_arch == ARCH_X86_64 || target_arch == ARCH_X86)
+        return "ubuntu-latest";
+      break;
+    case OS_MACOS:
+      if (target_arch == ARCH_X86_64)
+        return "macos-13";
+      if (target_arch == ARCH_ARM64)
+        return "macos-14";
+      break;
+    default:
+      break;
+  }
+
+  return NULL;
+}
+
+static const char* gen_default_config_name(const project* proj) {
+  return (proj && proj->config_c > 0 && proj->configs && proj->configs[0] && proj->configs[0][0]) ? proj->configs[0] : "default";
+}
+
+static bool gen_build_github_workflow_text(const project* proj, project_textbuf* buf, const char** platforms, int platform_c) {
+  if (!proj || !buf)
+    return false;
+
+  bool has_tests = project_count_test_targets(proj) > 0;
+  bool has_runnables = project_count_runnable_targets(proj) > 0;
+  const char* dist_root = (proj->user_cfg.distdir && proj->user_cfg.distdir[0]) ? proj->user_cfg.distdir : DEF_DIST_DIR;
+  const char* default_config = gen_default_config_name(proj);
+
+  if (!project_textbuf_append(buf,
+                              "name: bbs\n\n"
+                              "on:\n"
+                              "  push:\n"
+                              "  pull_request:\n"
+                              "  workflow_dispatch:\n\n"
+                              "jobs:\n"
+                              "  ci:\n"
+                              "    name: ${{ matrix.platform }} / ${{ matrix.config }}\n"
+                              "    runs-on: ${{ matrix.runner }}\n"
+                              "    strategy:\n"
+                              "      fail-fast: false\n"
+                              "      matrix:\n"
+                              "        config:\n"))
+    return false;
+
+  if (proj->config_c > 0 && proj->configs) {
+    for (int i = 0; i < proj->config_c; ++i) {
+      const char* cfg = proj->configs[i] && proj->configs[i][0] ? proj->configs[i] : default_config;
+      if (!project_textbuf_appendf(buf, "          - %s\n", cfg))
+        return false;
+    }
+  } else if (!project_textbuf_appendf(buf, "          - %s\n", default_config)) {
+    return false;
+  }
+
+  if (!project_textbuf_append(buf, "        include:\n"))
+    return false;
+
+  const char* default_platforms[] = {
+      "windows-x86_64",
+      "linux-x86_64",
+      "macos-x86_64",
+  };
+  const char** matrix_platforms = platforms;
+  int matrix_platform_c = platform_c;
+  if (!matrix_platforms || matrix_platform_c <= 0) {
+    matrix_platforms = default_platforms;
+    matrix_platform_c = (int)_countof(default_platforms);
+  }
+
+  for (int i = 0; i < matrix_platform_c; ++i) {
+    const char* runner = gen_github_runner_for_platform(matrix_platforms[i]);
+    if (!runner) {
+      error("Platform '%s' is not supported by the GitHub workflow generator.", matrix_platforms[i]);
+      return false;
+    }
+    if (!project_textbuf_appendf(buf,
+                                 "          - runner: %s\n"
+                                 "            platform: %s\n",
+                                 runner,
+                                 matrix_platforms[i]))
+      return false;
+  }
+
+  if (!project_textbuf_append(buf,
+                              "\n"
+                              "    steps:\n"
+                              "      - uses: actions/checkout@v4\n\n"))
+    return false;
+
+  if (!gen_append_github_checkout_bbs_step(buf))
+    return false;
+
+  if (!gen_append_github_command_steps(buf,
+                                       "Build bbs",
+                                       "cmake -S .bbs-bootstrap -B .bbs-bootstrap/build\n          cmake --build .bbs-bootstrap/build --config Release",
+                                       "cmake -S .bbs-bootstrap -B .bbs-bootstrap/build\n          cmake --build .bbs-bootstrap/build --config Release"))
+    return false;
+
+  if (!gen_append_github_command_steps(buf,
+                                       "Init toolchain",
+                                       "./.bbs-bootstrap/build/bbs.exe update --init-toolchain",
+                                       "./.bbs-bootstrap/build/bbs update --init-toolchain"))
+    return false;
+
+  if (!gen_append_github_command_steps(buf,
+                                       "Build project",
+                                       "./.bbs-bootstrap/build/bbs.exe build -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}",
+                                       "./.bbs-bootstrap/build/bbs build -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}"))
+    return false;
+
+  if (has_tests && !gen_append_github_command_steps(buf,
+                                                    "Run tests",
+                                                    "./.bbs-bootstrap/build/bbs.exe test -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}",
+                                                    "./.bbs-bootstrap/build/bbs test -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}"))
+    return false;
+
+  if (has_runnables && !gen_append_github_command_steps(buf,
+                                                        "Run targets",
+                                                        "./.bbs-bootstrap/build/bbs.exe run -t * -p * -c ${{ matrix.config }}",
+                                                        "./.bbs-bootstrap/build/bbs run -t * -p * -c ${{ matrix.config }}"))
+    return false;
+
+  if (!gen_append_github_command_steps(buf,
+                                       "Create distributions",
+                                       "./.bbs-bootstrap/build/bbs.exe dist -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}",
+                                       "./.bbs-bootstrap/build/bbs dist -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}"))
+    return false;
+
+  if (!project_textbuf_appendf(buf,
+                               "      - name: Upload dist artifacts\n"
+                               "        uses: actions/upload-artifact@v4\n"
+                               "        with:\n"
+                               "          name: dist-${{ matrix.platform }}-${{ matrix.config }}\n"
+                               "          path: %s/${{ matrix.config }}-${{ matrix.platform }}\n",
+                               dist_root))
+    return false;
+
+  return true;
+}
+
+static int run_cmd_gen(cmd_ctx* cmdctx) {
+  cmdline* cl = cmdctx->cl;
+  const char* github_platforms_csv = cmdline_extract_option_value(cl, "p", "platform");
+  enum {
+    OVERRIDE = 0,
+  };
+
+  cmdopt opts[] = {
+      [OVERRIDE] = {"o", "override"},
+  };
+
+  cmdline_consume_all_options(cl, opts, _countof(opts));
+  const char* format = cmdline_consume_param(cl);
+  cmdline_validate(cl);
+
+  if (!format || !format[0]) {
+    error("Missing generator format.");
+    print("Use 'bbs gen gitignore', 'bbs gen github', or a configured custom generator name.");
+    return error_code(CMD_GEN, 0);
+  }
+
+  const char* path = NULL;
+  const char* text = NULL;
+  if (_stricmp(format, "gitignore") == 0) {
+    path = get_path_cwd(".gitignore");
+    text = gen_gitignore_text();
+    return gen_write_text_file(path, text, opts[OVERRIDE].present, CMD_GEN, 10);
+  }
+
+  if (_stricmp(format, "github") == 0) {
+    project proj = {0};
+    if (!project_load(&proj))
+      return error_code(CMD_GEN, 20);
+
+    const char** github_platforms = NULL;
+    int github_platform_c = 0;
+    if (!gen_parse_github_platforms(github_platforms_csv, &github_platforms, &github_platform_c))
+      return error_code(CMD_GEN, 21);
+
+    project_textbuf buf = {0};
+    if (!gen_build_github_workflow_text(&proj, &buf, github_platforms, github_platform_c)) {
+      if (buf.data)
+        free(buf.data);
+      error("Failed to build GitHub workflow content.");
+      return error_code(CMD_GEN, 22);
+    }
+
+    int rc = gen_write_text_file(get_path_cwd(".github/workflows/bbs.yml"), buf.data ? buf.data : "", opts[OVERRIDE].present, CMD_GEN, 23);
+    if (buf.data)
+      free(buf.data);
+    return rc;
+  }
+
+  user* u = user_init(cmdctx);
+  if (!u)
+    return error_code(CMD_GEN, 30);
+
+  const user_gen* custom = user_find_gen(u, format);
+  if (custom) {
+    return gen_copy_output_file(custom->copyfile, get_path_cwd(custom->name), opts[OVERRIDE].present, CMD_GEN, 31);
+  } else {
+    error("Unknown generator format '%s'.", format);
+    print("Supported built-in formats: gitignore, github");
+    return error_code(CMD_GEN, 1);
+  }
+}
+
 static int run_cmd_build(cmd_ctx* cmdctx) {
   const char* target = cmdline_extract_option_value(cmdctx->cl, "t", "target");
   const char* platform = cmdline_extract_option_value(cmdctx->cl, "p", "platform");
@@ -1446,6 +1905,8 @@ static int run_cmd(cmd c, cmd_ctx* cmdctx) {
       return run_cmd_clean(cmdctx);
     case CMD_UPDATE:
       return run_cmd_update(cmdctx);
+    case CMD_GEN:
+      return run_cmd_gen(cmdctx);
     case CMD_BUILD:
       return run_cmd_build(cmdctx);
     case CMD_RUN:

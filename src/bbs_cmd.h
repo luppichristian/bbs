@@ -70,6 +70,7 @@ typedef enum {
   CMD_HELP,
   CMD_CLEAN,
   CMD_UPDATE,
+  CMD_GEN,
   CMD_CFG,
   CMD_BUILD,
   CMD_RUN,
@@ -95,13 +96,23 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                    "If no argument is provided, bbs cleans both 'project' and 'local'."},
 
      [CMD_UPDATE] = { .name = "update",
-                   .params = "[-i|--info] [-c config] [--init-toolchain]",
-                   .desc = "Generate derived project files",
-                   .detailed_desc = "Parses and validates the project configuration, then generates the derived files and directories used by bbs.\n"
-                   "Use '-i' or '--info' to print the resolved project state before updating.\n"
-                   "Use '-c' or '--config' to resolve the project with a specific config for the info output.\n"
-                   "If the toolchain file is missing, bbs generates it automatically.\n"
-                   "Use '--init-toolchain' to force regeneration instead of reusing the cached toolchain file."},
+                    .params = "[-i|--info] [-c config] [--init-toolchain]",
+                    .desc = "Generate derived project files",
+                    .detailed_desc = "Parses and validates the project configuration, then generates the derived files and directories used by bbs.\n"
+                    "Use '-i' or '--info' to print the resolved project state before updating.\n"
+                    "Use '-c' or '--config' to resolve the project with a specific config for the info output.\n"
+                    "If the toolchain file is missing, bbs generates it automatically.\n"
+                    "Use '--init-toolchain' to force regeneration instead of reusing the cached toolchain file."},
+
+     [CMD_GEN] = {    .name = "gen",
+                   .params = "<format> [-o|--override] [-p platform[,platform...]]",
+                    .desc = "Generate utility files in the project root",
+                    .detailed_desc = "Generates one supported utility file in the current project root.\n"
+                     "Use 'gitignore' to generate a complete '.gitignore' template for bbs-based C/C++ projects.\n"
+                    "Use 'github' to generate a multi-platform GitHub Actions workflow for build, test, run, and dist commands.\n"
+                    "Use '-p' or '--platform' with a comma-separated list such as 'windows-x86_64,linux-x86_64' to override the workflow matrix.\n"
+                    "Custom generators can also be defined in 'user.bbs' or 'local.bbs' with 'gen(name(...), copyfile(...))'.\n"
+                    "If the target file already exists, bbs refuses to overwrite it unless '-o' or '--override' is provided."},
 
      [CMD_CFG] = {    .name = "cfg",
                    .params = "[-m] [-p] [-u] [-l] [-t]",

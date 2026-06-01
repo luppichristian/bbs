@@ -15,6 +15,41 @@ static const char* user_scalar_text(node* n) {
   }
 }
 
+static int user_child_count(node* n) {
+  int count = 0;
+  if (!n)
+    return 0;
+
+  node_foreach(n, child) {
+    ++count;
+  }
+  return count;
+}
+
+static node** user_children_in_source_order(node* n, int* out_count) {
+  if (out_count)
+    *out_count = 0;
+  if (!n)
+    return NULL;
+
+  int count = user_child_count(n);
+  if (count <= 0)
+    return NULL;
+
+  node** items = push(sizeof(*items) * (size_t)count);
+  if (!items)
+    return NULL;
+
+  int idx = count - 1;
+  node_foreach(n, child) {
+    items[idx--] = child;
+  }
+
+  if (out_count)
+    *out_count = count;
+  return items;
+}
+
 static bool user_is_archive_format(const char* text) {
   if (!text || !text[0])
     return false;
@@ -157,6 +192,97 @@ static bool user_read_text_child(node* scope, const char* name, const char** out
   return true;
 }
 
+static int user_find_gen_index(const user* u, const char* name) {
+  if (!u || !name || !name[0])
+    return -1;
+
+  for (int i = 0; i < u->gen_c; ++i) {
+    if (u->gens[i].name && _stricmp(u->gens[i].name, name) == 0)
+      return i;
+  }
+
+  return -1;
+}
+
+static const user_gen* user_find_gen(const user* u, const char* name) {
+  int idx = user_find_gen_index(u, name);
+  return idx >= 0 ? &u->gens[idx] : NULL;
+}
+
+static bool user_parse_gen_node(node* gen_n, user_gen* out) {
+  if (!gen_n || !out)
+    return false;
+  if (gen_n->type != NODE_TYPE_DEF) {
+    error("Attribute 'gen' must be a section.");
+    return false;
+  }
+
+  memset(out, 0, sizeof(*out));
+  if (!user_read_text_child(gen_n, "name", &out->name))
+    return false;
+  if (!out->name || !out->name[0]) {
+    error("Generator 'gen' is missing required attribute 'name'.");
+    return false;
+  }
+
+  if (!user_read_text_child(gen_n, "copyfile", &out->copyfile))
+    return false;
+  if (!out->copyfile || !out->copyfile[0]) {
+    error("Generator '%s' is missing required attribute 'copyfile'.", out->name);
+    return false;
+  }
+
+  return true;
+}
+
+static bool user_add_gen(user* out, user_gen gen, bool replace_existing) {
+  if (!out || !gen.name || !gen.name[0])
+    return false;
+
+  int idx = user_find_gen_index(out, gen.name);
+  if (idx >= 0) {
+    if (!replace_existing) {
+      error("Duplicate generator '%s'.", gen.name);
+      return false;
+    }
+
+    out->gens[idx] = gen;
+    return true;
+  }
+
+  user_gen* items = push(sizeof(*items) * (size_t)(out->gen_c + 1));
+  if (!items)
+    return false;
+
+  if (out->gens && out->gen_c > 0)
+    memcpy(items, out->gens, sizeof(*items) * (size_t)out->gen_c);
+
+  items[out->gen_c++] = gen;
+  out->gens = items;
+  return true;
+}
+
+static bool user_collect_scope_gens(node* scope, user* out, bool replace_existing) {
+  if (!scope || !out)
+    return true;
+
+  int child_count = 0;
+  node** children = user_children_in_source_order(scope, &child_count);
+  for (int i = 0; i < child_count; ++i) {
+    node* child = children[i];
+    if (!child || !child->name || _stricmp(child->name, "gen") != 0)
+      continue;
+
+    user_gen gen = {0};
+    if (!user_parse_gen_node(child, &gen))
+      return false;
+    if (!user_add_gen(out, gen, replace_existing))
+      return false;
+  }
+
+  return true;
+}
+
 static void user_apply_defaults(user* u) {
   if (!u)
     return;
@@ -168,6 +294,8 @@ static void user_apply_defaults(user* u) {
   u->cmake_args = NULL;
   u->cmake_build_args = NULL;
   u->ctest_args = NULL;
+  u->gens = NULL;
+  u->gen_c = 0;
 }
 
 static bool user_apply_scope(node* scope, user* out) {
@@ -242,7 +370,14 @@ static bool user_load_paths(const char* user_path, const char* local_path, user*
   if (!merged)
     return false;
 
-  return user_apply_scope(merged, out);
+  if (!user_apply_scope(merged, out))
+    return false;
+  if (!user_collect_scope_gens(user_scope, out, false))
+    return false;
+  if (!user_collect_scope_gens(local_scope, out, true))
+    return false;
+
+  return true;
 }
 
 static user* user_init(cmd_ctx* ctx) {

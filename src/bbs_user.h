@@ -6,6 +6,11 @@
 #define DEF_DIST_DIR  "dist"
 
 typedef struct {
+  const char* name;
+  const char* copyfile;
+} user_gen;
+
+typedef struct {
   const char* builddir;
   const char* distdir;
   const char* dist_archive_format;
@@ -13,4 +18,6 @@ typedef struct {
   const char* cmake_args;
   const char* cmake_build_args;
   const char* ctest_args;
+  user_gen* gens;
+  int gen_c;
 } user;
