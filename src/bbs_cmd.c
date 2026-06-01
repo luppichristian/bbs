@@ -3,7 +3,34 @@
 #include "bbs_project.c"
 
 static void print_section(const char* title) {
-  printf(ANSI_FG_INFO "\n%s\n" ANSI_RESET, title);
+  printf("\n" ANSI_FG_INFO "%s" ANSI_RESET "\n", title);
+}
+
+static const char* cfg_short_name(const char* filename) {
+  static char buf[64];
+  const char* dot = filename ? strchr(filename, '.') : NULL;
+  size_t len = dot ? (size_t)(dot - filename) : (filename ? strlen(filename) : 0);
+  if (len >= sizeof(buf))
+    len = sizeof(buf) - 1;
+  if (len > 0)
+    memcpy(buf, filename, len);
+  buf[len] = '\0';
+  return buf;
+}
+
+static void print_summary_entry(const char* lhs, const char* rhs, size_t width) {
+  size_t lhs_len = lhs ? strlen(lhs) : 0;
+  if (lhs_len <= width) {
+    print("  %-*s  %s", (int)width, lhs ? lhs : "", rhs ? rhs : "");
+    return;
+  }
+
+  print("  %s", lhs ? lhs : "");
+  print("  %*s%s", (int)width + 2, "", rhs ? rhs : "");
+}
+
+static void print_cfg_path(const char* label, const char* path) {
+  print("  %-9s  %s", label, path);
 }
 
 static void print_indented_text(const char* text) {
@@ -53,18 +80,18 @@ static cfg parse_cfg_name(const char* name) {
 static void print_cfg_help(cfg c) {
   const cfg_info info = CFG_INFOS[c];
 
-  print_section("CONFIG");
+  print_section("Config");
   print("  %s", info.filename);
 
-  print_section("DESCRIPTION");
+  print_section("Description");
   print("  %s", info.desc);
 
   if (info.detailed_desc && info.detailed_desc[0] != '\0') {
-    print_section("DETAILS");
+    print_section("Details");
     print_indented_text(info.detailed_desc);
   }
 
-  print_section("LOCATION");
+  print_section("Location");
   print("  Expected in the %s.", cfg_loc_label(info.loc));
 }
 
@@ -90,39 +117,39 @@ static void print_cmd_help(cmd command) {
   char usage[128] = {0};
 
   format_cmd_usage(usage, sizeof(usage), command);
-  print("  %-62s %s", usage, info.desc);
+  print_summary_entry(usage, info.desc, 44);
 }
 
 static void print_cmd_detailed_help(cmd command) {
   const cmd_info info = CMD_INFOS[command];
 
-  print_section("COMMAND");
+  print_section("Command");
   print_cmd_synopsis(command);
 
-  print_section("DESCRIPTION");
+  print_section("Description");
   printf("  %s\n", info.desc);
 
   if (info.detailed_desc && info.detailed_desc[0] != '\0') {
-    print_section("DETAILS");
+    print_section("Details");
     print_indented_text(info.detailed_desc);
   }
 }
 
 static void print_usage(void) {
   print(ANSI_BOLD "Better Build System v%u.%u" ANSI_RESET, VER_MAJOR, VER_MINOR);
-  print("An integrated build system for C/C++ projects.");
+  print("Minimal build tooling for C/C++ projects.");
 
-  print_section("USAGE");
-  print("  bbs <command> [arguments]");
-  print("  bbs %s [command/topic]", CMD_INFOS[CMD_HELP].name);
+  print_section("Usage");
+  print("  bbs <command> [options]");
+  print("  bbs %s [command|config]", CMD_INFOS[CMD_HELP].name);
 
-  print_section("GET STARTED");
+  print_section("Getting Started");
   print("  Create '{PROJECT_DIR}/%s' in the %s.", CFG_INFOS[CFG_PROJECT].filename, cfg_loc_label(CFG_INFOS[CFG_PROJECT].loc));
-  print("  Store shared user defaults as '{BBS_DIR}/%s' in the %s.", CFG_INFOS[CFG_USER].filename, cfg_loc_label(CFG_INFOS[CFG_USER].loc));
-  print("  Store machine-specific project overrides as '{PROJECT_DIR}/%s' in the %s.", CFG_INFOS[CFG_LOCAL].filename, cfg_loc_label(CFG_INFOS[CFG_LOCAL].loc));
+  print("  Add shared defaults in '{BBS_DIR}/%s' in the %s.", CFG_INFOS[CFG_USER].filename, cfg_loc_label(CFG_INFOS[CFG_USER].loc));
+  print("  Add machine-local overrides in '{PROJECT_DIR}/%s' in the %s.", CFG_INFOS[CFG_LOCAL].filename, cfg_loc_label(CFG_INFOS[CFG_LOCAL].loc));
 
-  print_section("NEXT STEP");
-  print("  Run 'bbs %s' to see all commands and config topics.", CMD_INFOS[CMD_HELP].name);
+  print_section("Next Step");
+  print("  Run 'bbs %s' to see the command and config reference.", CMD_INFOS[CMD_HELP].name);
 }
 
 static cmd parse_cmd_name(const char* name) {
@@ -149,12 +176,12 @@ static void print_help(int argc, char** argv) {
   if (help_page != CMD_MAX)
     switch (help_page) {
       case CMD_HELP:
-        print_section("COMMANDS");
+        print_section("Commands");
         for (int i = CMD_HELP; i < CMD_MAX; ++i)
           print_cmd_help((cmd)i);
-        print_section("CONFIGS");
+        print_section("Configs");
         for (int i = 0; i < CFG_MAX; ++i)
-          print("  bbs help %-29.*s %s", (int)(strchr(CFG_INFOS[i].filename, '.') - CFG_INFOS[i].filename), CFG_INFOS[i].filename, CFG_INFOS[i].desc);
+          print_summary_entry(cfg_short_name(CFG_INFOS[i].filename), CFG_INFOS[i].desc, 11);
         break;
       default:
         print_cmd_detailed_help(help_page);
@@ -163,31 +190,299 @@ static void print_help(int argc, char** argv) {
   else if (cfg_page != CFG_MAX) {
     print_cfg_help(cfg_page);
   } else {
-    print_section("COMMANDS");
+    print_section("Commands");
     for (int i = CMD_HELP; i < CMD_MAX; ++i)
       print_cmd_help((cmd)i);
-    print_section("CONFIGS");
+    print_section("Configs");
     for (int i = 0; i < CFG_MAX; ++i)
-      print("  bbs help %-29.*s %s", (int)(strchr(CFG_INFOS[i].filename, '.') - CFG_INFOS[i].filename), CFG_INFOS[i].filename, CFG_INFOS[i].desc);
+      print_summary_entry(cfg_short_name(CFG_INFOS[i].filename), CFG_INFOS[i].desc, 11);
   }
 
-  print_section("NOTES");
+  print_section("Notes");
   print("  [] indicates optional arguments. <> indicates required arguments.");
-  print("  All commands operate on the project rooted at the current working directory.");
+  print("  Commands operate on the project rooted at the current working directory.");
   print("  The build system is initialized automatically when a command runs.");
-  print("  [-t target] can be inferred when the project only has one target; otherwise bbs operates on all targets.");
-  print("  [-p platform] selects one of the platforms declared in '%s'.", CFG_INFOS[CFG_PROJECT].filename);
+  print("  [-t target] can be inferred when the project defines only one target; otherwise bbs operates on all targets.");
+  print("  [-p platform] selects one supported target platform, such as 'windows-x86_64'.");
+  print("  Use '*' with -t, -p, or -c to execute supported commands for all matching targets, platforms, or configs.");
+  print("  For 'run', '-p *' expands only to the host-native platform because bbs cannot execute cross-platform outputs locally.");
 
-  print_section("MORE HELP");
-  for (int i = CMD_CLEAN; i < CMD_MAX; ++i)
-    print("  bbs help %-29s %s", CMD_INFOS[i].name, CMD_INFOS[i].desc);
-  for (int i = 0; i < CFG_MAX; ++i)
-    print("  bbs help %-29.*s %s", (int)(strchr(CFG_INFOS[i].filename, '.') - CFG_INFOS[i].filename), CFG_INFOS[i].filename, CFG_INFOS[i].desc);
+  print_section("More Help");
   print("  bbs %s <command>", CMD_INFOS[CMD_HELP].name);
+  print("  bbs %s <config>", CMD_INFOS[CMD_HELP].name);
 }
 
 static int error_code(cmd c, char idx) {
   return 200 + c * 255 + idx;
+}
+
+static bool cmdopt_is_star(const char* value) {
+  return value && strcmp(value, "*") == 0;
+}
+
+static bool cmd_collect_configs(const char* selected, const char*** out_configs, int* out_count) {
+  if (!out_configs || !out_count)
+    return false;
+  *out_configs = NULL;
+  *out_count = 0;
+
+  if (!cmdopt_is_star(selected))
+    return true;
+
+  project proj = {0};
+  if (!project_load(&proj))
+    return false;
+  *out_configs = proj.configs;
+  *out_count = proj.config_c;
+  return true;
+}
+
+static bool cmd_collect_platforms(toolchain* tc, bool host_only, const char*** out_platforms, int* out_count) {
+  if (!out_platforms || !out_count || !tc)
+    return false;
+  *out_platforms = NULL;
+  *out_count = 0;
+
+  if (host_only) {
+    const char** items = push(sizeof(*items));
+    if (!items)
+      return false;
+    items[0] = project_platform_id(tc->p_os, tc->p_arch);
+    *out_platforms = items;
+    *out_count = 1;
+    return true;
+  }
+
+  const char** items = push(sizeof(*items) * (size_t)(OS_MAX * ARCH_MAX));
+  if (!items)
+    return false;
+
+  int count = 0;
+  for (int osi = 0; osi < OS_MAX; ++osi)
+    for (int ai = 0; ai < ARCH_MAX; ++ai)
+      if (tc->supported[osi][ai])
+        items[count++] = project_platform_id((os)osi, (arch)ai);
+
+  *out_platforms = items;
+  *out_count = count;
+  return true;
+}
+
+static bool cmd_run_build_matrix(const char* target, const char* platform, const char* config, toolchain* tc) {
+  const char** configs = NULL;
+  int config_c = 0;
+  if (!cmd_collect_configs(config, &configs, &config_c))
+    return false;
+
+  int failures = 0;
+  int runs = 0;
+  int config_iters = cmdopt_is_star(config) ? config_c : 1;
+  for (int ci = 0; ci < config_iters; ++ci) {
+    const char* cfg = cmdopt_is_star(config) ? configs[ci] : config;
+    project proj = {0};
+    if (!project_load_config(cfg, &proj)) {
+      ++failures;
+      continue;
+    }
+
+    const char** platforms = NULL;
+    int platform_c = 0;
+    if (cmdopt_is_star(platform) && !cmd_collect_platforms(tc, false, &platforms, &platform_c)) {
+      ++failures;
+      continue;
+    }
+
+    int platform_iters = cmdopt_is_star(platform) ? platform_c : 1;
+    for (int pi = 0; pi < platform_iters; ++pi) {
+      const char* p = cmdopt_is_star(platform) ? platforms[pi] : (platform ? platform : project_platform_id(tc->p_os, tc->p_arch));
+      if (cmdopt_is_star(target)) {
+        ++runs;
+        if (!project_build(NULL, p, cfg, tc))
+          ++failures;
+      } else {
+        ++runs;
+        if (!project_build(target, p, cfg, tc))
+          ++failures;
+      }
+    }
+  }
+
+  return runs > 0 && failures == 0;
+}
+
+static bool cmd_run_run_matrix(const char* target, const char* platform, const char* config, toolchain* tc) {
+  const char** configs = NULL;
+  int config_c = 0;
+  if (!cmd_collect_configs(config, &configs, &config_c))
+    return false;
+
+  int failures = 0;
+  int runs = 0;
+  int config_iters = cmdopt_is_star(config) ? config_c : 1;
+  for (int ci = 0; ci < config_iters; ++ci) {
+    const char* cfg = cmdopt_is_star(config) ? configs[ci] : config;
+    project proj = {0};
+    if (!project_load_config(cfg, &proj)) {
+      ++failures;
+      continue;
+    }
+
+    const char** platforms = NULL;
+    int platform_c = 0;
+    if (cmdopt_is_star(platform) && !cmd_collect_platforms(tc, true, &platforms, &platform_c)) {
+      ++failures;
+      continue;
+    }
+
+    int platform_iters = cmdopt_is_star(platform) ? platform_c : 1;
+    for (int pi = 0; pi < platform_iters; ++pi) {
+      const char* p = cmdopt_is_star(platform) ? platforms[pi] : (platform ? platform : project_platform_id(tc->p_os, tc->p_arch));
+      if (cmdopt_is_star(target)) {
+        int matched = 0;
+        bool built = false;
+        for (int ti = 0; ti < proj.target_c; ++ti) {
+          if (!project_target_is_runnable(&proj.targets[ti]))
+            continue;
+          if (!built) {
+            ++runs;
+            if (!project_build(NULL, p, cfg, tc)) {
+              ++failures;
+              built = true;
+              break;
+            }
+            built = true;
+          }
+          ++matched;
+          ++runs;
+          project_print_action_header("Run", &proj, p);
+          project_print_target_line("Run", &proj.targets[ti]);
+          if (!project_run_execute(&proj, &proj.targets[ti], p, tc))
+            ++failures;
+        }
+        if (matched == 0) {
+          error("No runnable targets found.");
+          ++failures;
+        }
+      } else {
+        ++runs;
+        if (!project_run(target, p, cfg, tc))
+          ++failures;
+      }
+    }
+  }
+
+  return runs > 0 && failures == 0;
+}
+
+static bool cmd_run_dist_matrix(const char* target, const char* platform, const char* config, toolchain* tc) {
+  const char** configs = NULL;
+  int config_c = 0;
+  if (!cmd_collect_configs(config, &configs, &config_c))
+    return false;
+
+  int failures = 0;
+  int runs = 0;
+  int config_iters = cmdopt_is_star(config) ? config_c : 1;
+  for (int ci = 0; ci < config_iters; ++ci) {
+    const char* cfg = cmdopt_is_star(config) ? configs[ci] : config;
+    project proj = {0};
+    if (!project_load_config(cfg, &proj)) {
+      ++failures;
+      continue;
+    }
+
+    const char** platforms = NULL;
+    int platform_c = 0;
+    if (cmdopt_is_star(platform) && !cmd_collect_platforms(tc, false, &platforms, &platform_c)) {
+      ++failures;
+      continue;
+    }
+
+    int platform_iters = cmdopt_is_star(platform) ? platform_c : 1;
+    for (int pi = 0; pi < platform_iters; ++pi) {
+      const char* p = cmdopt_is_star(platform) ? platforms[pi] : (platform ? platform : project_platform_id(tc->p_os, tc->p_arch));
+      if (cmdopt_is_star(target)) {
+        for (int ti = 0; ti < proj.target_c; ++ti) {
+          ++runs;
+          if (!project_dist(proj.targets[ti].meta.id, p, cfg, tc))
+            ++failures;
+        }
+      } else {
+        ++runs;
+        if (!project_dist(target, p, cfg, tc))
+          ++failures;
+      }
+    }
+  }
+
+  return runs > 0 && failures == 0;
+}
+
+static bool cmd_run_test_matrix(const char* test_name, const char* target, const char* platform, const char* config, toolchain* tc) {
+  const char** configs = NULL;
+  int config_c = 0;
+  if (!cmd_collect_configs(config, &configs, &config_c))
+    return false;
+
+  int failures = 0;
+  int runs = 0;
+  int config_iters = cmdopt_is_star(config) ? config_c : 1;
+  for (int ci = 0; ci < config_iters; ++ci) {
+    const char* cfg = cmdopt_is_star(config) ? configs[ci] : config;
+    project proj = {0};
+    if (!project_load_config(cfg, &proj)) {
+      ++failures;
+      continue;
+    }
+
+    const char** platforms = NULL;
+    int platform_c = 0;
+    if (cmdopt_is_star(platform) && !cmd_collect_platforms(tc, false, &platforms, &platform_c)) {
+      ++failures;
+      continue;
+    }
+
+    int platform_iters = cmdopt_is_star(platform) ? platform_c : 1;
+    for (int pi = 0; pi < platform_iters; ++pi) {
+      const char* p = cmdopt_is_star(platform) ? platforms[pi] : (platform ? platform : project_platform_id(tc->p_os, tc->p_arch));
+      if (cmdopt_is_star(target)) {
+        int matched = 0;
+        bool built = false;
+        for (int ti = 0; ti < proj.target_c; ++ti) {
+          if (!project_target_is_test(&proj.targets[ti]))
+            continue;
+          if (!built) {
+            ++runs;
+            if (!project_build(NULL, p, cfg, tc)) {
+              ++failures;
+              built = true;
+              break;
+            }
+            built = true;
+          }
+          ++matched;
+          ++runs;
+          project_print_action_header("Test", &proj, p);
+          project_print_field("Directory", project_resolved_dir(proj.user_cfg.builddir, proj.active_config, p));
+          if (test_name && test_name[0])
+            project_print_field("Test", test_name);
+          project_print_target_line("Test", &proj.targets[ti]);
+          if (!project_test_execute(&proj, &proj.targets[ti], test_name, p, tc))
+            ++failures;
+        }
+        if (matched == 0) {
+          error("No test targets found.");
+          ++failures;
+        }
+      } else {
+        ++runs;
+        if (!project_test(test_name, target, p, cfg, tc))
+          ++failures;
+      }
+    }
+  }
+
+  return runs > 0 && failures == 0;
 }
 
 static const char* cmdline_extract_option_value(cmdline* cl, const char* short_name, const char* long_name) {
@@ -268,10 +563,10 @@ static int run_cmd_cfg(cmd_ctx* cmdctx) {
     if (opts[LOCAL].present) print("%s", cmdctx_cfg_path(cmdctx, CFG_LOCAL));
     if (opts[TOOLCHAIN].present) print("%s", cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN));
   } else {
-    if (opts[PROJECT].present) print("  Project config: %s", cmdctx_cfg_path(cmdctx, CFG_PROJECT));
-    if (opts[USER].present) print("  User config:    %s", cmdctx_cfg_path(cmdctx, CFG_USER));
-    if (opts[LOCAL].present) print("  Local config:   %s", cmdctx_cfg_path(cmdctx, CFG_LOCAL));
-    if (opts[TOOLCHAIN].present) print("  Toolchain config:   %s", cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN));
+    if (opts[PROJECT].present) print_cfg_path("Project", cmdctx_cfg_path(cmdctx, CFG_PROJECT));
+    if (opts[USER].present) print_cfg_path("User", cmdctx_cfg_path(cmdctx, CFG_USER));
+    if (opts[LOCAL].present) print_cfg_path("Local", cmdctx_cfg_path(cmdctx, CFG_LOCAL));
+    if (opts[TOOLCHAIN].present) print_cfg_path("Toolchain", cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN));
   }
 
   return 0;
@@ -373,6 +668,12 @@ static int run_cmd_build(cmd_ctx* cmdctx) {
   cmdline_validate(cmdctx->cl);
 
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  if (cmdopt_is_star(target) || cmdopt_is_star(platform) || cmdopt_is_star(config)) {
+    if (!cmd_run_build_matrix(target, platform, config, tc))
+      return error_code(CMD_BUILD, 0);
+    return 0;
+  }
+
   if (!project_build(target, platform, config, tc))
     return error_code(CMD_BUILD, 0);
   return 0;
@@ -394,8 +695,15 @@ static int run_cmd_run(cmd_ctx* cmdctx) {
   };
 
   cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
+  cmdline_validate(cmdctx->cl);
 
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  if (cmdopt_is_star(target) || cmdopt_is_star(platform) || cmdopt_is_star(config)) {
+    if (!cmd_run_run_matrix(target, platform, config, tc))
+      return error_code(CMD_RUN, 0);
+    return 0;
+  }
+
   if (!project_run(target, platform, config, tc))
     return error_code(CMD_RUN, 0);
   return 0;
@@ -704,7 +1012,7 @@ static void info_print_node(node* n, const char* parent_path, size_t depth, cons
 static int run_cmd_info_file(const char* title, const char* path, const char* attr_filter, const char* text_filter, info_print_mode mode) {
   if (!file_exists(path)) {
     if (mode == INFO_PRINT_NORMAL) {
-      print("%s is not present.", title);
+      print("%s is not available.", title);
       print("Expected path: %s", path);
     }
     return 0;
@@ -736,7 +1044,7 @@ static int run_cmd_info_file(const char* title, const char* path, const char* at
   if (mode == INFO_PRINT_NORMAL) {
     print_section(title);
     print("File: %s", path);
-    print("Nodes parsed: %d", total_nodes);
+    print("Nodes: %d", total_nodes);
     if (attr_filter && attr_filter[0])
       print("Attribute: %s", attr_filter);
     if (text_filter && text_filter[0])
@@ -750,7 +1058,7 @@ static int run_cmd_info_file(const char* title, const char* path, const char* at
   }
 
   if (mode == INFO_PRINT_NORMAL) {
-    print("Attributes shown: %d", visible_nodes);
+    print("Matches: %d", visible_nodes);
     printf("\n");
   }
 
@@ -836,7 +1144,14 @@ static int run_cmd_dist(cmd_ctx* cmdctx) {
   cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
   cmdline_validate(cmdctx->cl);
 
-  if (!project_dist(target, platform, config, NULL))
+  toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  if (cmdopt_is_star(target) || cmdopt_is_star(platform) || cmdopt_is_star(config)) {
+    if (!cmd_run_dist_matrix(target, platform, config, tc))
+      return error_code(CMD_DIST, 0);
+    return 0;
+  }
+
+  if (!project_dist(target, platform, config, tc))
     return error_code(CMD_DIST, 0);
   return 0;
 }
@@ -861,6 +1176,12 @@ static int run_cmd_test(cmd_ctx* cmdctx) {
   cmdline_validate(cmdctx->cl);
 
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  if (cmdopt_is_star(target) || cmdopt_is_star(platform) || cmdopt_is_star(config)) {
+    if (!cmd_run_test_matrix(test_name, target, platform, config, tc))
+      return error_code(CMD_TEST, 0);
+    return 0;
+  }
+
   if (!project_test(test_name, target, platform, config, tc))
     return error_code(CMD_TEST, 0);
   return 0;
@@ -880,11 +1201,6 @@ static bool bumpver_match_meta_field(node* scope, const char* field_name, const 
     return false;
 
   node* field = node_get_child(scope, field_name);
-  if (!field) {
-    node* meta = node_get_child(scope, "meta");
-    if (meta)
-      field = node_get_child(meta, field_name);
-  }
   if (!field)
     return false;
 
@@ -911,6 +1227,11 @@ static node* bumpver_find_project(node* tree, const char* project_id, int* out_m
       continue;
     match = child;
     ++matches;
+  }
+
+  if (matches == 0 && bumpver_match_project_id(tree, project_id)) {
+    match = tree;
+    matches = 1;
   }
 
   if (out_matches)
@@ -954,14 +1275,7 @@ static node* bumpver_find_version(node* scope) {
   if (!scope)
     return NULL;
 
-  node* version = node_get_child(scope, "version");
-  if (version)
-    return version;
-
-  node* meta = node_get_child(scope, "meta");
-  if (!meta)
-    return NULL;
-  return node_get_child(meta, "version");
+  return node_get_child(scope, "ver");
 }
 
 static bool bumpver_inc_byte(uint8_t* value, const char* label) {
@@ -1023,7 +1337,7 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
       else
         error("Multiple project nodes found with id '%s'.", project_id);
     } else if (matches == 0) {
-      error("No top-level project node found in '%s'.", project_path);
+      error("No project scope found in '%s'.", project_path);
     } else {
       error("Multiple top-level project nodes found. Specify [project_id].");
     }
@@ -1051,7 +1365,7 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
     if (target_id && target_id[0])
       error("Target '%s' does not define a version.", target_id);
     else
-      error("Project node does not define a version.");
+      error("Project does not define a version.");
     return error_code(CMD_BUMPVER, 5);
   }
   if (version->type != NODE_TYPE_VER) {
@@ -1115,12 +1429,12 @@ static int run_cmd_bumpver(cmd_ctx* cmdctx) {
   info_format_value(version, after_text, sizeof(after_text));
 
   if (target_id && target_id[0])
-    print("Updated target version (%s): %s -> %s", target_id, before_text, after_text);
+    print("Updated target version for '%s': %s -> %s", target_id, before_text, after_text);
   else if (project_id && project_id[0])
-    print("Updated project version (%s): %s -> %s", project_id, before_text, after_text);
+    print("Updated project version for '%s': %s -> %s", project_id, before_text, after_text);
   else
     print("Updated version: %s -> %s", before_text, after_text);
-  print("Edited: %s", project_path);
+  print("File: %s", project_path);
   return 0;
 }
 

@@ -72,6 +72,8 @@ typedef struct {
   int include_dir_c;
   const char** link_dirs;
   int link_dir_c;
+  const char** dependencies;
+  int dependency_c;
 
   // Preprocessor defines
   const char* defines;
@@ -110,6 +112,8 @@ typedef struct {
   int post_run_cmd_c;
   int pre_dist_cmd_c;
   int post_dist_cmd_c;
+  bool dist_archive;
+  const char* dist_archive_name;
 } target;
 
 typedef struct {

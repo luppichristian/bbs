@@ -8,4 +8,9 @@
 typedef struct {
   const char* builddir;
   const char* distdir;
+  const char* dist_archive_format;
+  const char* dist_archive_name;
+  const char* cmake_args;
+  const char* cmake_build_args;
+  const char* ctest_args;
 } user;

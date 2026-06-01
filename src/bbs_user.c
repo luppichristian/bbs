@@ -15,6 +15,13 @@ static const char* user_scalar_text(node* n) {
   }
 }
 
+static bool user_is_archive_format(const char* text) {
+  if (!text || !text[0])
+    return false;
+
+  return _stricmp(text, "zip") == 0 || _stricmp(text, "tar") == 0 || _stricmp(text, "rar") == 0;
+}
+
 static void user_append_child(node* parent, node* child) {
   if (!parent || !child)
     return;
@@ -156,6 +163,11 @@ static void user_apply_defaults(user* u) {
 
   u->builddir = DEF_BUILD_DIR;
   u->distdir = DEF_DIST_DIR;
+  u->dist_archive_format = "zip";
+  u->dist_archive_name = "$CFG-$OS-$ARC--$VER";
+  u->cmake_args = NULL;
+  u->cmake_build_args = NULL;
+  u->ctest_args = NULL;
 }
 
 static bool user_apply_scope(node* scope, user* out) {
@@ -173,6 +185,41 @@ static bool user_apply_scope(node* scope, user* out) {
     return false;
   if (text && text[0])
     out->distdir = text;
+
+  text = NULL;
+  if (!user_read_text_child(scope, "dist_archive_format", &text))
+    return false;
+  if (text && text[0]) {
+    if (!user_is_archive_format(text)) {
+      error("Unknown dist_archive_format '%s'.", text);
+      return false;
+    }
+    out->dist_archive_format = text;
+  }
+
+  text = NULL;
+  if (!user_read_text_child(scope, "dist_archive_name", &text))
+    return false;
+  if (text && text[0])
+    out->dist_archive_name = text;
+
+  text = NULL;
+  if (!user_read_text_child(scope, "cmake_args", &text))
+    return false;
+  if (text && text[0])
+    out->cmake_args = text;
+
+  text = NULL;
+  if (!user_read_text_child(scope, "cmake_build_args", &text))
+    return false;
+  if (text && text[0])
+    out->cmake_build_args = text;
+
+  text = NULL;
+  if (!user_read_text_child(scope, "ctest_args", &text))
+    return false;
+  if (text && text[0])
+    out->ctest_args = text;
 
   return true;
 }

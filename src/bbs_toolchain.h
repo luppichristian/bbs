@@ -116,6 +116,11 @@ typedef struct {
   bool supported[OS_MAX][ARCH_MAX];
   const char* support_source[OS_MAX][ARCH_MAX];
 
+   const char* project_cfg_path;
+   const char* user_cfg_path;
+   const char* local_cfg_path;
+   const char* toolchain_cfg_path;
+
   toolchain_env* envs;
   int env_c;
   int env_cap;

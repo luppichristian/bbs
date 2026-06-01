@@ -127,9 +127,7 @@ static void print_done_elapsed(platform_timestamp started_ms) {
   platform_timestamp delta = finished_ms >= started_ms ? finished_ms - started_ms : 0;
   format_elapsed_ms(delta, elapsed, sizeof(elapsed));
 
-  fputs(LABEL_DONE, stdout);
-  fprintf(stdout, "Command executed in %s", elapsed);
-  fputs(ANSI_RESET, stdout);
+  fprintf(stdout, ANSI_BOLD ANSI_FG_SUCCESS "Done" ANSI_RESET ANSI_FG_TEXT " in %s." ANSI_RESET, elapsed);
   fputc('\n', stdout);
 }
 

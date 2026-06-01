@@ -2014,7 +2014,7 @@ static void toolchain_fill(toolchain* tc) {
   toolchain_refresh_runtime_support(tc);
 
   toolchain_env* host = toolchain_host_env(tc, false);
-  print("Discovery completed: %d tools, %d sdks, %d environments.", host ? host->tool_c : 0, host ? host->sdk_c : 0, tc->env_c);
+  print("Discovery complete: %d tools, %d SDKs, %d environments.", host ? host->tool_c : 0, host ? host->sdk_c : 0, tc->env_c);
 }
 
 static void toolchain_print_with_opts(toolchain* tc, const toolchain_print_opts* opts) {
@@ -2304,7 +2304,6 @@ static node* toolchain_write(toolchain* tc) {
 }
 
 static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx) {
-  (void)cmdctx;
   bool exists = file_exists(path);
   if (exists && (!reinit)) {
     const char* data = read_entire_file(path);
@@ -2319,10 +2318,17 @@ static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx)
       return NULL;
     }
 
-    return toolchain_read(tree);
+    toolchain* tc = toolchain_read(tree);
+    if (tc && cmdctx) {
+      tc->project_cfg_path = cmdctx->cfg_paths[CFG_PROJECT];
+      tc->user_cfg_path = cmdctx->cfg_paths[CFG_USER];
+      tc->local_cfg_path = cmdctx->cfg_paths[CFG_LOCAL];
+      tc->toolchain_cfg_path = cmdctx->cfg_paths[CFG_TOOLCHAIN];
+    }
+    return tc;
   }
 
-  print("Generating toolchain...");
+  print("Generating toolchain cache...");
   toolchain* previous = NULL;
   if (exists) {
     const char* data = read_entire_file(path);
@@ -2334,6 +2340,12 @@ static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx)
   }
   toolchain* tc = push(sizeof(toolchain));
   memset(tc, 0, sizeof(toolchain));
+  if (cmdctx) {
+    tc->project_cfg_path = cmdctx->cfg_paths[CFG_PROJECT];
+    tc->user_cfg_path = cmdctx->cfg_paths[CFG_USER];
+    tc->local_cfg_path = cmdctx->cfg_paths[CFG_LOCAL];
+    tc->toolchain_cfg_path = cmdctx->cfg_paths[CFG_TOOLCHAIN];
+  }
   toolchain_fill(tc);
   if (!toolchain_get_tool_path(tc, "cmake"))
     return NULL;

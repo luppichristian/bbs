@@ -6,6 +6,10 @@
 static bool project_parse_string_list(node* list_n, const char*** out_items, int* out_count);
 static const char* project_join_scalar_list(node* list_n, int* out_count);
 static bool project_load_user_config(user* out);
+static const char* project_target_executable_abs(const project* proj, const target* tgt, const char* platform);
+static bool project_apply_dist_node(node* dist_n, target* out, const char* target_label);
+static const char* project_expand_config_string(const char* text, const project* proj, const target* tgt, const char* platform, toolchain* tc, const char* workdir);
+static int project_find_target_index(const project* proj, const char* name);
 
 static bool project_has_ver(ver v) {
   return v.major != 0 || v.minor != 0 || v.patch != 0 || v.user != 0;
@@ -467,6 +471,77 @@ static bool project_parse_string_list(node* list_n, const char*** out_items, int
   return true;
 }
 
+static bool project_parse_named_scalar_children(node* scope, const char* child_name, const char*** out_items, int* out_count) {
+  if (!out_items || !out_count)
+    return false;
+  if (!scope || !child_name || !child_name[0])
+    return true;
+
+  int match_count = 0;
+  int child_count = 0;
+  node** children = project_children_in_source_order(scope, &child_count);
+  for (int i = 0; i < child_count; ++i) {
+    node* child = children[i];
+    if (child && child->name && _stricmp(child->name, child_name) == 0)
+      ++match_count;
+  }
+
+  if (match_count <= 0)
+    return true;
+
+  const char** items = push(sizeof(*items) * (size_t)match_count);
+  if (!items)
+    return false;
+
+  int wi = 0;
+  for (int i = 0; i < child_count; ++i) {
+    node* child = children[i];
+    if (!child || !child->name || _stricmp(child->name, child_name) != 0)
+      continue;
+
+    const char* text = project_scalar_text(child);
+    if (!text) {
+      error("Attribute '%s' must be a string or identifier.", child_name);
+      return false;
+    }
+    items[wi++] = text;
+  }
+
+  *out_items = items;
+  *out_count = wi;
+  return true;
+}
+
+static bool project_apply_dist_node(node* dist_n, target* out, const char* target_label) {
+  if (!dist_n || !out)
+    return false;
+  if (dist_n->type != NODE_TYPE_DEF) {
+    error("Attribute 'dist' must be a section for target '%s'.", target_label ? target_label : "");
+    return false;
+  }
+
+  if (!project_parse_named_scalar_children(dist_n, "precommand", &out->pre_dist_cmds, &out->pre_dist_cmd_c))
+    return false;
+  if (!project_parse_named_scalar_children(dist_n, "postcommand", &out->post_dist_cmds, &out->post_dist_cmd_c))
+    return false;
+
+  const char* text = NULL;
+  if (!project_read_text_child(dist_n, "name", &text))
+    return false;
+  if (text && text[0])
+    out->dist_archive_name = text;
+
+  node* archive_n = node_get_child(dist_n, "archive");
+  if (archive_n) {
+    if (archive_n->type != NODE_TYPE_BOL) {
+      error("Attribute 'archive' must be a boolean.");
+      return false;
+    }
+    out->dist_archive = node_get_bool(archive_n);
+  }
+  return true;
+}
+
 static const char* project_join_scalar_list(node* list_n, int* out_count) {
   if (out_count)
     *out_count = 0;
@@ -542,12 +617,12 @@ static bool project_parse_meta_fields(node* scope, meta* out) {
   if (!project_read_text_child(scope, "authors", &out->authors))
     return false;
 
-  node* ver_n = node_get_child(scope, "version");
+  node* ver_n = node_get_child(scope, "ver");
   node* lic_n = node_get_child(scope, "license");
 
   if (ver_n) {
     if (ver_n->type != NODE_TYPE_VER) {
-      error("Attribute 'version' must be a version value.");
+      error("Attribute 'ver' must be a version value.");
       return false;
     }
     out->ver = node_get_ver(ver_n);
@@ -559,20 +634,6 @@ static bool project_parse_meta_fields(node* scope, meta* out) {
     if (!project_read_text_child(lic_n, "file", &out->license.file))
       return false;
   }
-
-  return true;
-}
-
-static bool project_parse_meta_scope(node* scope, meta* out) {
-  if (!scope || !out)
-    return false;
-
-  if (!project_parse_meta_fields(scope, out))
-    return false;
-
-  node* meta_n = node_get_child(scope, "meta");
-  if (meta_n)
-    return project_parse_meta_fields(meta_n, out);
 
   return true;
 }
@@ -605,6 +666,9 @@ static bool project_apply_target_attrs(node* scope, target* out, const char* tar
     return false;
   value_n = node_get_child(scope, "link_dirs");
   if (value_n && !project_parse_string_list(value_n, &out->link_dirs, &out->link_dir_c))
+    return false;
+  value_n = node_get_child(scope, "dependencies");
+  if (value_n && !project_parse_string_list(value_n, &out->dependencies, &out->dependency_c))
     return false;
   value_n = node_get_child(scope, "link_libs");
   if (value_n && !project_parse_string_list(value_n, &out->link_libs, &out->link_libs_count))
@@ -690,6 +754,9 @@ static bool project_apply_target_attrs(node* scope, target* out, const char* tar
   value_n = node_get_child(scope, "post_dist_cmds");
   if (value_n && !project_parse_string_list(value_n, &out->post_dist_cmds, &out->post_dist_cmd_c))
     return false;
+  value_n = node_get_child(scope, "dist");
+  if (value_n && !project_apply_dist_node(value_n, out, target_label))
+    return false;
 
   return true;
 }
@@ -727,6 +794,8 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
     return project_parse_string_list(attr_n, &out->include_dirs, &out->include_dir_c);
   if (_stricmp(attr_n->name, "link_dirs") == 0)
     return project_parse_string_list(attr_n, &out->link_dirs, &out->link_dir_c);
+  if (_stricmp(attr_n->name, "dependencies") == 0)
+    return project_parse_string_list(attr_n, &out->dependencies, &out->dependency_c);
   if (_stricmp(attr_n->name, "link_libs") == 0)
     return project_parse_string_list(attr_n, &out->link_libs, &out->link_libs_count);
   if (_stricmp(attr_n->name, "defines") == 0) {
@@ -840,6 +909,8 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
     return project_parse_string_list(attr_n, &out->pre_dist_cmds, &out->pre_dist_cmd_c);
   if (_stricmp(attr_n->name, "post_dist_cmds") == 0)
     return project_parse_string_list(attr_n, &out->post_dist_cmds, &out->post_dist_cmd_c);
+  if (_stricmp(attr_n->name, "dist") == 0)
+    return project_apply_dist_node(attr_n, out, target_label);
 
   error("Unsupported filter attribute '%s'.", attr_n->name);
   return false;
@@ -899,7 +970,7 @@ static bool project_parse_target_node(node* target_n, target* out, const char* a
   }
 
   project_set_default_target(out, type);
-  if (!project_parse_meta_scope(target_n, &out->meta))
+  if (!project_parse_meta_fields(target_n, &out->meta))
     return false;
 
   if (!project_apply_target_attrs(target_n, out, target_n->name))
@@ -1046,6 +1117,71 @@ static bool project_validate(const project* proj) {
     }
   }
 
+  unsigned char* visit_state = push((size_t)proj->target_c * sizeof(*visit_state));
+  if (!visit_state)
+    return false;
+  memset(visit_state, 0, (size_t)proj->target_c * sizeof(*visit_state));
+
+  for (int i = 0; i < proj->target_c; ++i) {
+    if (visit_state[i] == 2)
+      continue;
+
+    const target* tgt = &proj->targets[i];
+    visit_state[i] = 1;
+    for (int j = 0; j < tgt->dependency_c; ++j) {
+      const char* dep_name = tgt->dependencies[j];
+      int dep_idx = project_find_target_index(proj, dep_name);
+      if (dep_idx < 0)
+        return false;
+      if (dep_idx == i) {
+        error("Target '%s' cannot depend on itself.", tgt->meta.id);
+        return false;
+      }
+    }
+    visit_state[i] = 0;
+  }
+
+  for (int root = 0; root < proj->target_c; ++root) {
+    if (visit_state[root] != 0)
+      continue;
+
+    int* stack = push((size_t)proj->target_c * sizeof(*stack));
+    int* edge_idx = push((size_t)proj->target_c * sizeof(*edge_idx));
+    if (!stack || !edge_idx)
+      return false;
+
+    int sp = 0;
+    stack[0] = root;
+    edge_idx[0] = 0;
+    visit_state[root] = 1;
+
+    while (sp >= 0) {
+      int idx = stack[sp];
+      const target* tgt = &proj->targets[idx];
+      if (edge_idx[sp] >= tgt->dependency_c) {
+        visit_state[idx] = 2;
+        --sp;
+        continue;
+      }
+
+      const char* dep_name = tgt->dependencies[edge_idx[sp]++];
+      int dep_idx = project_find_target_index(proj, dep_name);
+      if (dep_idx < 0)
+        return false;
+      if (visit_state[dep_idx] == 1) {
+        error("Dependency cycle detected between targets '%s' and '%s'.", tgt->meta.id, proj->targets[dep_idx].meta.id);
+        return false;
+      }
+      if (visit_state[dep_idx] == 2)
+        continue;
+
+      ++sp;
+      stack[sp] = dep_idx;
+      edge_idx[sp] = 0;
+      visit_state[dep_idx] = 1;
+    }
+  }
+
   return true;
 }
 
@@ -1103,7 +1239,25 @@ static const char* project_opt_level_name(opt_level value) {
 }
 
 static void project_print_section(const char* title) {
-  printf(ANSI_FG_INFO "\n%s\n" ANSI_RESET, title);
+  printf("\n" ANSI_FG_INFO "%s" ANSI_RESET "\n", title);
+}
+
+static void project_print_field(const char* label, const char* value) {
+  if (!label || !value)
+    return;
+  print("  %-10s %s", label, value);
+}
+
+static void project_print_fieldf(const char* label, const char* fmt, ...) {
+  if (!label || !fmt)
+    return;
+
+  char value[1024] = {0};
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(value, sizeof(value), fmt, args);
+  va_end(args);
+  project_print_field(label, value);
 }
 
 static void project_print_list(const char* label, const char** items, int count) {
@@ -1192,6 +1346,7 @@ static void project_print(const project* proj) {
     project_print_list("Units", tgt->units, tgt->unit_c);
     project_print_list("Include Dirs", tgt->include_dirs, tgt->include_dir_c);
     project_print_list("Link Dirs", tgt->link_dirs, tgt->link_dir_c);
+    project_print_list("Dependencies", tgt->dependencies, tgt->dependency_c);
     project_print_list("Link Libs", tgt->link_libs, tgt->link_libs_count);
     project_print_list("Pre Build Cmds", tgt->pre_build_cmds, tgt->pre_build_cmd_c);
     project_print_list("Post Build Cmds", tgt->post_build_cmds, tgt->post_build_cmd_c);
@@ -1200,6 +1355,9 @@ static void project_print(const project* proj) {
     project_print_list("Test Args", tgt->test_args, tgt->test_arg_c);
     project_print_list("Pre Dist Cmds", tgt->pre_dist_cmds, tgt->pre_dist_cmd_c);
     project_print_list("Post Dist Cmds", tgt->post_dist_cmds, tgt->post_dist_cmd_c);
+    print("Dist Archive: %s", tgt->dist_archive ? "true" : "false");
+    if (tgt->dist_archive_name)
+      print("Dist Archive Name: %s", tgt->dist_archive_name);
   }
 }
 
@@ -1215,7 +1373,7 @@ static bool project_parse_project_node(node* project_n, const char* selected_con
     error("Unknown config '%s'.", out->active_config ? out->active_config : "");
     return false;
   }
-  if (!project_parse_meta_scope(project_n, &out->meta))
+  if (!project_parse_meta_fields(project_n, &out->meta))
     return false;
 
   node* targets_n = node_get_child(project_n, "targets");
@@ -1277,10 +1435,8 @@ static bool project_load_file_config(const char* path, const char* config, proje
     ++project_count;
   }
 
-  if (project_count == 0) {
-    error("No top-level project node found in %s.", path);
-    return false;
-  }
+  if (project_count == 0)
+    project_n = tree;
   if (project_count > 1) {
     error("Multiple top-level project nodes found in %s.", path);
     return false;
@@ -1341,6 +1497,15 @@ static bool project_target_is_runnable(const target* tgt) {
 
 static bool project_target_is_test(const target* tgt) {
   return tgt && tgt->testing;
+}
+
+static bool project_target_supports_linking(const target* tgt) {
+  if (!tgt)
+    return false;
+  return tgt->type == TARGET_TYPE_HEADER_LIB ||
+         tgt->type == TARGET_TYPE_STATIC_LIB ||
+         tgt->type == TARGET_TYPE_DYN_LIB ||
+         tgt->type == TARGET_TYPE_OBJ_LIB;
 }
 
 static const char* project_host_os_name(void) {
@@ -1756,7 +1921,394 @@ static bool project_ensure_dir_exists(const char* path, const char* label) {
     error("Failed to create %s: %s", label ? label : "directory", path);
     return false;
   }
-  print("Created %s: %s", label ? label : "directory", path);
+  print("Created %s at %s", label ? label : "directory", path);
+  return true;
+}
+
+static const char* project_dist_root_abs(const project* proj) {
+  return get_path_cwd(proj && proj->user_cfg.distdir ? proj->user_cfg.distdir : DEF_DIST_DIR);
+}
+
+static const char* project_dist_config_dir_abs(const project* proj, const char* config, const char* platform) {
+  return get_path_cwd(project_resolved_dir(proj && proj->user_cfg.distdir ? proj->user_cfg.distdir : DEF_DIST_DIR, config, platform));
+}
+
+static const char* project_dist_gen_dir_abs(const project* proj, const char* config, const char* platform) {
+  return toolchain_join2(project_dist_config_dir_abs(proj, config, platform), "gen");
+}
+
+static const char* project_path_filename(const char* path) {
+  if (!path)
+    return NULL;
+
+  const char* slash = strrchr(path, '/');
+  const char* backslash = strrchr(path, '\\');
+  const char* base = slash;
+  if (!base || (backslash && backslash > base))
+    base = backslash;
+  return base ? base + 1 : path;
+}
+
+static const char* project_path_parent(const char* path) {
+  if (!path || !path[0])
+    return NULL;
+
+  const char* base = project_path_filename(path);
+  size_t len = base > path ? (size_t)(base - path) : 0;
+  while (len > 0 && (path[len - 1] == '/' || path[len - 1] == '\\'))
+    --len;
+
+  char* out = push(len + 1);
+  if (!out)
+    return NULL;
+  memcpy(out, path, len);
+  out[len] = '\0';
+  return out;
+}
+
+static const char* project_current_workdir(void) {
+  char buf[_MAX_PATH] = {0};
+  if (!_getcwd(buf, sizeof(buf)))
+    return NULL;
+  return arena_text(buf, strlen(buf));
+}
+
+static bool project_copy_file(const char* src, const char* dst) {
+  if (!src || !src[0] || !dst || !dst[0])
+    return false;
+
+#if defined(_WIN32)
+  if (CopyFileA(src, dst, FALSE) != 0)
+    return true;
+#endif
+
+  FILE* in = fopen(src, "rb");
+  if (!in)
+    return false;
+
+  FILE* out = fopen(dst, "wb");
+  if (!out) {
+    fclose(in);
+    return false;
+  }
+
+  char buffer[65536];
+  bool ok = true;
+  for (;;) {
+    size_t read = fread(buffer, 1, sizeof(buffer), in);
+    if (read > 0 && fwrite(buffer, 1, read, out) != read) {
+      ok = false;
+      break;
+    }
+    if (read < sizeof(buffer)) {
+      if (ferror(in))
+        ok = false;
+      break;
+    }
+  }
+
+  fclose(in);
+  if (fclose(out) != 0)
+    ok = false;
+  if (!ok)
+    file_delete(dst);
+  return ok;
+}
+
+static bool project_is_runtime_library_name(const char* name, os target_os) {
+  if (!name || !name[0])
+    return false;
+
+  const char* ext = strrchr(name, '.');
+  if (!ext)
+    return false;
+
+  if (target_os == OS_WINDOWS)
+    return _stricmp(ext, ".dll") == 0;
+  if (target_os == OS_MACOS)
+    return _stricmp(ext, ".dylib") == 0;
+  return _stricmp(ext, ".so") == 0;
+}
+
+static bool project_copy_runtime_files(const char* src_dir, const char* dst_dir, os target_os) {
+  if (!src_dir || !dst_dir)
+    return false;
+
+#if defined(_WIN32)
+  char pattern[_MAX_PATH] = {0};
+  snprintf(pattern, sizeof(pattern), "%s\\*", src_dir);
+  WIN32_FIND_DATAA data;
+  HANDLE handle = FindFirstFileA(pattern, &data);
+  if (handle == INVALID_HANDLE_VALUE)
+    return true;
+
+  bool ok = true;
+  do {
+    if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+      continue;
+    if (!project_is_runtime_library_name(data.cFileName, target_os))
+      continue;
+
+    const char* src = toolchain_join2(src_dir, data.cFileName);
+    const char* dst = toolchain_join2(dst_dir, data.cFileName);
+    if (!project_copy_file(src, dst)) {
+      error("Failed to copy runtime library '%s'.", src);
+      ok = false;
+      break;
+    }
+  } while (FindNextFileA(handle, &data) != 0);
+
+  FindClose(handle);
+  return ok;
+#else
+  DIR* dir = opendir(src_dir);
+  if (!dir)
+    return true;
+
+  bool ok = true;
+  struct dirent* entry = NULL;
+  while ((entry = readdir(dir)) != NULL) {
+    if (_stricmp(entry->d_name, ".") == 0 || _stricmp(entry->d_name, "..") == 0)
+      continue;
+    if (!project_is_runtime_library_name(entry->d_name, target_os))
+      continue;
+
+    const char* src = toolchain_join2(src_dir, entry->d_name);
+    const char* dst = toolchain_join2(dst_dir, entry->d_name);
+    if (!project_copy_file(src, dst)) {
+      error("Failed to copy runtime library '%s'.", src);
+      ok = false;
+      break;
+    }
+  }
+
+  closedir(dir);
+  return ok;
+#endif
+}
+
+static const char* project_version_text(ver value) {
+  char buf[32] = {0};
+  if (value.user != 0)
+    snprintf(buf, sizeof(buf), "%u.%u.%u.%u", value.major, value.minor, value.patch, value.user);
+  else
+    snprintf(buf, sizeof(buf), "%u.%u.%u", value.major, value.minor, value.patch);
+  return arena_text(buf, strlen(buf));
+}
+
+static const char* project_token_value(const char* name,
+                                       const project* proj,
+                                       const target* tgt,
+                                       const char* platform,
+                                       toolchain* tc,
+                                       const char* workdir,
+                                       os target_os,
+                                       arch target_arch) {
+  if (!name || !name[0])
+    return NULL;
+  if (strcmp(name, "CWD") == 0)
+    return project_current_workdir();
+  if (strcmp(name, "CFG") == 0)
+    return proj && proj->active_config ? proj->active_config : "default";
+  if (strcmp(name, "PLT") == 0)
+    return platform && platform[0] ? platform : project_default_platform_id();
+  if (strcmp(name, "OS") == 0)
+    return target_os < OS_MAX ? OS_NAMES[target_os] : project_host_os_name();
+  if (strcmp(name, "ARC") == 0)
+    return target_arch < ARCH_MAX ? ARCH_NAMES[target_arch] : project_host_arch_name();
+  if (strcmp(name, "PRJ") == 0)
+    return proj && proj->meta.id ? proj->meta.id : "";
+  if (strcmp(name, "PROJECT") == 0)
+    return tc && tc->project_cfg_path ? tc->project_cfg_path : get_path_cwd("project.bbs");
+  if (strcmp(name, "TOOLCHAIN") == 0)
+    return tc && tc->toolchain_cfg_path ? tc->toolchain_cfg_path : NULL;
+  if (strcmp(name, "USER") == 0)
+    return tc && tc->user_cfg_path ? tc->user_cfg_path : NULL;
+  if (strcmp(name, "LOCAL") == 0)
+    return tc && tc->local_cfg_path ? tc->local_cfg_path : get_path_cwd("local.bbs");
+  if (strcmp(name, "DBUILD") == 0)
+    return project_build_binary_dir_abs(proj, proj ? proj->active_config : NULL, platform);
+  if (strcmp(name, "DDIST") == 0)
+    return project_dist_config_dir_abs(proj, proj ? proj->active_config : NULL, platform);
+  if (strcmp(name, "DGEN") == 0)
+    return project_dist_gen_dir_abs(proj, proj ? proj->active_config : NULL, platform);
+  if (strcmp(name, "TARGET") == 0)
+    return tgt && tgt->meta.id ? tgt->meta.id : "";
+  if (strcmp(name, "OUT") == 0)
+    return tgt && tgt->output ? tgt->output : (tgt && tgt->meta.id ? tgt->meta.id : "");
+  if (strcmp(name, "VER") == 0) {
+    ver value = {0};
+    if (tgt && project_has_ver(tgt->meta.ver))
+      value = tgt->meta.ver;
+    else if (proj)
+      value = proj->meta.ver;
+    return project_has_ver(value) ? project_version_text(value) : "0.0.0";
+  }
+  if (strcmp(name, "EXE") == 0)
+    return (proj && tgt && platform) ? project_target_executable_abs(proj, tgt, platform) : NULL;
+  if (strcmp(name, "WORKDIR") == 0)
+    return workdir && workdir[0] ? workdir : project_current_workdir();
+  return NULL;
+}
+
+static const char* project_expand_config_string(const char* text, const project* proj, const target* tgt, const char* platform, toolchain* tc, const char* workdir) {
+  if (!text)
+    return NULL;
+
+  os target_os = OS_MAX;
+  arch target_arch = ARCH_MAX;
+  const char* resolved_platform = platform && platform[0] ? platform : project_default_platform_id();
+  project_parse_platform_id(resolved_platform, &target_os, &target_arch);
+
+  size_t cap = strlen(text) + 32;
+  char* out = (char*)malloc(cap);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  for (size_t i = 0; text[i];) {
+    if (text[i] != '$') {
+      if (wi + 2 > cap) {
+        size_t new_cap = cap * 2;
+        char* grown = (char*)realloc(out, new_cap);
+        if (!grown) {
+          free(out);
+          return NULL;
+        }
+        out = grown;
+        cap = new_cap;
+      }
+      out[wi++] = text[i++];
+      continue;
+    }
+
+    if (text[i + 1] == '$') {
+      if (wi + 2 > cap) {
+        size_t new_cap = cap * 2;
+        char* grown = (char*)realloc(out, new_cap);
+        if (!grown) {
+          free(out);
+          return NULL;
+        }
+        out = grown;
+        cap = new_cap;
+      }
+      out[wi++] = '$';
+      i += 2;
+      continue;
+    }
+
+    size_t start = i + 1;
+    size_t end = start;
+    while (text[end] && (isupper((unsigned char)text[end]) || text[end] == '_'))
+      ++end;
+
+    if (end == start) {
+      if (wi + 2 > cap) {
+        size_t new_cap = cap * 2;
+        char* grown = (char*)realloc(out, new_cap);
+        if (!grown) {
+          free(out);
+          return NULL;
+        }
+        out = grown;
+        cap = new_cap;
+      }
+      out[wi++] = text[i++];
+      continue;
+    }
+
+    char token[64] = {0};
+    size_t len = end - start;
+    if (len >= sizeof(token))
+      len = sizeof(token) - 1;
+    memcpy(token, text + start, len);
+    token[len] = '\0';
+
+    const char* value = project_token_value(token, proj, tgt, resolved_platform, tc, workdir, target_os, target_arch);
+    if (!value)
+      value = arena_text(text + i, end - i);
+
+    size_t value_len = strlen(value);
+    while (wi + value_len + 1 > cap) {
+      size_t new_cap = cap * 2;
+      char* grown = (char*)realloc(out, new_cap);
+      if (!grown) {
+        free(out);
+        return NULL;
+      }
+      out = grown;
+      cap = new_cap;
+    }
+    memcpy(out + wi, value, value_len);
+    wi += value_len;
+    i = end;
+  }
+
+  out[wi] = '\0';
+  const char* expanded = arena_text(out, wi);
+  free(out);
+  return expanded;
+}
+
+static const char* project_dist_archive_name(const project* proj, const target* tgt, const char* platform, toolchain* tc) {
+  const char* fmt = proj->user_cfg.dist_archive_format ? proj->user_cfg.dist_archive_format : "zip";
+  const char* pattern = tgt && tgt->dist_archive_name ? tgt->dist_archive_name : proj->user_cfg.dist_archive_name;
+  if (!pattern || !pattern[0])
+    pattern = "$CFG-$OS-$ARC--$VER";
+
+  const char* expanded = project_expand_config_string(pattern, proj, tgt, platform, tc, NULL);
+  if (!expanded || !expanded[0])
+    expanded = project_build_dir_name(proj->active_config, platform);
+
+  const char* ext = strrchr(expanded, '.');
+  if (ext && _stricmp(ext + 1, fmt) == 0)
+    return expanded;
+
+  char buf[512] = {0};
+  snprintf(buf, sizeof(buf), "%s.%s", expanded, fmt);
+  return arena_text(buf, strlen(buf));
+}
+
+static bool project_create_dist_archive(const project* proj, const target* tgt, const char* platform, toolchain* tc) {
+  if (!proj || !tgt || !platform || !tc)
+    return false;
+
+  const char* workdir = project_dist_config_dir_abs(proj, proj->active_config, platform);
+  const char* archive_name = project_dist_archive_name(proj, tgt, platform, tc);
+  const char* format = proj->user_cfg.dist_archive_format ? proj->user_cfg.dist_archive_format : "zip";
+  char script[2048] = {0};
+
+  if (_stricmp(format, "zip") == 0) {
+#if defined(_WIN32)
+    snprintf(script,
+             sizeof(script),
+             "rm -f '%s'; powershell.exe -NoProfile -Command \"Compress-Archive -Path './gen' -DestinationPath './%s' -Force\"",
+             archive_name,
+             archive_name);
+#else
+    snprintf(script, sizeof(script), "rm -f '%s' && zip -rq '%s' gen", archive_name, archive_name);
+#endif
+  } else if (_stricmp(format, "tar") == 0) {
+    snprintf(script, sizeof(script), "rm -f '%s' && tar -cf '%s' gen", archive_name, archive_name);
+  } else if (_stricmp(format, "rar") == 0) {
+    snprintf(script,
+             sizeof(script),
+             "rm -f '%s'; if command -v rar >/dev/null 2>&1; then rar a -idq '%s' gen; elif command -v winrar >/dev/null 2>&1; then winrar a -idq '%s' gen; else exit 127; fi",
+             archive_name,
+             archive_name,
+             archive_name);
+  } else {
+    error("Unknown dist_archive_format '%s'.", format);
+    return false;
+  }
+
+  if (toolchain_run_bash(tc, workdir, script) != 0) {
+    error("Failed to create %s archive for target '%s'.", format, tgt->meta.id ? tgt->meta.id : "");
+    return false;
+  }
+
+  print("Archive: %s", toolchain_join2(workdir, archive_name));
   return true;
 }
 
@@ -1771,6 +2323,14 @@ static const char* project_cmake_var_name(const char* text) {
     buf[wi++] = isalnum(ch) ? (char)toupper(ch) : '_';
   }
   buf[wi] = '\0';
+  return arena_text(buf, strlen(buf));
+}
+
+static const char* project_target_usage_name(const char* text) {
+  char buf[320] = {0};
+  if (!text || !text[0])
+    text = "target";
+  snprintf(buf, sizeof(buf), "%s__usage", text);
   return arena_text(buf, strlen(buf));
 }
 
@@ -1802,15 +2362,17 @@ static bool project_append_cmake_toolchain_kv(project_textbuf* buf, const char* 
   return project_textbuf_appendf(buf, "set(%s \"%s\" CACHE STRING \"Generated by bbs\")\n", key, esc);
 }
 
-static bool project_append_cmake_target(project_textbuf* buf, const project* proj, const target* tgt, const char* bash_path) {
+static bool project_append_cmake_target(project_textbuf* buf, const project* proj, const target* tgt, const char* platform_id, toolchain* tc, const char* bash_path) {
   if (!buf || !tgt || !tgt->meta.id)
     return false;
 
   const char* target_name = project_escape_cmake_string(tgt->meta.id);
   const char* output_name = project_escape_cmake_string(tgt->output ? tgt->output : tgt->meta.id);
   const char* var_name = project_cmake_var_name(tgt->meta.id);
-  const char* scope = tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE";
-  if (!target_name || !output_name || !var_name)
+  const char* usage_target_id = project_target_usage_name(tgt->meta.id);
+  const char* usage_target_name = usage_target_id ? project_escape_cmake_string(usage_target_id) : NULL;
+  const char* own_usage_scope = tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PUBLIC";
+  if (!target_name || !output_name || !var_name || !usage_target_name)
     return false;
 
   if (!project_textbuf_appendf(buf, "set(BBS_%s_SOURCES)\n", var_name))
@@ -1884,6 +2446,11 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
       return false;
   }
 
+  if (!project_textbuf_appendf(buf, "add_library(%s INTERFACE)\n", usage_target_name))
+    return false;
+  if (!project_textbuf_appendf(buf, "target_link_libraries(%s %s %s)\n", target_name, own_usage_scope, usage_target_name))
+    return false;
+
   if (tgt->type != TARGET_TYPE_HEADER_LIB) {
     if (!project_textbuf_appendf(buf,
                                  "set_target_properties(%s PROPERTIES OUTPUT_NAME \"%s\" "
@@ -1926,22 +2493,45 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
     const char* dir = project_cmake_path_text(tgt->include_dirs[i] ? tgt->include_dirs[i] : "");
     if (!dir)
       return false;
-    if (!project_textbuf_appendf(buf, "target_include_directories(%s %s \"${BBS_PROJECT_ROOT}/%s\")\n", target_name, scope, dir))
+    if (!project_textbuf_appendf(buf, "target_include_directories(%s INTERFACE \"${BBS_PROJECT_ROOT}/%s\")\n", usage_target_name, dir))
       return false;
   }
   for (int i = 0; i < tgt->link_dir_c; ++i) {
     const char* dir = project_cmake_path_text(tgt->link_dirs[i] ? tgt->link_dirs[i] : "");
     if (!dir)
       return false;
-    if (!project_textbuf_appendf(buf, "target_link_directories(%s %s \"${BBS_PROJECT_ROOT}/%s\")\n", target_name, scope, dir))
+    if (!project_textbuf_appendf(buf, "target_link_directories(%s INTERFACE \"${BBS_PROJECT_ROOT}/%s\")\n", usage_target_name, dir))
       return false;
   }
   for (int i = 0; i < tgt->link_libs_count; ++i) {
     const char* lib = project_escape_cmake_string(tgt->link_libs[i] ? tgt->link_libs[i] : "");
     if (!lib)
       return false;
-    if (!project_textbuf_appendf(buf, "target_link_libraries(%s %s \"%s\")\n", target_name, scope, lib))
+    if (!project_textbuf_appendf(buf, "target_link_libraries(%s INTERFACE \"%s\")\n", usage_target_name, lib))
       return false;
+  }
+
+  for (int i = 0; i < tgt->dependency_c; ++i) {
+    int dep_idx = project_find_target_index(proj, tgt->dependencies[i]);
+    if (dep_idx < 0)
+      return false;
+
+    const target* dep = &proj->targets[dep_idx];
+    const char* dep_target_name = project_escape_cmake_string(dep->meta.id);
+    const char* dep_usage_target_id = project_target_usage_name(dep->meta.id);
+    const char* dep_usage_target_name = dep_usage_target_id ? project_escape_cmake_string(dep_usage_target_id) : NULL;
+    if (!dep_target_name || !dep_usage_target_name)
+      return false;
+
+    if (!project_textbuf_appendf(buf, "target_link_libraries(%s INTERFACE %s)\n", usage_target_name, dep_usage_target_name))
+      return false;
+    if (project_target_supports_linking(dep)) {
+      if (!project_textbuf_appendf(buf, "target_link_libraries(%s INTERFACE %s)\n", usage_target_name, dep_target_name))
+        return false;
+    } else {
+      if (!project_textbuf_appendf(buf, "add_dependencies(%s %s)\n", target_name, dep_target_name))
+        return false;
+    }
   }
 
   if (tgt->defines && tgt->defines[0]) {
@@ -1953,12 +2543,12 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
                                  "separate_arguments(BBS_%s_DEFINES NATIVE_COMMAND \"${BBS_%s_DEFINES}\")\n"
                                  "target_compile_definitions(%s %s ${BBS_%s_DEFINES})\n",
                                  var_name,
-                                 defs,
-                                 var_name,
-                                 var_name,
-                                 target_name,
-                                 scope,
-                                 var_name))
+                                  defs,
+                                  var_name,
+                                  var_name,
+                                  target_name,
+                                  tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE",
+                                  var_name))
       return false;
   }
 
@@ -1971,12 +2561,12 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
                                  "separate_arguments(BBS_%s_COMPILE_ARGS NATIVE_COMMAND \"${BBS_%s_COMPILE_ARGS}\")\n"
                                  "target_compile_options(%s %s ${BBS_%s_COMPILE_ARGS})\n",
                                  var_name,
-                                 args,
-                                 var_name,
-                                 var_name,
-                                 target_name,
-                                 scope,
-                                 var_name))
+                                  args,
+                                  var_name,
+                                  var_name,
+                                  target_name,
+                                  tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE",
+                                  var_name))
       return false;
   }
 
@@ -2003,12 +2593,12 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
                                  "$<$<C_COMPILER_ID:MSVC>:/WX> $<$<CXX_COMPILER_ID:MSVC>:/WX> "
                                  "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Werror> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Werror>)\n",
                                  target_name,
-                                 scope))
+                                 tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE"))
       return false;
 
-  if (!project_append_cmake_warning_level(buf, target_name, scope, tgt->warning_level))
+  if (!project_append_cmake_warning_level(buf, target_name, tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE", tgt->warning_level))
     return false;
-  if (!project_append_cmake_opt_level(buf, target_name, scope, tgt->opt_level))
+  if (!project_append_cmake_opt_level(buf, target_name, tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE", tgt->opt_level))
     return false;
 
   if (tgt->stack_size > 0 && tgt->type != TARGET_TYPE_HEADER_LIB)
@@ -2023,13 +2613,14 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
     const char* proj_id = project_escape_cmake_string(proj->meta.id);
     if (!proj_id)
       return false;
-    if (!project_textbuf_appendf(buf, "target_compile_definitions(%s %s BBS_PROJECT_ID=\"%s\")\n", target_name, scope, proj_id))
+    if (!project_textbuf_appendf(buf, "target_compile_definitions(%s %s BBS_PROJECT_ID=\"%s\")\n", target_name, tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE", proj_id))
       return false;
   }
 
   if (tgt->pre_build_cmd_c > 0 && tgt->type != TARGET_TYPE_HEADER_LIB) {
     for (int i = 0; i < tgt->pre_build_cmd_c; ++i) {
-      const char* cmd = project_escape_cmake_string(tgt->pre_build_cmds[i] ? tgt->pre_build_cmds[i] : "");
+      const char* expanded_cmd = project_expand_config_string(tgt->pre_build_cmds[i] ? tgt->pre_build_cmds[i] : "", proj, tgt, platform_id, tc, project_build_binary_dir_abs(proj, proj->active_config, platform_id));
+      const char* cmd = project_escape_cmake_string(expanded_cmd ? expanded_cmd : "");
       const char* bash = project_cmake_path_text(bash_path);
       if (!cmd || !bash)
         return false;
@@ -2043,7 +2634,8 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
   }
   if (tgt->post_build_cmd_c > 0 && tgt->type != TARGET_TYPE_HEADER_LIB) {
     for (int i = 0; i < tgt->post_build_cmd_c; ++i) {
-      const char* cmd = project_escape_cmake_string(tgt->post_build_cmds[i] ? tgt->post_build_cmds[i] : "");
+      const char* expanded_cmd = project_expand_config_string(tgt->post_build_cmds[i] ? tgt->post_build_cmds[i] : "", proj, tgt, platform_id, tc, project_build_binary_dir_abs(proj, proj->active_config, platform_id));
+      const char* cmd = project_escape_cmake_string(expanded_cmd ? expanded_cmd : "");
       const char* bash = project_cmake_path_text(bash_path);
       if (!cmd || !bash)
         return false;
@@ -2073,7 +2665,7 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
   return project_textbuf_append(buf, "\n");
 }
 
-static bool project_generate_cmakelists(const project* proj, toolchain* tc, bool* changed) {
+static bool project_generate_cmakelists(const project* proj, toolchain* tc, const char* platform_id, bool* changed) {
   if (!proj || !tc)
     return false;
 
@@ -2100,7 +2692,7 @@ static bool project_generate_cmakelists(const project* proj, toolchain* tc, bool
     return false;
 
   for (int i = 0; i < proj->target_c; ++i)
-    if (!project_append_cmake_target(&buf, proj, &proj->targets[i], bash_path))
+    if (!project_append_cmake_target(&buf, proj, &proj->targets[i], platform_id, tc, bash_path))
       return false;
 
   if (!project_write_file_if_changed(path, buf.data ? buf.data : "", changed)) {
@@ -2358,7 +2950,7 @@ static bool project_prepare_backend(const project* proj, toolchain* tc, const ch
   bool cmakelists_changed = false;
   bool presets_changed = false;
   if (!project_generate_toolchain_file(proj, tc, &toolchain_changed) ||
-      !project_generate_cmakelists(proj, tc, &cmakelists_changed) ||
+      !project_generate_cmakelists(proj, tc, platform, &cmakelists_changed) ||
       !project_generate_presets(proj, tc, &presets_changed))
     return false;
 
@@ -2397,43 +2989,111 @@ static bool project_needs_configure(const project* proj, const char* platform, b
 static bool project_run_cmake_preset(toolchain* tc, const project* proj, const char* preset) {
   const char* cmake = toolchain_get_host_tool_path(tc, "cmake");
   const char* build_root = project_build_root_abs(proj);
+  const char* extra_args = proj && proj->user_cfg.cmake_args ? proj->user_cfg.cmake_args : NULL;
   char script[4096] = {0};
   if (!cmake || !cmake[0]) {
     error("cmake was not found in the current toolchain.");
     return false;
   }
-  snprintf(script, sizeof(script), "\"%s\" --preset \"%s\"", cmake, preset);
+  snprintf(script,
+           sizeof(script),
+           "\"%s\" --preset \"%s\"%s%s",
+           cmake,
+           preset,
+           extra_args && extra_args[0] ? " " : "",
+           extra_args && extra_args[0] ? extra_args : "");
   return toolchain_run_bash(tc, build_root, script) == 0;
 }
 
 static bool project_run_cmake_build(toolchain* tc, const project* proj, const char* preset, const char* target_name) {
   const char* cmake = toolchain_get_host_tool_path(tc, "cmake");
   const char* build_root = project_build_root_abs(proj);
+  const char* extra_args = proj && proj->user_cfg.cmake_build_args ? proj->user_cfg.cmake_build_args : NULL;
   char script[4096] = {0};
   if (!cmake || !cmake[0]) {
     error("cmake was not found in the current toolchain.");
     return false;
   }
   if (target_name && target_name[0])
-    snprintf(script, sizeof(script), "\"%s\" --build --preset \"build-%s\" --target \"%s\"", cmake, preset, target_name);
+    snprintf(script,
+             sizeof(script),
+             "\"%s\" --build --preset \"build-%s\" --target \"%s\"%s%s",
+             cmake,
+             preset,
+             target_name,
+             extra_args && extra_args[0] ? " " : "",
+             extra_args && extra_args[0] ? extra_args : "");
   else
-    snprintf(script, sizeof(script), "\"%s\" --build --preset \"build-%s\"", cmake, preset);
+    snprintf(script,
+             sizeof(script),
+             "\"%s\" --build --preset \"build-%s\"%s%s",
+             cmake,
+             preset,
+             extra_args && extra_args[0] ? " " : "",
+             extra_args && extra_args[0] ? extra_args : "");
   return toolchain_run_bash(tc, build_root, script) == 0;
 }
 
 static bool project_run_ctest_preset(toolchain* tc, const project* proj, const char* preset, const char* test_name) {
   const char* ctest = toolchain_get_host_tool_path(tc, "ctest");
   const char* build_root = project_build_root_abs(proj);
+  const char* extra_args = proj && proj->user_cfg.ctest_args ? proj->user_cfg.ctest_args : NULL;
   char script[4096] = {0};
   if (!ctest || !ctest[0]) {
     error("ctest was not found in the current toolchain.");
     return false;
   }
   if (test_name && test_name[0])
-    snprintf(script, sizeof(script), "\"%s\" --preset \"test-%s\" -R \"%s\"", ctest, preset, test_name);
+    snprintf(script,
+             sizeof(script),
+             "\"%s\" --preset \"test-%s\" -R \"%s\"%s%s",
+             ctest,
+             preset,
+             test_name,
+             extra_args && extra_args[0] ? " " : "",
+             extra_args && extra_args[0] ? extra_args : "");
   else
-    snprintf(script, sizeof(script), "\"%s\" --preset \"test-%s\"", ctest, preset);
+    snprintf(script,
+             sizeof(script),
+             "\"%s\" --preset \"test-%s\"%s%s",
+             ctest,
+             preset,
+             extra_args && extra_args[0] ? " " : "",
+             extra_args && extra_args[0] ? extra_args : "");
   return toolchain_run_bash(tc, build_root, script) == 0;
+}
+
+static bool project_run_execute(const project* proj, const target* tgt, const char* platform, toolchain* tc) {
+  if (!proj || !tgt || !tc)
+    return false;
+
+  for (int i = 0; i < tgt->pre_run_cmd_c; ++i)
+    if (toolchain_run_bash(tc, NULL, project_expand_config_string(tgt->pre_run_cmds[i], proj, tgt, platform, tc, NULL)) != 0)
+      return false;
+
+  const char* exe_path = project_target_executable_abs(proj, tgt, platform);
+  if (!exe_path || !file_exists(exe_path)) {
+    error("Built executable not found: %s", exe_path ? exe_path : "");
+    return false;
+  }
+
+  char script[4096] = {0};
+  snprintf(script, sizeof(script), "\"%s\"", exe_path);
+  if (toolchain_run_bash(tc, NULL, script) != 0)
+    return false;
+
+  for (int i = 0; i < tgt->post_run_cmd_c; ++i)
+    if (toolchain_run_bash(tc, NULL, project_expand_config_string(tgt->post_run_cmds[i], proj, tgt, platform, tc, NULL)) != 0)
+      return false;
+
+  return true;
+}
+
+static bool project_test_execute(const project* proj, const target* tgt, const char* test_name, const char* platform, toolchain* tc) {
+  if (!proj || !tgt || !tc)
+    return false;
+  const char* preset = project_build_dir_name(proj->active_config, platform);
+  return project_run_ctest_preset(tc, proj, preset, test_name);
 }
 
 static const char* project_target_executable_abs(const project* proj, const target* tgt, const char* platform) {
@@ -2528,15 +3188,16 @@ static int project_find_single_test_target(const project* proj) {
 static void project_print_action_header(const char* action, const project* proj, const char* platform) {
   if (!action || !proj)
     return;
-  print("%s config: %s", action, proj->active_config ? proj->active_config : "default");
+  print("%s", action);
+  project_print_field("Config", proj->active_config ? proj->active_config : "default");
   if (platform && platform[0])
-    print("%s platform: %s", action, platform);
+    project_print_field("Platform", platform);
 }
 
 static void project_print_target_line(const char* action, const target* tgt) {
   if (!action || !tgt)
     return;
-  print("%s target: %s (%s)", action, tgt->meta.id ? tgt->meta.id : "", project_target_type_name(tgt->type));
+  project_print_fieldf("Target", "%s (%s)", tgt->meta.id ? tgt->meta.id : "", project_target_type_name(tgt->type));
 }
 
 static bool project_build(const char* target_name, const char* platform, const char* config, toolchain* tc) {
@@ -2554,7 +3215,7 @@ static bool project_build(const char* target_name, const char* platform, const c
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
 
   project_print_action_header("Build", &proj, platform_id);
-  print("Build dir: %s", project_resolved_dir(proj.user_cfg.builddir, proj.active_config, platform_id));
+  project_print_field("Directory", project_resolved_dir(proj.user_cfg.builddir, proj.active_config, platform_id));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
@@ -2628,27 +3289,7 @@ static bool project_run(const char* target_name, const char* platform, const cha
     return false;
   if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id))
     return false;
-
-  for (int i = 0; i < proj.targets[idx].pre_run_cmd_c; ++i)
-    if (toolchain_run_bash(tc, NULL, proj.targets[idx].pre_run_cmds[i]) != 0)
-      return false;
-
-  const char* exe_path = project_target_executable_abs(&proj, &proj.targets[idx], platform_id);
-  if (!exe_path || !file_exists(exe_path)) {
-    error("Built executable not found: %s", exe_path ? exe_path : "");
-    return false;
-  }
-
-  char script[4096] = {0};
-  snprintf(script, sizeof(script), "\"%s\"", exe_path);
-  if (toolchain_run_bash(tc, NULL, script) != 0)
-    return false;
-
-  for (int i = 0; i < proj.targets[idx].post_run_cmd_c; ++i)
-    if (toolchain_run_bash(tc, NULL, proj.targets[idx].post_run_cmds[i]) != 0)
-      return false;
-
-  return true;
+  return project_run_execute(&proj, &proj.targets[idx], platform_id, tc);
 }
 
 static bool project_test(const char* test_name, const char* target_name, const char* platform, const char* config, toolchain* tc) {
@@ -2657,7 +3298,7 @@ static bool project_test(const char* test_name, const char* target_name, const c
     return false;
   if (!tc) {
     error("Toolchain is not initialized.");
-    print("Run 'bbs toolchain init' first.");
+    print("Run 'bbs update --init-toolchain' first.");
     return false;
   }
 
@@ -2672,9 +3313,9 @@ static bool project_test(const char* test_name, const char* target_name, const c
 
   project_print_action_header("Test", &proj, platform_id);
   const char* build_dir = project_resolved_dir(proj.user_cfg.builddir, proj.active_config, platform_id);
-  print("Test dir: %s", build_dir);
+  project_print_field("Directory", build_dir);
   if (test_name && test_name[0])
-    print("Test name: %s", test_name);
+    project_print_field("Test", test_name);
 
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
@@ -2689,7 +3330,7 @@ static bool project_test(const char* test_name, const char* target_name, const c
       return false;
     if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id))
       return false;
-    return project_run_ctest_preset(tc, &proj, preset, test_name);
+    return project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
   }
 
   int idx = project_find_single_test_target(&proj);
@@ -2707,34 +3348,106 @@ static bool project_test(const char* test_name, const char* target_name, const c
     return false;
   if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id))
     return false;
-  return project_run_ctest_preset(tc, &proj, preset, test_name);
+  return project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
 }
 
 static bool project_dist(const char* target_name, const char* platform, const char* config, toolchain* tc) {
-  (void)tc;
   project proj = {0};
   if (!project_load_config(config, &proj))
     return false;
 
-  project_print_action_header("Dist", &proj, platform);
-  print("Dist dir: %s", project_resolved_dir(proj.user_cfg.distdir, proj.active_config, platform));
+  if (!tc) {
+    error("Toolchain is not initialized.");
+    print("Run 'bbs update --init-toolchain' first.");
+    return false;
+  }
+
+  const char* platform_id = project_resolve_platform_id(platform, tc);
+  if (!platform_id)
+    return false;
+  bool backend_changed = false;
+  if (!project_prepare_backend(&proj, tc, platform_id, true, &backend_changed))
+    return false;
+
+  project_print_action_header("Dist", &proj, platform_id);
+  project_print_field("Directory", project_resolved_dir(proj.user_cfg.distdir, proj.active_config, platform_id));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
       return false;
     project_print_target_line("Dist", &proj.targets[idx]);
+    if (!project_target_is_runnable(&proj.targets[idx])) {
+      error("Target '%s' is not distributable.", target_name);
+      return false;
+    }
+
+    const char* preset = project_build_dir_name(proj.active_config, platform_id);
+    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset))
+      return false;
+    if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id))
+      return false;
+
+    target* tgt = &proj.targets[idx];
+    const char* dist_root = project_dist_root_abs(&proj);
+    const char* dist_cfg_dir = project_dist_config_dir_abs(&proj, proj.active_config, platform_id);
+    const char* gen_dir = project_dist_gen_dir_abs(&proj, proj.active_config, platform_id);
+    if (!project_ensure_dir_exists(dist_root, "dist directory"))
+      return false;
+    if (!project_ensure_dir_exists(dist_cfg_dir, "dist output directory"))
+      return false;
+    if (dir_exists(gen_dir) && !dir_delete(gen_dir)) {
+      error("Failed to delete dist staging directory: %s", gen_dir);
+      return false;
+    }
+    if (!project_ensure_dir_exists(gen_dir, "dist staging directory"))
+      return false;
+
+    for (int i = 0; i < tgt->pre_dist_cmd_c; ++i)
+      if (toolchain_run_bash(tc, gen_dir, project_expand_config_string(tgt->pre_dist_cmds[i], &proj, tgt, platform_id, tc, gen_dir)) != 0)
+        return false;
+
+    const char* exe_path = project_target_executable_abs(&proj, tgt, platform_id);
+    if (!exe_path || !file_exists(exe_path)) {
+      error("Built executable not found for target '%s': %s", tgt->meta.id ? tgt->meta.id : "", exe_path ? exe_path : "");
+      return false;
+    }
+
+    const char* exe_name = project_path_filename(exe_path);
+    const char* exe_dst = toolchain_join2(gen_dir, exe_name);
+    if (!project_copy_file(exe_path, exe_dst)) {
+      error("Failed to copy executable '%s'.", exe_path);
+      return false;
+    }
+
+    os target_os = OS_MAX;
+    arch target_arch = ARCH_MAX;
+    if (!project_parse_platform_id(platform_id, &target_os, &target_arch))
+      return false;
+    const char* runtime_dir = project_path_parent(exe_path);
+    if (!project_copy_runtime_files(runtime_dir, gen_dir, target_os))
+      return false;
+
+    for (int i = 0; i < tgt->post_dist_cmd_c; ++i)
+      if (toolchain_run_bash(tc, gen_dir, project_expand_config_string(tgt->post_dist_cmds[i], &proj, tgt, platform_id, tc, gen_dir)) != 0)
+        return false;
+
+    if (tgt->dist_archive && !project_create_dist_archive(&proj, tgt, platform_id, tc))
+      return false;
+
     return true;
   }
 
-  if (proj.target_c == 1) {
-    project_print_target_line("Dist", &proj.targets[0]);
-    return true;
+  int idx = project_find_single_runnable_target(&proj);
+  if (idx == -2) {
+    error("Multiple runnable targets found. Use '-t target'.");
+    return false;
+  }
+  if (idx < 0) {
+    error("No runnable targets found.");
+    return false;
   }
 
-  print("Dist targets:");
-  for (int i = 0; i < proj.target_c; ++i)
-    print("  - %s (%s)", proj.targets[i].meta.id ? proj.targets[i].meta.id : "", project_target_type_name(proj.targets[i].type));
-  return true;
+  return project_dist(proj.targets[idx].meta.id, platform_id, proj.active_config, tc);
 }
 
 static bool project_update(toolchain* tc) {
@@ -2764,7 +3477,7 @@ static bool project_cleanup(void) {
       error("Failed to delete build directory: %s", build_dir);
       ok = false;
     } else {
-      print("Deleted build directory: %s", build_dir);
+      print("Deleted build directory at %s", build_dir);
     }
   }
 
@@ -2774,7 +3487,7 @@ static bool project_cleanup(void) {
       error("Failed to delete dist directory: %s", dist_dir);
       ok = false;
     } else {
-      print("Deleted dist directory: %s", dist_dir);
+      print("Deleted dist directory at %s", dist_dir);
     }
   }
 
@@ -2784,7 +3497,7 @@ static bool project_cleanup(void) {
       error("Failed to delete local config: %s", local_cfg);
       ok = false;
     } else {
-      print("Deleted local config: %s", local_cfg);
+      print("Deleted local config at %s", local_cfg);
     }
   }
 
