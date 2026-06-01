@@ -623,11 +623,13 @@ static int run_cmd_update(cmd_ctx* cmdctx) {
   enum {
     INFO = 0,
     INIT_TOOLCHAIN,
+    REFRESH_PACKAGES,
   };
 
   cmdopt opts[] = {
       [INFO] = { "i",           "info"},
       [INIT_TOOLCHAIN] = {NULL, "init-toolchain"},
+      [REFRESH_PACKAGES] = {NULL, "refresh-packages"},
   };
 
   cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
@@ -643,7 +645,7 @@ static int run_cmd_update(cmd_ctx* cmdctx) {
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), opts[INIT_TOOLCHAIN].present, cmdctx);
   if (!tc)
     return error_code(CMD_UPDATE, 2);
-  if (!project_update(tc))
+  if (!project_update(tc, opts[REFRESH_PACKAGES].present))
     return error_code(CMD_UPDATE, 0);
 
   return 0;
@@ -905,9 +907,9 @@ static const char* gen_github_runner_for_platform(const char* platform) {
       break;
     case OS_MACOS:
       if (target_arch == ARCH_X86_64)
-        return "macos-13";
+        return "macos-latest";
       if (target_arch == ARCH_ARM64)
-        return "macos-14";
+        return "macos-latest";
       break;
     default:
       break;
@@ -920,31 +922,189 @@ static const char* gen_default_config_name(const project* proj) {
   return (proj && proj->config_c > 0 && proj->configs && proj->configs[0] && proj->configs[0][0]) ? proj->configs[0] : "default";
 }
 
-static bool gen_build_github_workflow_text(const project* proj, project_textbuf* buf, const char** platforms, int platform_c) {
-  if (!proj || !buf)
+static const char* gen_github_runner_for_os(os target_os) {
+  switch (target_os) {
+    case OS_WINDOWS:
+      return "windows-latest";
+    case OS_LINUX:
+      return "ubuntu-latest";
+    case OS_MACOS:
+      return "macos-latest";
+    default:
+      return NULL;
+  }
+}
+
+static const char* gen_github_job_name_for_os(os target_os) {
+  switch (target_os) {
+    case OS_WINDOWS:
+      return "windows";
+    case OS_LINUX:
+      return "linux";
+    case OS_MACOS:
+      return "macos";
+    default:
+      return NULL;
+  }
+}
+
+static const char* gen_github_host_platform_for_os(os target_os) {
+  switch (target_os) {
+    case OS_WINDOWS:
+      return "windows-x86_64";
+    case OS_LINUX:
+      return "linux-x86_64";
+    case OS_MACOS:
+      return "macos-x86_64";
+    default:
+      return NULL;
+  }
+}
+
+static bool gen_platform_list_contains(const char** platforms, int platform_c, const char* platform) {
+  if (!platforms || platform_c <= 0 || !platform || !platform[0])
     return false;
 
-  bool has_tests = project_count_test_targets(proj) > 0;
-  bool has_runnables = project_count_runnable_targets(proj) > 0;
-  const char* dist_root = (proj->user_cfg.distdir && proj->user_cfg.distdir[0]) ? proj->user_cfg.distdir : DEF_DIST_DIR;
+  for (int i = 0; i < platform_c; ++i) {
+    if (platforms[i] && _stricmp(platforms[i], platform) == 0)
+      return true;
+  }
+
+  return false;
+}
+
+static bool gen_collect_platforms_by_os(const char** platforms, int platform_c, const char*** out_groups, int* out_counts) {
+  if (!out_groups || !out_counts)
+    return false;
+
+  for (int i = 0; i < OS_MAX; ++i) {
+    out_groups[i] = NULL;
+    out_counts[i] = 0;
+  }
+
+  for (int i = 0; i < platform_c; ++i) {
+    os target_os = OS_MAX;
+    arch target_arch = ARCH_MAX;
+    if (!project_parse_platform_id(platforms[i], &target_os, &target_arch))
+      return false;
+    if (target_os < 0 || target_os >= OS_MAX)
+      return false;
+    ++out_counts[target_os];
+  }
+
+  for (int osi = 0; osi < OS_MAX; ++osi) {
+    if (out_counts[osi] <= 0)
+      continue;
+    out_groups[osi] = push(sizeof(*out_groups[osi]) * (size_t)out_counts[osi]);
+    if (!out_groups[osi])
+      return false;
+    out_counts[osi] = 0;
+  }
+
+  for (int i = 0; i < platform_c; ++i) {
+    os target_os = OS_MAX;
+    arch target_arch = ARCH_MAX;
+    if (!project_parse_platform_id(platforms[i], &target_os, &target_arch))
+      return false;
+    ((const char**)out_groups[target_os])[out_counts[target_os]++] = platforms[i];
+  }
+
+  return true;
+}
+
+static const char* gen_build_platform_command_block(const char* exe_path, const char* action, const char** platforms, int platform_c) {
+  if (!exe_path || !exe_path[0] || !action || !action[0] || !platforms || platform_c <= 0)
+    return NULL;
+
+  project_textbuf buf = {0};
+  for (int i = 0; i < platform_c; ++i) {
+    if (!project_textbuf_appendf(&buf,
+                                 i == 0 ? "%s %s -t * -p %s -c ${{ matrix.config }}" : "\n          %s %s -t * -p %s -c ${{ matrix.config }}",
+                                 exe_path,
+                                 action,
+                                 platforms[i])) {
+      if (buf.data)
+        free(buf.data);
+      return NULL;
+    }
+  }
+
+  const char* out = arena_text(buf.data ? buf.data : "", buf.len);
+  if (buf.data)
+    free(buf.data);
+  return out;
+}
+
+static const char* gen_build_host_command_block(const char* exe_path, const char* action, const char* host_platform) {
+  if (!exe_path || !exe_path[0] || !action || !action[0] || !host_platform || !host_platform[0])
+    return NULL;
+
+  char text[512] = {0};
+  snprintf(text, sizeof(text), "%s %s -t * -p %s -c ${{ matrix.config }}", exe_path, action, host_platform);
+  return arena_text(text, strlen(text));
+}
+
+static bool gen_append_github_upload_steps(project_textbuf* buf, const char* dist_root, const char* job_name, const char** platforms, int platform_c) {
+  if (!buf || !dist_root || !job_name || !platforms || platform_c <= 0)
+    return false;
+
+  for (int i = 0; i < platform_c; ++i) {
+    if (!project_textbuf_appendf(buf,
+                                 "      - name: Upload %s dist (%s)\n"
+                                 "        uses: actions/upload-artifact@v4\n"
+                                 "        with:\n"
+                                 "          name: dist-%s-${{ matrix.config }}-%s\n"
+                                 "          path: %s/${{ matrix.config }}-%s\n",
+                                 job_name,
+                                 platforms[i],
+                                 job_name,
+                                 platforms[i],
+                                 dist_root,
+                                 platforms[i]))
+      return false;
+  }
+
+  return true;
+}
+
+static bool gen_append_github_os_job(project_textbuf* buf,
+                                     const project* proj,
+                                     os target_os,
+                                     const char** platforms,
+                                     int platform_c,
+                                     bool has_tests,
+                                     bool has_runnables,
+                                     const char* dist_root) {
+  if (!buf || !proj || !platforms || platform_c <= 0 || !dist_root)
+    return false;
+
+  const char* job_name = gen_github_job_name_for_os(target_os);
+  const char* runner = gen_github_runner_for_os(target_os);
+  const char* host_platform = gen_github_host_platform_for_os(target_os);
+  if (!job_name || !runner || !host_platform)
+    return false;
+
+  const char* build_win = gen_build_platform_command_block("./.bbs-bootstrap/build/bbs.exe", "build", platforms, platform_c);
+  const char* build_unix = gen_build_platform_command_block("./.bbs-bootstrap/build/bbs", "build", platforms, platform_c);
+  const char* dist_win = gen_build_platform_command_block("./.bbs-bootstrap/build/bbs.exe", "dist", platforms, platform_c);
+  const char* dist_unix = gen_build_platform_command_block("./.bbs-bootstrap/build/bbs", "dist", platforms, platform_c);
+  if (!build_win || !build_unix || !dist_win || !dist_unix)
+    return false;
+
+  if (!project_textbuf_appendf(buf,
+                               "  %s:\n"
+                               "    name: %s / ${{ matrix.config }}\n"
+                               "    runs-on: %s\n"
+                               "    strategy:\n"
+                               "      fail-fast: false\n"
+                               "      matrix:\n"
+                               "        config:\n",
+                               job_name,
+                               job_name,
+                               runner))
+    return false;
+
   const char* default_config = gen_default_config_name(proj);
-
-  if (!project_textbuf_append(buf,
-                              "name: bbs\n\n"
-                              "on:\n"
-                              "  push:\n"
-                              "  pull_request:\n"
-                              "  workflow_dispatch:\n\n"
-                              "jobs:\n"
-                              "  ci:\n"
-                              "    name: ${{ matrix.platform }} / ${{ matrix.config }}\n"
-                              "    runs-on: ${{ matrix.runner }}\n"
-                              "    strategy:\n"
-                              "      fail-fast: false\n"
-                              "      matrix:\n"
-                              "        config:\n"))
-    return false;
-
   if (proj->config_c > 0 && proj->configs) {
     for (int i = 0; i < proj->config_c; ++i) {
       const char* cfg = proj->configs[i] && proj->configs[i][0] ? proj->configs[i] : default_config;
@@ -953,35 +1113,6 @@ static bool gen_build_github_workflow_text(const project* proj, project_textbuf*
     }
   } else if (!project_textbuf_appendf(buf, "          - %s\n", default_config)) {
     return false;
-  }
-
-  if (!project_textbuf_append(buf, "        include:\n"))
-    return false;
-
-  const char* default_platforms[] = {
-      "windows-x86_64",
-      "linux-x86_64",
-      "macos-x86_64",
-  };
-  const char** matrix_platforms = platforms;
-  int matrix_platform_c = platform_c;
-  if (!matrix_platforms || matrix_platform_c <= 0) {
-    matrix_platforms = default_platforms;
-    matrix_platform_c = (int)_countof(default_platforms);
-  }
-
-  for (int i = 0; i < matrix_platform_c; ++i) {
-    const char* runner = gen_github_runner_for_platform(matrix_platforms[i]);
-    if (!runner) {
-      error("Platform '%s' is not supported by the GitHub workflow generator.", matrix_platforms[i]);
-      return false;
-    }
-    if (!project_textbuf_appendf(buf,
-                                 "          - runner: %s\n"
-                                 "            platform: %s\n",
-                                 runner,
-                                 matrix_platforms[i]))
-      return false;
   }
 
   if (!project_textbuf_append(buf,
@@ -1005,38 +1136,76 @@ static bool gen_build_github_workflow_text(const project* proj, project_textbuf*
                                        "./.bbs-bootstrap/build/bbs update --init-toolchain"))
     return false;
 
-  if (!gen_append_github_command_steps(buf,
-                                       "Build project",
-                                       "./.bbs-bootstrap/build/bbs.exe build -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}",
-                                       "./.bbs-bootstrap/build/bbs build -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}"))
+  if (!gen_append_github_command_steps(buf, "Build project", build_win, build_unix))
     return false;
 
-  if (has_tests && !gen_append_github_command_steps(buf,
-                                                    "Run tests",
-                                                    "./.bbs-bootstrap/build/bbs.exe test -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}",
-                                                    "./.bbs-bootstrap/build/bbs test -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}"))
+  if (has_tests && gen_platform_list_contains(platforms, platform_c, host_platform)) {
+    const char* test_win = gen_build_host_command_block("./.bbs-bootstrap/build/bbs.exe", "test", host_platform);
+    const char* test_unix = gen_build_host_command_block("./.bbs-bootstrap/build/bbs", "test", host_platform);
+    if (!test_win || !test_unix)
+      return false;
+    if (!gen_append_github_command_steps(buf, "Run tests", test_win, test_unix))
+      return false;
+  }
+
+  if (has_runnables && gen_platform_list_contains(platforms, platform_c, host_platform)) {
+    const char* run_win = gen_build_host_command_block("./.bbs-bootstrap/build/bbs.exe", "run", host_platform);
+    const char* run_unix = gen_build_host_command_block("./.bbs-bootstrap/build/bbs", "run", host_platform);
+    if (!run_win || !run_unix)
+      return false;
+    if (!gen_append_github_command_steps(buf, "Run targets", run_win, run_unix))
+      return false;
+  }
+
+  if (!gen_append_github_command_steps(buf, "Create distributions", dist_win, dist_unix))
     return false;
 
-  if (has_runnables && !gen_append_github_command_steps(buf,
-                                                        "Run targets",
-                                                        "./.bbs-bootstrap/build/bbs.exe run -t * -p * -c ${{ matrix.config }}",
-                                                        "./.bbs-bootstrap/build/bbs run -t * -p * -c ${{ matrix.config }}"))
+  if (!gen_append_github_upload_steps(buf, dist_root, job_name, platforms, platform_c))
     return false;
 
-  if (!gen_append_github_command_steps(buf,
-                                       "Create distributions",
-                                       "./.bbs-bootstrap/build/bbs.exe dist -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}",
-                                       "./.bbs-bootstrap/build/bbs dist -t * -p ${{ matrix.platform }} -c ${{ matrix.config }}"))
+  return project_textbuf_append(buf, "\n");
+}
+
+static bool gen_build_github_workflow_text(const project* proj, project_textbuf* buf, const char** platforms, int platform_c) {
+  if (!proj || !buf)
     return false;
 
-  if (!project_textbuf_appendf(buf,
-                               "      - name: Upload dist artifacts\n"
-                               "        uses: actions/upload-artifact@v4\n"
-                               "        with:\n"
-                               "          name: dist-${{ matrix.platform }}-${{ matrix.config }}\n"
-                               "          path: %s/${{ matrix.config }}-${{ matrix.platform }}\n",
-                               dist_root))
+  bool has_tests = project_count_test_targets(proj) > 0;
+  bool has_runnables = project_count_runnable_targets(proj) > 0;
+  const char* dist_root = (proj->user_cfg.distdir && proj->user_cfg.distdir[0]) ? proj->user_cfg.distdir : DEF_DIST_DIR;
+
+  const char* default_platforms[] = {
+      "windows-x86_64",
+      "linux-x86_64",
+      "macos-x86_64",
+  };
+  const char** selected_platforms = platforms;
+  int selected_platform_c = platform_c;
+  if (!selected_platforms || selected_platform_c <= 0) {
+    selected_platforms = default_platforms;
+    selected_platform_c = (int)_countof(default_platforms);
+  }
+
+  const char** platform_groups[OS_MAX] = {0};
+  int platform_counts[OS_MAX] = {0};
+  if (!gen_collect_platforms_by_os(selected_platforms, selected_platform_c, platform_groups, platform_counts))
     return false;
+
+  if (!project_textbuf_append(buf,
+                              "name: bbs\n\n"
+                              "on:\n"
+                              "  push:\n"
+                              "  pull_request:\n"
+                              "  workflow_dispatch:\n\n"
+                              "jobs:\n"))
+    return false;
+
+  for (int osi = 0; osi < OS_MAX; ++osi) {
+    if (platform_counts[osi] <= 0)
+      continue;
+    if (!gen_append_github_os_job(buf, proj, (os)osi, platform_groups[osi], platform_counts[osi], has_tests, has_runnables, dist_root))
+      return false;
+  }
 
   return true;
 }
@@ -1585,6 +1754,77 @@ static int run_cmd_info(cmd_ctx* cmdctx) {
   return error_code(CMD_INFO, 1);
 }
 
+static int run_cmd_package(cmd_ctx* cmdctx) {
+  const char* query = cmdline_consume_param(cmdctx->cl);
+  const char* subquery = cmdline_consume_param(cmdctx->cl);
+  enum {
+    REFRESH = 0,
+  };
+
+  cmdopt opts[] = {
+      [REFRESH] = {NULL, "refresh"},
+  };
+
+  cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
+  cmdline_validate(cmdctx->cl);
+
+  if (!query || !query[0])
+    query = "list";
+
+  project proj = {0};
+  if (!project_load(&proj))
+    return error_code(CMD_PACKAGE, 1);
+
+  toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+
+  if (_stricmp(query, "refresh") == 0) {
+    const char* refresh_target = subquery && subquery[0] ? subquery : "*";
+    if (!tc)
+      return error_code(CMD_PACKAGE, 4);
+    if (!project_refresh_packages(&proj, tc, refresh_target))
+      return error_code(CMD_PACKAGE, 5);
+    print("Package refresh completed.");
+    return 0;
+  }
+
+  if (_stricmp(query, "list") == 0) {
+    if (opts[REFRESH].present) {
+      if (!tc)
+        return error_code(CMD_PACKAGE, 4);
+      if (!project_prepare_packages(&proj, tc, true))
+        return error_code(CMD_PACKAGE, 5);
+    }
+    project_print_package_list_header();
+    for (int i = 0; i < proj.target_c; ++i) {
+      const target* tgt = &proj.targets[i];
+      if (!project_target_is_package(tgt))
+        continue;
+      project_print_package_list_row(tgt, tc);
+    }
+    return 0;
+  }
+
+  int idx = project_find_target_index(&proj, query);
+  if (idx < 0)
+    return error_code(CMD_PACKAGE, 2);
+
+  const target* tgt = &proj.targets[idx];
+  if (!project_target_is_package(tgt)) {
+    error("Target '%s' is not a package target.", query);
+    return error_code(CMD_PACKAGE, 3);
+  }
+
+  if (opts[REFRESH].present) {
+    if (!tc)
+      return error_code(CMD_PACKAGE, 4);
+    if (!project_resolve_package_target(&proj.targets[idx], tc, true))
+      return error_code(CMD_PACKAGE, 5);
+  }
+
+  project_print_package_summary(&proj.targets[idx], tc);
+  return 0;
+}
+
 static int run_cmd_dist(cmd_ctx* cmdctx) {
   const char* target = cmdline_extract_option_value(cmdctx->cl, "t", "target");
   const char* platform = cmdline_extract_option_value(cmdctx->cl, "p", "platform");
@@ -1913,6 +2153,8 @@ static int run_cmd(cmd c, cmd_ctx* cmdctx) {
       return run_cmd_run(cmdctx);
     case CMD_INFO:
       return run_cmd_info(cmdctx);
+    case CMD_PACKAGE:
+      return run_cmd_package(cmdctx);
     case CMD_DIST:
       return run_cmd_dist(cmdctx);
     case CMD_TEST:

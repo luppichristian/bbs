@@ -57,11 +57,29 @@ typedef enum {
   OPT_LEVEL_AGGRESSIVE,
 } opt_level;
 
+typedef enum {
+  PACKAGE_SOURCE_NONE,
+  PACKAGE_SOURCE_PATH,
+  PACKAGE_SOURCE_REPO,
+  PACKAGE_SOURCE_ARCHIVE,
+} package_source;
+
 typedef struct {
   meta meta;
   lang lang;
   target_type type;
   const char* output;
+
+  package_source package_source;
+  const char* package_path;
+  const char* package_subdir;
+  const char* package_repo_link;
+  const char* package_repo_tag;
+  const char* package_cmake_target;
+  const char* package_archive_link;
+  const char* package_archive_strip_prefix;
+  const char* package_resolved_dir;
+  const char* package_cache_dir;
 
   // Translation units, should support wildcards
   const char** units;

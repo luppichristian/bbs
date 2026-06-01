@@ -166,6 +166,15 @@ static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
      .version_regex = "version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
      },
     {
+     .id = "git",
+     .target_os = OS_MAX,
+     .exe_name = "git",
+     .dir_hints = "{program_files}\\Git\\cmd;{program_files}\\Git\\bin;{program_files_x86}\\Git\\cmd;{program_files_x86}\\Git\\bin;{msys2_root}\\usr\\bin;C:\\msys64\\usr\\bin;C:\\Program Files\\Git\\cmd;C:\\Program Files\\Git\\bin;/usr/bin;/usr/local/bin;/opt/homebrew/bin",
+     .deep_roots = "{program_files};{program_files_x86};{msys2_root};/usr;/usr/local;/opt/homebrew",
+     .version_arg = "--version",
+     .version_regex = "version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
+     },
+     {
      .id = "wsl",
      .target_os = OS_WINDOWS,
      .exe_name = "wsl",

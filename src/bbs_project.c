@@ -10,6 +10,18 @@ static const char* project_target_executable_abs(const project* proj, const targ
 static bool project_apply_dist_node(node* dist_n, target* out, const char* target_label);
 static const char* project_expand_config_string(const char* text, const project* proj, const target* tgt, const char* platform, toolchain* tc, const char* workdir);
 static int project_find_target_index(const project* proj, const char* name);
+static const char* project_current_workdir(void);
+
+typedef struct {
+  const char* source;
+  const char* cache_dir;
+  bool is_cached;
+  bool exists;
+  bool has_cmakelists;
+  const char* status;
+  const char* local_ref;
+  const char* remote_ref;
+} project_package_info;
 
 static bool project_has_ver(ver v) {
   return v.major != 0 || v.minor != 0 || v.patch != 0 || v.user != 0;
@@ -71,6 +83,26 @@ static const char* project_target_type_name(target_type type) {
     default:
       return "target";
   }
+}
+
+static const char* project_package_source_name(package_source source) {
+  switch (source) {
+    case PACKAGE_SOURCE_PATH:
+      return "path";
+    case PACKAGE_SOURCE_REPO:
+      return "repo";
+    case PACKAGE_SOURCE_ARCHIVE:
+      return "archive";
+    default:
+      return "none";
+  }
+}
+
+static bool project_target_is_package(const target* tgt) {
+  return tgt && (tgt->package_source != PACKAGE_SOURCE_NONE ||
+                 (tgt->package_path && tgt->package_path[0]) ||
+                 (tgt->package_repo_link && tgt->package_repo_link[0]) ||
+                 (tgt->package_archive_link && tgt->package_archive_link[0]));
 }
 
 static bool project_is_known_target_type_name(const char* text) {
@@ -612,10 +644,18 @@ static bool project_parse_meta_fields(node* scope, meta* out) {
     return false;
   if (!project_read_text_child(scope, "name", &out->name))
     return false;
-  if (!project_read_text_child(scope, "repo", &out->repo))
-    return false;
   if (!project_read_text_child(scope, "authors", &out->authors))
     return false;
+
+  node* repo_n = node_get_child(scope, "repo");
+  if (repo_n && repo_n->type != NODE_TYPE_DEF) {
+    const char* repo_text = project_scalar_text(repo_n);
+    if (!repo_text) {
+      error("Attribute 'repo' must be a string or identifier.");
+      return false;
+    }
+    out->repo = repo_text;
+  }
 
   node* ver_n = node_get_child(scope, "ver");
   node* lic_n = node_get_child(scope, "license");
@@ -657,6 +697,45 @@ static bool project_apply_target_attrs(node* scope, target* out, const char* tar
     return false;
   if (text)
     out->output = text;
+
+  if (!project_read_text_child(scope, "path", &text))
+    return false;
+  if (text)
+    out->package_path = text;
+
+  if (!project_read_text_child(scope, "subdir", &text))
+    return false;
+  if (text)
+    out->package_subdir = text;
+
+  if (!project_read_text_child(scope, "cmake_target", &text))
+    return false;
+  if (text)
+    out->package_cmake_target = text;
+
+  node* repo_n = node_get_child(scope, "repo");
+  if (repo_n) {
+    if (repo_n->type != NODE_TYPE_DEF) {
+      error("Attribute 'repo' must be a section for target '%s'.", target_label ? target_label : "");
+      return false;
+    }
+    if (!project_read_text_child(repo_n, "link", &out->package_repo_link))
+      return false;
+    if (!project_read_text_child(repo_n, "tag", &out->package_repo_tag))
+      return false;
+  }
+
+  node* archive_n = node_get_child(scope, "archive");
+  if (archive_n) {
+    if (archive_n->type != NODE_TYPE_DEF) {
+      error("Attribute 'archive' must be a section for target '%s'.", target_label ? target_label : "");
+      return false;
+    }
+    if (!project_read_text_child(archive_n, "link", &out->package_archive_link))
+      return false;
+    if (!project_read_text_child(archive_n, "strip_prefix", &out->package_archive_strip_prefix))
+      return false;
+  }
 
   node* value_n = node_get_child(scope, "units");
   if (value_n && !project_parse_string_list(value_n, &out->units, &out->unit_c))
@@ -786,6 +865,65 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
       return false;
     }
     out->output = text;
+    return true;
+  }
+  if (_stricmp(attr_n->name, "path") == 0) {
+    text = project_scalar_text(attr_n);
+    if (!text) {
+      error("Attribute 'path' must be a string or identifier.");
+      return false;
+    }
+    out->package_path = text;
+    out->package_repo_link = NULL;
+    out->package_repo_tag = NULL;
+    out->package_archive_link = NULL;
+    out->package_archive_strip_prefix = NULL;
+    return true;
+  }
+  if (_stricmp(attr_n->name, "subdir") == 0) {
+    text = project_scalar_text(attr_n);
+    if (!text) {
+      error("Attribute 'subdir' must be a string or identifier.");
+      return false;
+    }
+    out->package_subdir = text;
+    return true;
+  }
+  if (_stricmp(attr_n->name, "cmake_target") == 0) {
+    text = project_scalar_text(attr_n);
+    if (!text) {
+      error("Attribute 'cmake_target' must be a string or identifier.");
+      return false;
+    }
+    out->package_cmake_target = text;
+    return true;
+  }
+  if (_stricmp(attr_n->name, "repo") == 0) {
+    if (attr_n->type != NODE_TYPE_DEF) {
+      error("Attribute 'repo' must be a section.");
+      return false;
+    }
+    if (!project_read_text_child(attr_n, "link", &out->package_repo_link))
+      return false;
+    if (!project_read_text_child(attr_n, "tag", &out->package_repo_tag))
+      return false;
+    out->package_path = NULL;
+    out->package_archive_link = NULL;
+    out->package_archive_strip_prefix = NULL;
+    return true;
+  }
+  if (_stricmp(attr_n->name, "archive") == 0) {
+    if (attr_n->type != NODE_TYPE_DEF) {
+      error("Attribute 'archive' must be a section.");
+      return false;
+    }
+    if (!project_read_text_child(attr_n, "link", &out->package_archive_link))
+      return false;
+    if (!project_read_text_child(attr_n, "strip_prefix", &out->package_archive_strip_prefix))
+      return false;
+    out->package_path = NULL;
+    out->package_repo_link = NULL;
+    out->package_repo_tag = NULL;
     return true;
   }
   if (_stricmp(attr_n->name, "units") == 0)
@@ -1104,7 +1242,28 @@ static bool project_validate(const project* proj) {
       error("Target '%s' resolved to an empty output.", tgt->meta.id);
       return false;
     }
-    if (tgt->unit_c <= 0) {
+    if (project_target_is_package(tgt)) {
+      int package_sources = 0;
+      package_sources += tgt->package_path && tgt->package_path[0] ? 1 : 0;
+      package_sources += tgt->package_repo_link && tgt->package_repo_link[0] ? 1 : 0;
+      package_sources += tgt->package_archive_link && tgt->package_archive_link[0] ? 1 : 0;
+      if (package_sources > 1) {
+        error("Target '%s' must define only one package source: path, repo, or archive.", tgt->meta.id);
+        return false;
+      }
+      if (tgt->type == TARGET_TYPE_CONSOLE || tgt->type == TARGET_TYPE_CONSOLELESS || tgt->type == TARGET_TYPE_TEST || tgt->type == TARGET_TYPE_DRIVER) {
+        error("Package target '%s' must be a linkable library target.", tgt->meta.id);
+        return false;
+      }
+      if (tgt->unit_c > 0) {
+        error("Package target '%s' cannot also define source units.", tgt->meta.id);
+        return false;
+      }
+      if (package_sources == 0) {
+        error("Package target '%s' is missing its package source.", tgt->meta.id);
+        return false;
+      }
+    } else if (tgt->unit_c <= 0) {
       error("Target '%s' must define at least one source unit.", tgt->meta.id);
       return false;
     }
@@ -1328,6 +1487,27 @@ static void project_print(const project* proj) {
       print("License File: %s", tgt->meta.license.file);
     print("Type: %s", project_target_type_name(tgt->type));
     print("Output: %s", tgt->output ? tgt->output : "");
+    if (project_target_is_package(tgt)) {
+      print("Package Source: %s", project_package_source_name(tgt->package_source));
+      if (tgt->package_repo_link)
+        print("Package Repo: %s", tgt->package_repo_link);
+      if (tgt->package_repo_tag)
+        print("Package Tag: %s", tgt->package_repo_tag);
+      if (tgt->package_path)
+        print("Package Path: %s", tgt->package_path);
+      if (tgt->package_subdir)
+        print("Package Subdir: %s", tgt->package_subdir);
+      if (tgt->package_cmake_target)
+        print("Package CMake Target: %s", tgt->package_cmake_target);
+      if (tgt->package_archive_link)
+        print("Package Archive: %s", tgt->package_archive_link);
+      if (tgt->package_archive_strip_prefix)
+        print("Package Strip Prefix: %s", tgt->package_archive_strip_prefix);
+      if (tgt->package_cache_dir)
+        print("Package Cache Dir: %s", tgt->package_cache_dir);
+      if (tgt->package_resolved_dir)
+        print("Package Resolved Dir: %s", tgt->package_resolved_dir);
+    }
     print("Language: %s", project_lang_name(tgt->lang));
     print("Runtime: %s", project_runtime_name(tgt->runtime));
     print("Warning Level: %s", project_warning_level_name(tgt->warning_level));
@@ -1506,6 +1686,21 @@ static bool project_target_supports_linking(const target* tgt) {
          tgt->type == TARGET_TYPE_STATIC_LIB ||
          tgt->type == TARGET_TYPE_DYN_LIB ||
          tgt->type == TARGET_TYPE_OBJ_LIB;
+}
+
+static bool project_target_is_buildable(const target* tgt) {
+  return tgt && !project_target_is_package(tgt);
+}
+
+static const char* project_target_build_target_name(const target* tgt) {
+  if (!tgt)
+    return NULL;
+  if (project_target_is_package(tgt)) {
+    if (tgt->package_cmake_target && tgt->package_cmake_target[0])
+      return tgt->package_cmake_target;
+    return tgt->output ? tgt->output : tgt->meta.id;
+  }
+  return tgt->meta.id;
 }
 
 static const char* project_host_os_name(void) {
@@ -1912,6 +2107,47 @@ static const char* project_build_binary_dir_abs(const project* proj, const char*
   return get_path_cwd(project_resolved_dir(proj && proj->user_cfg.builddir ? proj->user_cfg.builddir : DEF_BUILD_DIR, config, platform));
 }
 
+static bool project_ensure_dir_tree(const char* path, const char* label) {
+  if (!path || !path[0])
+    return true;
+  if (dir_exists(path))
+    return true;
+
+  size_t len = strlen(path);
+  char* buf = push(len + 1);
+  if (!buf)
+    return false;
+  memcpy(buf, path, len + 1);
+
+  size_t start = 0;
+  if (len >= 3 && buf[1] == ':' && (buf[2] == '\\' || buf[2] == '/'))
+    start = 3;
+  else if (len >= 1 && (buf[0] == '\\' || buf[0] == '/'))
+    start = 1;
+
+  for (size_t i = start; i < len; ++i) {
+    if (buf[i] != '\\' && buf[i] != '/')
+      continue;
+    if (i == 0)
+      continue;
+
+    char saved = buf[i];
+    buf[i] = '\0';
+    if (buf[0] && !dir_exists(buf) && !dir_create(buf)) {
+      error("Failed to create %s: %s", label ? label : "directory", buf);
+      return false;
+    }
+    buf[i] = saved;
+  }
+
+  if (!dir_exists(buf) && !dir_create(buf)) {
+    error("Failed to create %s: %s", label ? label : "directory", buf);
+    return false;
+  }
+
+  return true;
+}
+
 static bool project_ensure_dir_exists(const char* path, const char* label) {
   if (!path || !path[0])
     return false;
@@ -1922,6 +2158,515 @@ static bool project_ensure_dir_exists(const char* path, const char* label) {
     return false;
   }
   print("Created %s at %s", label ? label : "directory", path);
+  return true;
+}
+
+static const char* project_package_root_abs(void) {
+  return get_path_exe("packages");
+}
+
+static bool project_path_has_ext(const char* path, const char* ext) {
+  if (!path || !ext)
+    return false;
+  size_t pl = strlen(path);
+  size_t el = strlen(ext);
+  return pl >= el && _stricmp(path + pl - el, ext) == 0;
+}
+
+static const char* project_path_without_git_suffix(const char* text) {
+  if (!text)
+    return NULL;
+  size_t len = strlen(text);
+  if (!project_path_has_ext(text, ".git"))
+    return arena_text(text, len);
+  return arena_text(text, len - 4);
+}
+
+static uint32_t project_hash_text(const char* text) {
+  uint32_t hash = 2166136261u;
+  if (!text)
+    return hash;
+  for (const unsigned char* p = (const unsigned char*)text; *p; ++p) {
+    hash ^= *p;
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
+static const char* project_sanitize_key(const char* text, size_t max_len) {
+  if (!text || !text[0])
+    return arena_text("pkg", 3);
+  char* out = push(max_len + 1);
+  if (!out)
+    return NULL;
+  size_t wi = 0;
+  bool last_sep = false;
+  for (const unsigned char* p = (const unsigned char*)text; *p && wi < max_len; ++p) {
+    if (isalnum(*p)) {
+      out[wi++] = (char)tolower(*p);
+      last_sep = false;
+    } else if (!last_sep && wi > 0) {
+      out[wi++] = '_';
+      last_sep = true;
+    }
+  }
+  while (wi > 0 && out[wi - 1] == '_')
+    --wi;
+  if (wi == 0) {
+    out[0] = 'p'; out[1] = 'k'; out[2] = 'g'; wi = 3;
+  }
+  out[wi] = '\0';
+  return out;
+}
+
+static const char* project_path_basename_text(const char* path) {
+  if (!path || !path[0])
+    return NULL;
+  const char* last = strrchr(path, '/');
+  const char* bslash = strrchr(path, '\\');
+  if (!last || (bslash && bslash > last))
+    last = bslash;
+  return last ? last + 1 : path;
+}
+
+static const char* project_package_cache_key_compact(const target* tgt) {
+  const char* base = NULL;
+  if (tgt->package_repo_link && tgt->package_repo_link[0])
+    base = project_path_basename_text(project_path_without_git_suffix(tgt->package_repo_link));
+  else if (tgt->package_archive_link && tgt->package_archive_link[0])
+    base = project_path_basename_text(tgt->package_archive_link);
+  else if (tgt->package_path && tgt->package_path[0])
+    base = project_path_basename_text(tgt->package_path);
+  if (!base || !base[0])
+    base = tgt->meta.id ? tgt->meta.id : "pkg";
+
+  const char* clean = project_sanitize_key(base, 24);
+  char suffix_src[1024] = {0};
+  snprintf(suffix_src,
+           sizeof(suffix_src),
+           "%s|%s|%s|%s",
+           tgt->package_repo_link ? tgt->package_repo_link : "",
+           tgt->package_repo_tag ? tgt->package_repo_tag : "",
+           tgt->package_archive_link ? tgt->package_archive_link : "",
+           tgt->package_archive_strip_prefix ? tgt->package_archive_strip_prefix : "");
+  uint32_t hash = project_hash_text(suffix_src);
+  char buf[64] = {0};
+  snprintf(buf, sizeof(buf), "%s_%08x", clean, hash);
+  return arena_text(buf, strlen(buf));
+}
+
+static const char* project_repo_cache_key(const char* link, const char* tag) {
+  if (!link || !link[0])
+    return NULL;
+
+  const char* clean = project_path_without_git_suffix(link);
+  size_t in_len = strlen(clean) + (tag && tag[0] ? strlen(tag) + 1 : 0);
+  char* out = push(in_len + 1);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  bool last_sep = false;
+  for (const char* p = clean; *p; ++p) {
+    unsigned char ch = (unsigned char)*p;
+    if (isalnum(ch)) {
+      out[wi++] = (char)tolower(ch);
+      last_sep = false;
+    } else if (!last_sep) {
+      out[wi++] = '_';
+      last_sep = true;
+    }
+  }
+  if (tag && tag[0]) {
+    if (wi > 0 && !last_sep)
+      out[wi++] = '_';
+    for (const char* p = tag; *p; ++p) {
+      unsigned char ch = (unsigned char)*p;
+      if (isalnum(ch))
+        out[wi++] = (char)tolower(ch);
+      else if (wi > 0 && out[wi - 1] != '_')
+        out[wi++] = '_';
+    }
+  }
+  while (wi > 0 && out[wi - 1] == '_')
+    --wi;
+  if (wi == 0) {
+    out[0] = 'p';
+    out[1] = 'k';
+    out[2] = 'g';
+    wi = 3;
+  }
+  out[wi] = '\0';
+  return out;
+}
+
+static const char* project_package_cache_dir_for(const target* tgt) {
+  const char* root = project_package_root_abs();
+  const char* compact = project_package_cache_key_compact(tgt);
+  const char* compact_dir = toolchain_norm_path(toolchain_join2(root, compact));
+  if (dir_exists(compact_dir))
+    return compact_dir;
+
+  if (tgt->package_source == PACKAGE_SOURCE_REPO) {
+    const char* legacy = project_repo_cache_key(tgt->package_repo_link, tgt->package_repo_tag);
+    const char* legacy_dir = toolchain_norm_path(toolchain_join2(root, legacy));
+    if (dir_exists(legacy_dir))
+      return legacy_dir;
+  }
+  if (tgt->package_source == PACKAGE_SOURCE_ARCHIVE) {
+    const char* legacy = project_repo_cache_key(tgt->package_archive_link, tgt->package_archive_strip_prefix);
+    const char* legacy_dir = toolchain_norm_path(toolchain_join2(root, legacy));
+    if (dir_exists(legacy_dir))
+      return legacy_dir;
+  }
+  return compact_dir;
+}
+
+static const char* project_resolve_input_path(const char* path) {
+  if (!path || !path[0])
+    return NULL;
+  return toolchain_is_abs_path(path) ? toolchain_norm_path(path) : toolchain_norm_path(get_path_cwd(path));
+}
+
+static bool project_text_looks_like_url(const char* text) {
+  return text && (strstr(text, "://") != NULL || strncmp(text, "git@", 4) == 0);
+}
+
+static const char* project_resolve_repo_link(const char* link) {
+  if (!link || !link[0])
+    return NULL;
+  return project_text_looks_like_url(link) ? link : project_resolve_input_path(link);
+}
+
+static const char* project_shell_quote(const char* text) {
+  if (!text)
+    return NULL;
+
+  size_t len = strlen(text);
+  char* out = push(len * 2 + 3);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  out[wi++] = '"';
+  for (size_t i = 0; i < len; ++i) {
+    char ch = text[i];
+    if (ch == '"' || ch == '\\' || ch == '$' || ch == '`')
+      out[wi++] = '\\';
+    out[wi++] = ch;
+  }
+  out[wi++] = '"';
+  out[wi] = '\0';
+  return out;
+}
+
+static const char* project_package_effective_dir(const target* tgt, const char* root_dir) {
+  if (!root_dir || !root_dir[0])
+    return root_dir;
+  const char* dir = root_dir;
+  if (tgt && tgt->package_archive_strip_prefix && tgt->package_archive_strip_prefix[0])
+    dir = toolchain_join2(dir, tgt->package_archive_strip_prefix);
+  if (tgt && tgt->package_subdir && tgt->package_subdir[0])
+    dir = toolchain_join2(dir, tgt->package_subdir);
+  return toolchain_norm_path(dir);
+}
+
+static const char* project_command_capture_first_line(const char* cmd) {
+  if (!cmd || !cmd[0])
+    return NULL;
+
+  FILE* pipe = platform_popen_read(cmd);
+  if (!pipe)
+    return NULL;
+
+  char line[1024] = {0};
+  const char* out = NULL;
+  if (fgets(line, sizeof(line), pipe) != NULL) {
+    size_t len = strlen(line);
+    while (len > 0 && isspace((unsigned char)line[len - 1]))
+      line[--len] = '\0';
+    for (size_t i = 0; i < len; ++i) {
+      if (isspace((unsigned char)line[i])) {
+        line[i] = '\0';
+        len = i;
+        break;
+      }
+    }
+    if (len > 0)
+      out = arena_text(line, len);
+  }
+  platform_pclose_read(pipe);
+  return out;
+}
+
+static const char* project_bash_capture_first_line(toolchain* tc, const char* script) {
+  if (!tc || !script || !script[0])
+    return NULL;
+
+  const char* tmp = toolchain_norm_path(toolchain_join2(project_current_workdir(), ".bbs-package-probe.txt"));
+  if (!tmp)
+    return NULL;
+
+  char wrapped[4096] = {0};
+  snprintf(wrapped, sizeof(wrapped), "%s > %s", script, project_shell_quote(tmp));
+  if (toolchain_run_bash(tc, project_current_workdir(), wrapped) != 0)
+    return NULL;
+
+  const char* text = read_entire_file(tmp);
+  file_delete(tmp);
+  if (!text || !text[0])
+    return NULL;
+
+  size_t len = strcspn(text, "\r\n\t ");
+  return len > 0 ? arena_text(text, len) : NULL;
+}
+
+static const char* project_git_resolve_local_head(toolchain* tc, const char* repo_dir) {
+  const char* git = toolchain_get_host_tool_path(tc, "git");
+  if (!git || !git[0] || !repo_dir || !repo_dir[0])
+    return NULL;
+  char script[4096] = {0};
+  snprintf(script, sizeof(script), "%s -C %s rev-parse HEAD 2>/dev/null", project_shell_quote(toolchain_norm_path(git)), project_shell_quote(toolchain_norm_path(repo_dir)));
+  return project_bash_capture_first_line(tc, script);
+}
+
+static const char* project_git_resolve_remote_ref(toolchain* tc, const char* repo_link, const char* repo_tag) {
+  const char* git = toolchain_get_host_tool_path(tc, "git");
+  if (!git || !git[0] || !repo_link || !repo_link[0])
+    return NULL;
+  const char* resolved_link = project_resolve_repo_link(repo_link);
+
+  char script[4096] = {0};
+  if (repo_tag && repo_tag[0]) {
+    snprintf(script,
+             sizeof(script),
+             "%s ls-remote %s %s %s 2>/dev/null",
+             project_shell_quote(toolchain_norm_path(git)),
+             project_shell_quote(toolchain_norm_path(resolved_link)),
+             project_shell_quote(toolchain_append_text("refs/tags/", repo_tag)),
+             project_shell_quote(toolchain_append_text(toolchain_append_text("refs/tags/", repo_tag), "^{}")));
+  } else {
+    snprintf(script,
+             sizeof(script),
+             "%s ls-remote %s HEAD 2>/dev/null",
+             project_shell_quote(toolchain_norm_path(git)),
+             project_shell_quote(toolchain_norm_path(resolved_link)));
+  }
+  return project_bash_capture_first_line(tc, script);
+}
+
+static const char* project_package_status_label(const project_package_info* info) {
+  return info && info->status ? info->status : "unknown";
+}
+
+static bool project_package_query(const target* tgt, toolchain* tc, project_package_info* out) {
+  if (!out)
+    return false;
+  memset(out, 0, sizeof(*out));
+  if (!tgt || !project_target_is_package(tgt))
+    return true;
+
+  if (tgt->package_source == PACKAGE_SOURCE_PATH) {
+    out->source = project_package_effective_dir(tgt, project_resolve_input_path(tgt->package_path));
+    out->exists = dir_exists(out->source);
+    out->has_cmakelists = out->source && file_exists(toolchain_join2(out->source, "CMakeLists.txt"));
+    out->status = out->exists ? "ready" : "missing";
+    return true;
+  }
+
+  if (tgt->package_source == PACKAGE_SOURCE_REPO) {
+    out->cache_dir = project_package_cache_dir_for(tgt);
+    out->source = project_package_effective_dir(tgt, out->cache_dir);
+    out->is_cached = true;
+    out->exists = dir_exists(out->source);
+    out->has_cmakelists = out->source && file_exists(toolchain_join2(out->source, "CMakeLists.txt"));
+    out->local_ref = dir_exists(out->cache_dir) ? project_git_resolve_local_head(tc, out->cache_dir) : NULL;
+    out->remote_ref = project_git_resolve_remote_ref(tc, tgt->package_repo_link, tgt->package_repo_tag);
+    if (!dir_exists(out->cache_dir))
+      out->status = "missing";
+    else if (out->local_ref && out->remote_ref)
+      out->status = _stricmp(out->local_ref, out->remote_ref) == 0 ? "up-to-date" : "outdated";
+    else
+      out->status = out->has_cmakelists ? "cached" : "invalid";
+    return true;
+  }
+
+  if (tgt->package_source == PACKAGE_SOURCE_ARCHIVE) {
+    out->cache_dir = project_package_cache_dir_for(tgt);
+    out->source = project_package_effective_dir(tgt, out->cache_dir);
+    out->is_cached = true;
+    out->exists = dir_exists(out->source);
+    out->has_cmakelists = out->source && file_exists(toolchain_join2(out->source, "CMakeLists.txt"));
+    out->status = dir_exists(out->cache_dir) ? (out->has_cmakelists ? "cached" : "invalid") : "missing";
+  }
+
+  return true;
+}
+
+static bool project_fetch_repo_package(target* tgt, toolchain* tc, bool refresh) {
+  if (!tgt || tgt->package_source != PACKAGE_SOURCE_REPO)
+    return true;
+
+  project_package_info info = {0};
+  if (!project_package_query(tgt, tc, &info))
+    return false;
+
+  const char* packages_root = toolchain_norm_path(project_package_root_abs());
+
+  tgt->package_cache_dir = info.cache_dir;
+  tgt->package_resolved_dir = project_package_effective_dir(tgt, info.cache_dir);
+  if (refresh && info.exists) {
+    print("Refreshing package '%s' at %s", tgt->meta.id ? tgt->meta.id : "", info.cache_dir ? info.cache_dir : "");
+    char delete_script[2048] = {0};
+    snprintf(delete_script, sizeof(delete_script), "rm -rf %s", project_shell_quote(info.cache_dir));
+    if (toolchain_run_bash(tc, packages_root, delete_script) != 0 || dir_exists(info.cache_dir)) {
+      error("Failed to delete cached package '%s': %s", tgt->meta.id ? tgt->meta.id : "", info.cache_dir ? info.cache_dir : "");
+      return false;
+    }
+    info.exists = false;
+  }
+  if (info.exists)
+    return true;
+
+  if (!project_ensure_dir_tree(packages_root, "packages directory"))
+    return false;
+
+  const char* git = toolchain_get_host_tool_path(tc, "git");
+  if (!git || !git[0]) {
+    error("Unable to find 'git' in the current toolchain. Package '%s' cannot be fetched.", tgt->meta.id ? tgt->meta.id : "");
+    print("Run 'bbs update --init-toolchain' after installing Git.");
+    return false;
+  }
+
+  char script[4096] = {0};
+  const char* root_q = project_shell_quote(packages_root);
+  const char* git_q = project_shell_quote(toolchain_norm_path(git));
+  const char* link_q = project_shell_quote(project_resolve_repo_link(tgt->package_repo_link));
+  const char* dir_q = project_shell_quote(info.cache_dir);
+  if (tgt->package_repo_tag && tgt->package_repo_tag[0]) {
+    const char* tag_q = project_shell_quote(tgt->package_repo_tag);
+    snprintf(script,
+             sizeof(script),
+             "mkdir -p %s && %s clone --depth 1 --branch %s --recurse-submodules %s %s",
+             root_q,
+             git_q,
+             tag_q,
+             link_q,
+             dir_q);
+  } else {
+    snprintf(script,
+             sizeof(script),
+             "mkdir -p %s && %s clone --depth 1 --recurse-submodules %s %s",
+             root_q,
+             git_q,
+             link_q,
+             dir_q);
+  }
+
+  print("Fetching package '%s' into %s", tgt->meta.id ? tgt->meta.id : "", info.cache_dir ? info.cache_dir : "");
+  if (toolchain_run_bash(tc, packages_root, script) != 0) {
+    error("Failed to fetch package '%s' from %s.", tgt->meta.id ? tgt->meta.id : "", tgt->package_repo_link ? tgt->package_repo_link : "");
+    return false;
+  }
+
+  return true;
+}
+
+static bool project_fetch_archive_package(target* tgt, toolchain* tc, bool refresh) {
+  if (!tgt || tgt->package_source != PACKAGE_SOURCE_ARCHIVE)
+    return true;
+
+  project_package_info info = {0};
+  if (!project_package_query(tgt, tc, &info))
+    return false;
+
+  const char* packages_root = toolchain_norm_path(project_package_root_abs());
+  tgt->package_cache_dir = info.cache_dir;
+  tgt->package_resolved_dir = project_package_effective_dir(tgt, info.cache_dir);
+
+  if (refresh && info.cache_dir && dir_exists(info.cache_dir)) {
+    print("Refreshing package '%s' at %s", tgt->meta.id ? tgt->meta.id : "", info.cache_dir);
+    char delete_script[2048] = {0};
+    snprintf(delete_script, sizeof(delete_script), "rm -rf %s", project_shell_quote(info.cache_dir));
+    if (toolchain_run_bash(tc, packages_root, delete_script) != 0 || dir_exists(info.cache_dir)) {
+      error("Failed to delete cached package '%s': %s", tgt->meta.id ? tgt->meta.id : "", info.cache_dir ? info.cache_dir : "");
+      return false;
+    }
+    info.exists = false;
+  }
+
+  if (info.exists)
+    return true;
+
+  if (!project_ensure_dir_tree(packages_root, "packages directory"))
+    return false;
+
+  char script[4096] = {0};
+  const char* cache_q = project_shell_quote(info.cache_dir);
+  const char* url_q = project_shell_quote(tgt->package_archive_link);
+  snprintf(script,
+           sizeof(script),
+           "rm -rf %s && mkdir -p %s && url=%s && case \"$url\" in *.zip|*.zip?*|*.zip#*) tmp=%s/.bbs-download.zip ;; *.tar.gz|*.tar.gz?*|*.tgz|*.tgz?*) tmp=%s/.bbs-download.tgz ;; *.tar.xz|*.tar.xz?*) tmp=%s/.bbs-download.tar.xz ;; *) tmp=%s/.bbs-download.bin ;; esac && rm -f \"$tmp\" && curl -L \"$url\" -o \"$tmp\" && case \"$url\" in *.zip|*.zip?*|*.zip#*) if command -v powershell >/dev/null 2>&1; then powershell -NoProfile -Command \"Expand-Archive -LiteralPath '$tmp' -DestinationPath '%s' -Force\"; elif command -v unzip >/dev/null 2>&1; then unzip -q \"$tmp\" -d %s; else tar -xf \"$tmp\" -C %s; fi ;; *) tar -xf \"$tmp\" -C %s ;; esac && rm -f \"$tmp\"",
+           cache_q,
+           cache_q,
+           url_q,
+           cache_q,
+           cache_q,
+           cache_q,
+           cache_q,
+           info.cache_dir,
+           cache_q,
+           cache_q,
+           cache_q);
+
+  print("Fetching archive package '%s' into %s", tgt->meta.id ? tgt->meta.id : "", info.cache_dir ? info.cache_dir : "");
+  if (toolchain_run_bash(tc, packages_root, script) != 0) {
+    error("Failed to fetch archive package '%s' from %s.", tgt->meta.id ? tgt->meta.id : "", tgt->package_archive_link ? tgt->package_archive_link : "");
+    return false;
+  }
+
+  return true;
+}
+
+static bool project_resolve_package_target(target* tgt, toolchain* tc, bool refresh) {
+  if (!tgt)
+    return false;
+
+  tgt->package_source = tgt->package_path && tgt->package_path[0] ? PACKAGE_SOURCE_PATH :
+                        (tgt->package_repo_link && tgt->package_repo_link[0] ? PACKAGE_SOURCE_REPO :
+                         (tgt->package_archive_link && tgt->package_archive_link[0] ? PACKAGE_SOURCE_ARCHIVE : PACKAGE_SOURCE_NONE));
+  if (tgt->package_source == PACKAGE_SOURCE_NONE)
+    return true;
+
+  if (tgt->package_source == PACKAGE_SOURCE_PATH) {
+    tgt->package_cache_dir = NULL;
+    tgt->package_resolved_dir = project_package_effective_dir(tgt, project_resolve_input_path(tgt->package_path));
+  } else if (!project_fetch_repo_package(tgt, tc, refresh)) {
+    return false;
+  } else if (tgt->package_source == PACKAGE_SOURCE_ARCHIVE && !project_fetch_archive_package(tgt, tc, refresh)) {
+    return false;
+  }
+
+  if (!tgt->package_resolved_dir || !dir_exists(tgt->package_resolved_dir)) {
+    error("Package directory for '%s' does not exist: %s", tgt->meta.id ? tgt->meta.id : "", tgt->package_resolved_dir ? tgt->package_resolved_dir : "");
+    return false;
+  }
+
+  const char* cmakelists = toolchain_join2(tgt->package_resolved_dir, "CMakeLists.txt");
+  if (!file_exists(cmakelists)) {
+    error("Package '%s' must provide a CMakeLists.txt at %s", tgt->meta.id ? tgt->meta.id : "", cmakelists ? cmakelists : "");
+    return false;
+  }
+
+  return true;
+}
+
+static bool project_prepare_packages(project* proj, toolchain* tc, bool refresh) {
+  if (!proj)
+    return false;
+  for (int i = 0; i < proj->target_c; ++i)
+    if (!project_resolve_package_target(&proj->targets[i], tc, refresh))
+      return false;
   return true;
 }
 
@@ -2375,6 +3120,66 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
   if (!target_name || !output_name || !var_name || !usage_target_name)
     return false;
 
+  if (project_target_is_package(tgt)) {
+    const char* package_dir = project_cmake_path_text(tgt->package_resolved_dir ? tgt->package_resolved_dir : "");
+    const char* ext_target_name = project_escape_cmake_string(project_target_build_target_name(tgt));
+    if (!package_dir || !ext_target_name)
+      return false;
+
+    if (!project_textbuf_appendf(buf,
+                                 "add_subdirectory(\"%s\" \"${CMAKE_CURRENT_BINARY_DIR}/packages/%s\")\n"
+                                 "if(NOT TARGET %s)\n"
+                                 "  message(FATAL_ERROR \"Package '%s' did not define the expected CMake target '%s'.\")\n"
+                                 "endif()\n"
+                                 "add_library(%s INTERFACE)\n"
+                                 "target_link_libraries(%s INTERFACE %s)\n",
+                                 package_dir,
+                                 var_name,
+                                 ext_target_name,
+                                 tgt->meta.id ? tgt->meta.id : "",
+                                 project_target_build_target_name(tgt) ? project_target_build_target_name(tgt) : "",
+                                 usage_target_name,
+                                 usage_target_name,
+                                 ext_target_name))
+      return false;
+
+    for (int i = 0; i < tgt->include_dir_c; ++i) {
+      const char* dir = project_cmake_path_text(tgt->include_dirs[i] ? tgt->include_dirs[i] : "");
+      if (!dir)
+        return false;
+      if (!project_textbuf_appendf(buf, "target_include_directories(%s INTERFACE \"${BBS_PROJECT_ROOT}/%s\")\n", usage_target_name, dir))
+        return false;
+    }
+    for (int i = 0; i < tgt->link_dir_c; ++i) {
+      const char* dir = project_cmake_path_text(tgt->link_dirs[i] ? tgt->link_dirs[i] : "");
+      if (!dir)
+        return false;
+      if (!project_textbuf_appendf(buf, "target_link_directories(%s INTERFACE \"${BBS_PROJECT_ROOT}/%s\")\n", usage_target_name, dir))
+        return false;
+    }
+    for (int i = 0; i < tgt->link_libs_count; ++i) {
+      const char* lib = project_escape_cmake_string(tgt->link_libs[i] ? tgt->link_libs[i] : "");
+      if (!lib)
+        return false;
+      if (!project_textbuf_appendf(buf, "target_link_libraries(%s INTERFACE \"%s\")\n", usage_target_name, lib))
+        return false;
+    }
+    for (int i = 0; i < tgt->dependency_c; ++i) {
+      int dep_idx = project_find_target_index(proj, tgt->dependencies[i]);
+      if (dep_idx < 0)
+        return false;
+      const target* dep = &proj->targets[dep_idx];
+      const char* dep_usage_target_id = project_target_usage_name(dep->meta.id);
+      const char* dep_usage_target_name = dep_usage_target_id ? project_escape_cmake_string(dep_usage_target_id) : NULL;
+      if (!dep_usage_target_name)
+        return false;
+      if (!project_textbuf_appendf(buf, "target_link_libraries(%s INTERFACE %s)\n", usage_target_name, dep_usage_target_name))
+        return false;
+    }
+
+    return project_textbuf_append(buf, "\n");
+  }
+
   if (!project_textbuf_appendf(buf, "set(BBS_%s_SOURCES)\n", var_name))
     return false;
   for (int i = 0; i < tgt->unit_c; ++i) {
@@ -2517,7 +3322,7 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
       return false;
 
     const target* dep = &proj->targets[dep_idx];
-    const char* dep_target_name = project_escape_cmake_string(dep->meta.id);
+    const char* dep_target_name = project_escape_cmake_string(project_target_build_target_name(dep));
     const char* dep_usage_target_id = project_target_usage_name(dep->meta.id);
     const char* dep_usage_target_name = dep_usage_target_id ? project_escape_cmake_string(dep_usage_target_id) : NULL;
     if (!dep_target_name || !dep_usage_target_name)
@@ -2920,7 +3725,7 @@ static bool project_generate_presets(const project* proj, toolchain* tc, bool* c
   return true;
 }
 
-static bool project_prepare_backend(const project* proj, toolchain* tc, const char* platform, bool ensure_output_dir, bool* backend_changed) {
+static bool project_prepare_backend(project* proj, toolchain* tc, const char* platform, bool ensure_output_dir, bool refresh_packages, bool* backend_changed) {
   if (backend_changed)
     *backend_changed = false;
   if (!proj) {
@@ -2945,6 +3750,9 @@ static bool project_prepare_backend(const project* proj, toolchain* tc, const ch
     if (!project_ensure_dir_exists(build_dir, "build output directory"))
       return false;
   }
+
+  if (!project_prepare_packages(proj, tc, refresh_packages))
+    return false;
 
   bool toolchain_changed = false;
   bool cmakelists_changed = false;
@@ -3133,6 +3941,140 @@ static int project_find_target_index(const project* proj, const char* name) {
   return match;
 }
 
+static int project_count_package_targets(const project* proj) {
+  if (!proj)
+    return 0;
+  int count = 0;
+  for (int i = 0; i < proj->target_c; ++i) {
+    const target* tgt = &proj->targets[i];
+    if (project_target_is_package(tgt))
+      ++count;
+  }
+  return count;
+}
+
+static bool project_package_needs_refresh(const target* tgt) {
+  if (!tgt)
+    return false;
+  package_source source = tgt->package_source;
+  if (source == PACKAGE_SOURCE_NONE) {
+    if (tgt->package_repo_link && tgt->package_repo_link[0])
+      source = PACKAGE_SOURCE_REPO;
+    else if (tgt->package_archive_link && tgt->package_archive_link[0])
+      source = PACKAGE_SOURCE_ARCHIVE;
+    else if (tgt->package_path && tgt->package_path[0])
+      source = PACKAGE_SOURCE_PATH;
+  }
+  return source == PACKAGE_SOURCE_REPO || source == PACKAGE_SOURCE_ARCHIVE;
+}
+
+static int project_find_single_package_target(const project* proj) {
+  if (!proj)
+    return -1;
+  int match = -1;
+  for (int i = 0; i < proj->target_c; ++i) {
+    if (!project_target_is_package(&proj->targets[i]))
+      continue;
+    if (match >= 0)
+      return -2;
+    match = i;
+  }
+  return match;
+}
+
+static bool project_refresh_packages(project* proj, toolchain* tc, const char* name) {
+  if (!proj || !tc)
+    return false;
+  if (!name || !name[0] || strcmp(name, "*") == 0) {
+    for (int i = 0; i < proj->target_c; ++i) {
+      target* tgt = &proj->targets[i];
+      if (!project_target_is_package(tgt) || !project_package_needs_refresh(tgt))
+        continue;
+      if (!project_resolve_package_target(tgt, tc, true))
+        return false;
+    }
+    return true;
+  }
+
+  int idx = project_find_target_index(proj, name);
+  if (idx < 0)
+    return false;
+  if (!project_target_is_package(&proj->targets[idx])) {
+    error("Target '%s' is not a package target.", name);
+    return false;
+  }
+  if (!project_package_needs_refresh(&proj->targets[idx])) {
+    print("Package '%s' uses a local path and does not need refresh.", name);
+    return true;
+  }
+  return project_resolve_package_target(&proj->targets[idx], tc, true);
+}
+
+static void project_print_package_list_header(void) {
+  print("Packages:");
+  print("  %-16s %-8s %-12s %-18s %s", "Name", "Source", "Status", "CMake Target", "Location");
+}
+
+static void project_print_package_list_row(const target* tgt, toolchain* tc) {
+  if (!tgt)
+    return;
+  target copy = *tgt;
+  copy.package_source = copy.package_path && copy.package_path[0] ? PACKAGE_SOURCE_PATH :
+                        (copy.package_repo_link && copy.package_repo_link[0] ? PACKAGE_SOURCE_REPO :
+                         (copy.package_archive_link && copy.package_archive_link[0] ? PACKAGE_SOURCE_ARCHIVE : PACKAGE_SOURCE_NONE));
+  project_package_info info = {0};
+  project_package_query(&copy, tc, &info);
+  const char* location = copy.package_path ? copy.package_path : (copy.package_repo_link ? copy.package_repo_link : (copy.package_archive_link ? copy.package_archive_link : ""));
+  print("  %-16s %-8s %-12s %-18s %s",
+        copy.meta.id ? copy.meta.id : "",
+        project_package_source_name(copy.package_source),
+        project_package_status_label(&info),
+        project_target_build_target_name(&copy) ? project_target_build_target_name(&copy) : "",
+        location);
+}
+
+static void project_print_package_summary(const target* tgt, toolchain* tc) {
+  if (!tgt)
+    return;
+
+  target copy = *tgt;
+  copy.package_source = copy.package_path && copy.package_path[0] ? PACKAGE_SOURCE_PATH :
+                        (copy.package_repo_link && copy.package_repo_link[0] ? PACKAGE_SOURCE_REPO :
+                         (copy.package_archive_link && copy.package_archive_link[0] ? PACKAGE_SOURCE_ARCHIVE : PACKAGE_SOURCE_NONE));
+  project_package_info info = {0};
+  project_package_query(&copy, tc, &info);
+
+  print("Package: %s", copy.meta.id ? copy.meta.id : "");
+  print("  Type: %s", project_target_type_name(copy.type));
+  print("  Source: %s", project_package_source_name(copy.package_source));
+  print("  CMake Target: %s", project_target_build_target_name(&copy) ? project_target_build_target_name(&copy) : "");
+  if (copy.package_repo_link)
+    print("  Repo: %s", copy.package_repo_link);
+  if (copy.package_repo_tag)
+    print("  Tag: %s", copy.package_repo_tag);
+  if (copy.package_path)
+    print("  Path: %s", copy.package_path);
+  if (copy.package_subdir)
+    print("  Subdir: %s", copy.package_subdir);
+  if (copy.package_cmake_target)
+    print("  Declared CMake Target: %s", copy.package_cmake_target);
+  if (copy.package_archive_link)
+    print("  Archive: %s", copy.package_archive_link);
+  if (copy.package_archive_strip_prefix)
+    print("  Strip Prefix: %s", copy.package_archive_strip_prefix);
+  if (info.cache_dir)
+    print("  Cache Dir: %s", info.cache_dir);
+  if (info.source)
+    print("  Resolved Dir: %s", info.source);
+  print("  Status: %s", project_package_status_label(&info));
+  print("  Present: %s", info.exists ? "yes" : "no");
+  print("  CMakeLists: %s", info.has_cmakelists ? "yes" : "no");
+  if (info.local_ref)
+    print("  Local Ref: %s", info.local_ref);
+  if (info.remote_ref)
+    print("  Remote Ref: %s", info.remote_ref);
+}
+
 static int project_count_runnable_targets(const project* proj) {
   if (!proj)
     return 0;
@@ -3209,7 +4151,7 @@ static bool project_build(const char* target_name, const char* platform, const c
   if (!platform_id)
     return false;
   bool backend_changed = false;
-  if (!project_prepare_backend(&proj, tc, platform_id, true, &backend_changed))
+  if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
     return false;
 
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
@@ -3223,7 +4165,7 @@ static bool project_build(const char* target_name, const char* platform, const c
     project_print_target_line("Build", &proj.targets[idx]);
     if (!project_run_cmake_preset(tc, &proj, preset))
       return false;
-    return project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id);
+    return project_run_cmake_build(tc, &proj, preset, project_target_build_target_name(&proj.targets[idx]));
   }
 
   if (proj.target_c == 1)
@@ -3257,7 +4199,7 @@ static bool project_run(const char* target_name, const char* platform, const cha
   }
 
   bool backend_changed = false;
-  if (!project_prepare_backend(&proj, tc, platform_id, true, &backend_changed))
+  if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
     return false;
 
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
@@ -3268,6 +4210,10 @@ static bool project_run(const char* target_name, const char* platform, const cha
     idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
       return false;
+    if (!project_target_is_buildable(&proj.targets[idx])) {
+      error("Target '%s' is a package target and is not runnable.", target_name);
+      return false;
+    }
     if (!project_target_is_runnable(&proj.targets[idx])) {
       error("Target '%s' is not runnable.", target_name);
       return false;
@@ -3306,7 +4252,7 @@ static bool project_test(const char* test_name, const char* target_name, const c
   if (!platform_id)
     return false;
   bool backend_changed = false;
-  if (!project_prepare_backend(&proj, tc, platform_id, true, &backend_changed))
+  if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
     return false;
 
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
@@ -3321,6 +4267,10 @@ static bool project_test(const char* test_name, const char* target_name, const c
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
       return false;
+    if (!project_target_is_buildable(&proj.targets[idx])) {
+      error("Target '%s' is a package target and is not a test target.", target_name);
+      return false;
+    }
     if (!project_target_is_test(&proj.targets[idx])) {
       error("Target '%s' is not a test target.", target_name);
       return false;
@@ -3366,7 +4316,7 @@ static bool project_dist(const char* target_name, const char* platform, const ch
   if (!platform_id)
     return false;
   bool backend_changed = false;
-  if (!project_prepare_backend(&proj, tc, platform_id, true, &backend_changed))
+  if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
     return false;
 
   project_print_action_header("Dist", &proj, platform_id);
@@ -3376,6 +4326,10 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     if (idx < 0)
       return false;
     project_print_target_line("Dist", &proj.targets[idx]);
+    if (!project_target_is_buildable(&proj.targets[idx])) {
+      error("Target '%s' is a package target and is not distributable.", target_name);
+      return false;
+    }
     if (!project_target_is_runnable(&proj.targets[idx])) {
       error("Target '%s' is not distributable.", target_name);
       return false;
@@ -3450,14 +4404,14 @@ static bool project_dist(const char* target_name, const char* platform, const ch
   return project_dist(proj.targets[idx].meta.id, platform_id, proj.active_config, tc);
 }
 
-static bool project_update(toolchain* tc) {
+static bool project_update(toolchain* tc, bool refresh_packages) {
   bool ok = true;
 
   project proj = {0};
   if (!project_load(&proj))
     return false;
 
-  ok = project_prepare_backend(&proj, tc, NULL, false, NULL);
+  ok = project_prepare_backend(&proj, tc, NULL, false, refresh_packages, NULL);
   if (ok)
     print("Project update completed for %d target(s).", proj.target_c);
 

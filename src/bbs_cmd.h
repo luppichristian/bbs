@@ -75,6 +75,7 @@ typedef enum {
   CMD_BUILD,
   CMD_RUN,
   CMD_INFO,
+  CMD_PACKAGE,
   CMD_DIST,
   CMD_TEST,
   CMD_BUMPVER,
@@ -96,13 +97,14 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                    "If no argument is provided, bbs cleans both 'project' and 'local'."},
 
      [CMD_UPDATE] = { .name = "update",
-                    .params = "[-i|--info] [-c config] [--init-toolchain]",
-                    .desc = "Generate derived project files",
-                    .detailed_desc = "Parses and validates the project configuration, then generates the derived files and directories used by bbs.\n"
-                    "Use '-i' or '--info' to print the resolved project state before updating.\n"
-                    "Use '-c' or '--config' to resolve the project with a specific config for the info output.\n"
-                    "If the toolchain file is missing, bbs generates it automatically.\n"
-                    "Use '--init-toolchain' to force regeneration instead of reusing the cached toolchain file."},
+                     .params = "[-i|--info] [-c config] [--init-toolchain] [--refresh-packages]",
+                     .desc = "Generate derived project files",
+                     .detailed_desc = "Parses and validates the project configuration, then generates the derived files and directories used by bbs.\n"
+                     "Use '-i' or '--info' to print the resolved project state before updating.\n"
+                     "Use '-c' or '--config' to resolve the project with a specific config for the info output.\n"
+                     "If the toolchain file is missing, bbs generates it automatically.\n"
+                     "Use '--init-toolchain' to force regeneration instead of reusing the cached toolchain file.\n"
+                     "Use '--refresh-packages' to re-fetch repo-backed packages into the shared cache before regenerating backend files."},
 
      [CMD_GEN] = {    .name = "gen",
                    .params = "<format> [-o|--override] [-p platform[,platform...]]",
@@ -144,19 +146,27 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                    "Use '-p *' to run all host-native runnable outputs for the current machine.\n"
                    "If no config is provided, bbs resolves the project using the 'default' config."},
 
-     [CMD_INFO] = {   .name = "info",
-                   .params = "<project|user|local|toolchain> [attribute] [-m] [--attr=path] [--filter=text] [--values-only]",
-                   .desc = "Inspect parsed config data",
-                   .detailed_desc = "Use 'project', 'user', or 'local' to inspect the parsed nodes from that file.\n"
-                   "Use the optional attribute argument or '--attr=path' to show only one attribute.\n"
-                   "Use '-m' or '--minimal' to print only matching attribute paths.\n"
-                   "Use '--filter=text' to show only matching attributes.\n"
-                   "Use '--values-only' to print only matching values.\n"
-                   "Use 'toolchain' to inspect the parsed toolchain.bbs file just like the other config files."},
+      [CMD_INFO] = {   .name = "info",
+                    .params = "<project|user|local|toolchain> [attribute] [-m] [--attr=path] [--filter=text] [--values-only]",
+                    .desc = "Inspect parsed config data",
+                    .detailed_desc = "Use 'project', 'user', or 'local' to inspect the parsed nodes from that file.\n"
+                    "Use the optional attribute argument or '--attr=path' to show only one attribute.\n"
+                    "Use '-m' or '--minimal' to print only matching attribute paths.\n"
+                    "Use '--filter=text' to show only matching attributes.\n"
+                    "Use '--values-only' to print only matching values.\n"
+                    "Use 'toolchain' to inspect the parsed toolchain.bbs file just like the other config files."},
 
-     [CMD_DIST] = {   .name = "dist",
-                   .params = "[-t target|*] [-p platform|*] [-c config|*]",
-                   .desc = "Package build output for distribution",
+     [CMD_PACKAGE] = { .name = "package",
+                    .params = "<list|refresh [name|*]|package_name> [--refresh]",
+                    .desc = "Inspect configured packages",
+                    .detailed_desc = "Use 'bbs package list' to print all package-backed targets in the current project.\n"
+                    "Use 'bbs package refresh' to refresh all repo/archive-backed packages, or 'bbs package refresh <name>' to refresh one package.\n"
+                    "Use 'bbs package <package_name>' to inspect one configured package, including its source, cache location, and resolution status.\n"
+                    "Use '--refresh' to re-fetch repo-backed packages before printing package info."},
+
+      [CMD_DIST] = {   .name = "dist",
+                    .params = "[-t target|*] [-p platform|*] [-c config|*]",
+                    .desc = "Package build output for distribution",
                    .detailed_desc = "Collects the selected build output and prepares it for distribution.\n"
                    "Use the optional target and platform arguments to package a specific artifact when the project produces multiple outputs.\n"
                    "Use '*' with -t, -p, or -c to execute the command for all matching targets, platforms, or configs.\n"
