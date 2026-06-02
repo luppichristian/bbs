@@ -3840,35 +3840,52 @@ static bool project_generate_presets(const project* proj, toolchain* tc, bool* c
         const char* platform_id = project_platform_id((os)osi, (arch)ai);
         const char* build_dir = project_escape_cmake_string(project_resolved_dir("${sourceDir}", proj->configs[ci], platform_id));
         const char* preset = project_escape_cmake_string(project_build_dir_name(proj->configs[ci], platform_id));
-        const char* cmake_cfg = project_cmake_config_name(proj->configs[ci]);
-        const char* cmake_arch = project_cmake_arch_name((arch)ai);
-        if (!platform_id || !build_dir || !preset || !cmake_cfg || !cmake_arch)
+        const char* cmake_arch = ((os)osi) == OS_WINDOWS ? project_cmake_arch_name((arch)ai) : NULL;
+        if (!platform_id || !build_dir || !preset || (((os)osi) == OS_WINDOWS && !cmake_arch))
           return false;
 
         if (!first && !project_textbuf_append(&buf, ",\n"))
           return false;
         first = false;
 
-        if (!project_textbuf_appendf(&buf,
-                                     "    {\n"
-                                     "      \"name\": \"%s\",\n"
-                                     "      \"binaryDir\": \"%s\",\n"
-                                     "      \"architecture\": {\n"
-                                     "        \"value\": \"%s\",\n"
-                                     "        \"strategy\": \"set\"\n"
-                                     "      },\n"
-                                     "      \"cacheVariables\": {\n"
-                                     "        \"CMAKE_TOOLCHAIN_FILE\": \"${sourceDir}/bbs-toolchain.cmake\",\n"
-                                     "        \"BBS_TARGET_OS\": \"%s\",\n"
-                                     "        \"BBS_TARGET_ARCH\": \"%s\"\n"
-                                     "      }\n"
-                                     "    }",
-                                     preset,
-                                     build_dir,
-                                     cmake_arch,
-                                     OS_NAMES[osi],
-                                     ARCH_NAMES[ai]))
-          return false;
+        if (((os)osi) == OS_WINDOWS) {
+          if (!project_textbuf_appendf(&buf,
+                                       "    {\n"
+                                       "      \"name\": \"%s\",\n"
+                                       "      \"binaryDir\": \"%s\",\n"
+                                       "      \"architecture\": {\n"
+                                       "        \"value\": \"%s\",\n"
+                                       "        \"strategy\": \"set\"\n"
+                                       "      },\n"
+                                       "      \"cacheVariables\": {\n"
+                                       "        \"CMAKE_TOOLCHAIN_FILE\": \"${sourceDir}/bbs-toolchain.cmake\",\n"
+                                       "        \"BBS_TARGET_OS\": \"%s\",\n"
+                                       "        \"BBS_TARGET_ARCH\": \"%s\"\n"
+                                       "      }\n"
+                                       "    }",
+                                       preset,
+                                       build_dir,
+                                       cmake_arch,
+                                       OS_NAMES[osi],
+                                       ARCH_NAMES[ai]))
+            return false;
+        } else {
+          if (!project_textbuf_appendf(&buf,
+                                       "    {\n"
+                                       "      \"name\": \"%s\",\n"
+                                       "      \"binaryDir\": \"%s\",\n"
+                                       "      \"cacheVariables\": {\n"
+                                       "        \"CMAKE_TOOLCHAIN_FILE\": \"${sourceDir}/bbs-toolchain.cmake\",\n"
+                                       "        \"BBS_TARGET_OS\": \"%s\",\n"
+                                       "        \"BBS_TARGET_ARCH\": \"%s\"\n"
+                                       "      }\n"
+                                       "    }",
+                                       preset,
+                                       build_dir,
+                                       OS_NAMES[osi],
+                                       ARCH_NAMES[ai]))
+            return false;
+        }
       }
     }
   }
