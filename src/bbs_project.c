@@ -3339,11 +3339,6 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
   if (!buf || !tgt || !tgt->meta.id)
     return false;
 
-  os target_os = OS_MAX;
-  arch target_arch = ARCH_MAX;
-  if (!project_parse_platform_id(platform_id, &target_os, &target_arch))
-    return false;
-
   const char* target_name = project_escape_cmake_string(tgt->meta.id);
   const char* output_name = project_escape_cmake_string(tgt->output ? tgt->output : tgt->meta.id);
   const char* var_name = project_cmake_var_name(tgt->meta.id);
@@ -3490,34 +3485,33 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
     return false;
 
   if (tgt->type != TARGET_TYPE_HEADER_LIB) {
-    if (target_os == OS_WINDOWS) {
-      if (!project_textbuf_appendf(buf,
-                                   "set_target_properties(%s PROPERTIES OUTPUT_NAME \"%s\" "
-                                   "RUNTIME_OUTPUT_DIRECTORY_DEBUG \"${CMAKE_BINARY_DIR}/bin/Debug\" "
-                                   "RUNTIME_OUTPUT_DIRECTORY_RELEASE \"${CMAKE_BINARY_DIR}/bin/Release\" "
-                                   "RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO \"${CMAKE_BINARY_DIR}/bin/RelWithDebInfo\" "
-                                   "RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL \"${CMAKE_BINARY_DIR}/bin/MinSizeRel\" "
-                                   "LIBRARY_OUTPUT_DIRECTORY_DEBUG \"${CMAKE_BINARY_DIR}/lib/Debug\" "
-                                   "LIBRARY_OUTPUT_DIRECTORY_RELEASE \"${CMAKE_BINARY_DIR}/lib/Release\" "
-                                   "LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO \"${CMAKE_BINARY_DIR}/lib/RelWithDebInfo\" "
-                                   "LIBRARY_OUTPUT_DIRECTORY_MINSIZEREL \"${CMAKE_BINARY_DIR}/lib/MinSizeRel\" "
-                                   "ARCHIVE_OUTPUT_DIRECTORY_DEBUG \"${CMAKE_BINARY_DIR}/lib/Debug\" "
-                                   "ARCHIVE_OUTPUT_DIRECTORY_RELEASE \"${CMAKE_BINARY_DIR}/lib/Release\" "
-                                   "ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO \"${CMAKE_BINARY_DIR}/lib/RelWithDebInfo\" "
-                                   "ARCHIVE_OUTPUT_DIRECTORY_MINSIZEREL \"${CMAKE_BINARY_DIR}/lib/MinSizeRel\")\n",
-                                   target_name,
-                                   output_name))
-        return false;
-    } else {
-      if (!project_textbuf_appendf(buf,
-                                   "set_target_properties(%s PROPERTIES OUTPUT_NAME \"%s\" "
-                                   "RUNTIME_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}/bin\" "
-                                   "LIBRARY_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}/lib\" "
-                                   "ARCHIVE_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}/lib\")\n",
-                                   target_name,
-                                   output_name))
-        return false;
-    }
+    if (!project_textbuf_appendf(buf,
+                                 "set_target_properties(%s PROPERTIES OUTPUT_NAME \"%s\")\n"
+                                 "if(CMAKE_CONFIGURATION_TYPES)\n"
+                                 "  set_target_properties(%s PROPERTIES "
+                                 "RUNTIME_OUTPUT_DIRECTORY_DEBUG \"${CMAKE_BINARY_DIR}/bin/Debug\" "
+                                 "RUNTIME_OUTPUT_DIRECTORY_RELEASE \"${CMAKE_BINARY_DIR}/bin/Release\" "
+                                 "RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO \"${CMAKE_BINARY_DIR}/bin/RelWithDebInfo\" "
+                                 "RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL \"${CMAKE_BINARY_DIR}/bin/MinSizeRel\" "
+                                 "LIBRARY_OUTPUT_DIRECTORY_DEBUG \"${CMAKE_BINARY_DIR}/lib/Debug\" "
+                                 "LIBRARY_OUTPUT_DIRECTORY_RELEASE \"${CMAKE_BINARY_DIR}/lib/Release\" "
+                                 "LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO \"${CMAKE_BINARY_DIR}/lib/RelWithDebInfo\" "
+                                 "LIBRARY_OUTPUT_DIRECTORY_MINSIZEREL \"${CMAKE_BINARY_DIR}/lib/MinSizeRel\" "
+                                 "ARCHIVE_OUTPUT_DIRECTORY_DEBUG \"${CMAKE_BINARY_DIR}/lib/Debug\" "
+                                 "ARCHIVE_OUTPUT_DIRECTORY_RELEASE \"${CMAKE_BINARY_DIR}/lib/Release\" "
+                                 "ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO \"${CMAKE_BINARY_DIR}/lib/RelWithDebInfo\" "
+                                 "ARCHIVE_OUTPUT_DIRECTORY_MINSIZEREL \"${CMAKE_BINARY_DIR}/lib/MinSizeRel\")\n"
+                                 "else()\n"
+                                 "  set_target_properties(%s PROPERTIES "
+                                 "RUNTIME_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}/bin\" "
+                                 "LIBRARY_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}/lib\" "
+                                 "ARCHIVE_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}/lib\")\n"
+                                 "endif()\n",
+                                 target_name,
+                                 output_name,
+                                 target_name,
+                                 target_name))
+      return false;
   } else {
     if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES OUTPUT_NAME \"%s\")\n", target_name, output_name))
       return false;
@@ -4180,6 +4174,7 @@ static const char* project_target_executable_abs(const project* proj, const targ
 
   const char* build_dir = project_build_binary_dir_abs(proj, proj->active_config, platform);
   const char* bin_dir = toolchain_join2(build_dir, "bin");
+  const char* config_bin_dir = toolchain_join2(bin_dir, project_cmake_config_name(proj->active_config));
 
   char file_name[512] = {0};
   os target_os = OS_MAX;
@@ -4187,10 +4182,10 @@ static const char* project_target_executable_abs(const project* proj, const targ
   if (!project_parse_platform_id(platform, &target_os, &target_arch))
     return NULL;
 
-  if (target_os == OS_WINDOWS)
-    bin_dir = toolchain_join2(bin_dir, project_cmake_config_name(proj->active_config));
-
   snprintf(file_name, sizeof(file_name), "%s%s", tgt->output ? tgt->output : tgt->meta.id, target_os == OS_WINDOWS ? ".exe" : "");
+  const char* config_path = toolchain_join2(config_bin_dir, file_name);
+  if (file_exists(config_path))
+    return config_path;
   return toolchain_join2(bin_dir, file_name);
 }
 
