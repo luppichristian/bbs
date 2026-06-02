@@ -379,6 +379,10 @@ Fields:
 - `subdir`
 - `cmake_target`
 
+The resolved package directory may provide either `CMakeLists.txt` or `project.bbs`.
+
+If both are present, `bbs` prefers `CMakeLists.txt`.
+
 Example:
 
 ```txt
@@ -431,6 +435,7 @@ Important package rule:
 
 - only one package source mode should be active at a time
 - setting `path`, `repo(...)`, or `archive(...)` replaces the other package-source settings for that target
+- `cmake_target` names the target that the package backend exports, whether that backend comes from native CMake or from a nested `project.bbs`
 
 ## Config Filters
 

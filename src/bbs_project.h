@@ -64,6 +64,12 @@ typedef enum {
   PACKAGE_SOURCE_ARCHIVE,
 } package_source;
 
+typedef enum {
+  PACKAGE_BACKEND_NONE,
+  PACKAGE_BACKEND_CMAKE,
+  PACKAGE_BACKEND_BBS,
+} package_backend;
+
 typedef struct {
   meta meta;
   lang lang;
@@ -76,11 +82,14 @@ typedef struct {
   const char* package_repo_link;
   const char* package_repo_tag;
   const char* package_repo_commit;
+  package_backend package_backend;
   const char* package_cmake_target;
   const char* package_archive_link;
   const char* package_archive_strip_prefix;
+  const char* package_project_cfg_path;
   const char* package_resolved_dir;
   const char* package_cache_dir;
+  const char* package_build_dir;
 
   // Translation units, should support wildcards
   const char** units;
@@ -138,6 +147,9 @@ typedef struct {
 typedef struct {
   meta meta;
   user user_cfg;
+  const char* root_dir;
+  const char* config_path;
+  const char* local_cfg_path;
 
   const char** configs;
   int config_c;

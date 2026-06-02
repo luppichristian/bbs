@@ -5,12 +5,15 @@
 
 static bool project_parse_string_list(node* list_n, const char*** out_items, int* out_count);
 static const char* project_join_scalar_list(node* list_n, int* out_count);
-static bool project_load_user_config(user* out);
+static bool project_load_user_config(const char* local_cfg_path, user* out);
 static const char* project_target_executable_abs(const project* proj, const target* tgt, const char* platform);
 static bool project_apply_dist_node(node* dist_n, target* out, const char* target_label);
 static const char* project_expand_config_string(const char* text, const project* proj, const target* tgt, const char* platform, toolchain* tc, const char* workdir);
 static int project_find_target_index(const project* proj, const char* name);
 static const char* project_current_workdir(void);
+static const char* project_path_parent(const char* path);
+static bool project_prepare_packages(project* proj, toolchain* tc, const char* platform, bool refresh);
+static bool project_generate_cmakelists(const project* proj, toolchain* tc, const char* platform_id, bool* changed);
 
 typedef struct {
   const char* source;
@@ -18,6 +21,8 @@ typedef struct {
   bool is_cached;
   bool exists;
   bool has_cmakelists;
+  bool has_project_config;
+  package_backend backend;
   const char* status;
   const char* local_ref;
   const char* remote_ref;
@@ -93,6 +98,17 @@ static const char* project_package_source_name(package_source source) {
       return "repo";
     case PACKAGE_SOURCE_ARCHIVE:
       return "archive";
+    default:
+      return "none";
+  }
+}
+
+static const char* project_package_backend_name(package_backend backend) {
+  switch (backend) {
+    case PACKAGE_BACKEND_CMAKE:
+      return "cmake";
+    case PACKAGE_BACKEND_BBS:
+      return "bbs";
     default:
       return "none";
   }
@@ -1830,7 +1846,10 @@ static bool project_load_file_config(const char* path, const char* config, proje
   if (!project_parse_project_node(project_n, config, out))
     return false;
 
-  return project_load_user_config(&out->user_cfg);
+  out->config_path = toolchain_norm_path(path);
+  out->root_dir = project_path_parent(out->config_path);
+  out->local_cfg_path = toolchain_join2(out->root_dir ? out->root_dir : project_current_workdir(), CFG_INFOS[CFG_LOCAL].filename);
+  return project_load_user_config(out->local_cfg_path, &out->user_cfg);
 }
 
 static bool project_load_config(const char* config, project* out) {
@@ -1845,7 +1864,7 @@ static bool project_load(project* out) {
   return project_load_config(NULL, out);
 }
 
-static bool project_load_user_config(user* out) {
+static bool project_load_user_config(const char* local_cfg_path, user* out) {
   if (!out)
     return false;
 
@@ -1853,11 +1872,33 @@ static bool project_load_user_config(user* out) {
   if (!cfg)
     return false;
 
-  if (!user_load_paths(get_path_exe(CFG_INFOS[CFG_USER].filename), get_path_cwd(CFG_INFOS[CFG_LOCAL].filename), cfg))
+  if (!user_load_paths(get_path_exe(CFG_INFOS[CFG_USER].filename),
+                       local_cfg_path ? local_cfg_path : get_path_cwd(CFG_INFOS[CFG_LOCAL].filename),
+                       cfg))
     return false;
 
   *out = *cfg;
   return true;
+}
+
+static const char* project_root_dir(const project* proj) {
+  if (proj && proj->root_dir && proj->root_dir[0])
+    return proj->root_dir;
+  return project_current_workdir();
+}
+
+static const char* project_resolve_path_from_root(const char* root, const char* path) {
+  if (!path || !path[0])
+    return NULL;
+  if (toolchain_is_abs_path(path))
+    return toolchain_norm_path(path);
+  return toolchain_norm_path(toolchain_join2(root && root[0] ? root : project_current_workdir(), path));
+}
+
+static const char* project_toolchain_root_dir(toolchain* tc) {
+  const char* cfg = tc && tc->project_cfg_path ? tc->project_cfg_path : get_path_cwd("project.bbs");
+  const char* parent = project_path_parent(cfg);
+  return parent && parent[0] ? parent : project_current_workdir();
 }
 
 static bool project_target_matches_name(const target* tgt, const char* name) {
@@ -2301,7 +2342,7 @@ static bool project_append_cmake_opt_level(project_textbuf* buf, const char* tar
 }
 
 static const char* project_build_root_abs(const project* proj) {
-  return get_path_cwd(proj && proj->user_cfg.builddir ? proj->user_cfg.builddir : DEF_BUILD_DIR);
+  return project_resolve_path_from_root(project_root_dir(proj), proj && proj->user_cfg.builddir ? proj->user_cfg.builddir : DEF_BUILD_DIR);
 }
 
 static const char* project_build_file_abs(const project* proj, const char* filename) {
@@ -2309,7 +2350,7 @@ static const char* project_build_file_abs(const project* proj, const char* filen
 }
 
 static const char* project_build_binary_dir_abs(const project* proj, const char* config, const char* platform) {
-  return get_path_cwd(project_resolved_dir(proj && proj->user_cfg.builddir ? proj->user_cfg.builddir : DEF_BUILD_DIR, config, platform));
+  return project_resolve_path_from_root(project_root_dir(proj), project_resolved_dir(proj && proj->user_cfg.builddir ? proj->user_cfg.builddir : DEF_BUILD_DIR, config, platform));
 }
 
 static bool project_ensure_dir_tree(const char* path, const char* label) {
@@ -2529,9 +2570,27 @@ static const char* project_package_cache_dir_for(const target* tgt) {
 }
 
 static const char* project_resolve_input_path(const char* path) {
-  if (!path || !path[0])
-    return NULL;
-  return toolchain_is_abs_path(path) ? toolchain_norm_path(path) : toolchain_norm_path(get_path_cwd(path));
+  return project_resolve_path_from_root(project_current_workdir(), path);
+}
+
+static package_backend project_package_backend_detect(const char* dir, const char** out_project_cfg_path) {
+  if (out_project_cfg_path)
+    *out_project_cfg_path = NULL;
+  if (!dir || !dir[0])
+    return PACKAGE_BACKEND_NONE;
+
+  const char* cmakelists = toolchain_join2(dir, "CMakeLists.txt");
+  if (file_exists(cmakelists))
+    return PACKAGE_BACKEND_CMAKE;
+
+  const char* project_cfg = toolchain_join2(dir, "project.bbs");
+  if (file_exists(project_cfg)) {
+    if (out_project_cfg_path)
+      *out_project_cfg_path = project_cfg;
+    return PACKAGE_BACKEND_BBS;
+  }
+
+  return PACKAGE_BACKEND_NONE;
 }
 
 static bool project_text_looks_like_url(const char* text) {
@@ -2676,10 +2735,12 @@ static bool project_package_query(const target* tgt, toolchain* tc, project_pack
     return true;
 
   if (tgt->package_source == PACKAGE_SOURCE_PATH) {
-    out->source = project_package_effective_dir(tgt, project_resolve_input_path(tgt->package_path));
+    out->source = project_package_effective_dir(tgt, project_resolve_path_from_root(project_toolchain_root_dir(tc), tgt->package_path));
     out->exists = dir_exists(out->source);
-    out->has_cmakelists = out->source && file_exists(toolchain_join2(out->source, "CMakeLists.txt"));
-    out->status = out->exists ? "ready" : "missing";
+    out->backend = project_package_backend_detect(out->source, NULL);
+    out->has_cmakelists = out->backend == PACKAGE_BACKEND_CMAKE;
+    out->has_project_config = out->backend == PACKAGE_BACKEND_BBS;
+    out->status = !out->exists ? "missing" : (out->backend != PACKAGE_BACKEND_NONE ? "ready" : "invalid");
     return true;
   }
 
@@ -2688,7 +2749,9 @@ static bool project_package_query(const target* tgt, toolchain* tc, project_pack
     out->source = project_package_effective_dir(tgt, out->cache_dir);
     out->is_cached = true;
     out->exists = dir_exists(out->source);
-    out->has_cmakelists = out->source && file_exists(toolchain_join2(out->source, "CMakeLists.txt"));
+    out->backend = project_package_backend_detect(out->source, NULL);
+    out->has_cmakelists = out->backend == PACKAGE_BACKEND_CMAKE;
+    out->has_project_config = out->backend == PACKAGE_BACKEND_BBS;
     out->local_ref = dir_exists(out->cache_dir) ? project_git_resolve_local_head(tc, out->cache_dir) : NULL;
     out->remote_ref = project_git_resolve_remote_ref(tc, tgt->package_repo_link, tgt->package_repo_tag, tgt->package_repo_commit);
     if (!dir_exists(out->cache_dir))
@@ -2696,7 +2759,7 @@ static bool project_package_query(const target* tgt, toolchain* tc, project_pack
     else if (out->local_ref && out->remote_ref)
       out->status = _stricmp(out->local_ref, out->remote_ref) == 0 ? "up-to-date" : "outdated";
     else
-      out->status = out->has_cmakelists ? "cached" : "invalid";
+      out->status = out->backend != PACKAGE_BACKEND_NONE ? "cached" : "invalid";
     return true;
   }
 
@@ -2705,10 +2768,46 @@ static bool project_package_query(const target* tgt, toolchain* tc, project_pack
     out->source = project_package_effective_dir(tgt, out->cache_dir);
     out->is_cached = true;
     out->exists = dir_exists(out->source);
-    out->has_cmakelists = out->source && file_exists(toolchain_join2(out->source, "CMakeLists.txt"));
-    out->status = dir_exists(out->cache_dir) ? (out->has_cmakelists ? "cached" : "invalid") : "missing";
+    out->backend = project_package_backend_detect(out->source, NULL);
+    out->has_cmakelists = out->backend == PACKAGE_BACKEND_CMAKE;
+    out->has_project_config = out->backend == PACKAGE_BACKEND_BBS;
+    out->status = dir_exists(out->cache_dir) ? (out->backend != PACKAGE_BACKEND_NONE ? "cached" : "invalid") : "missing";
   }
 
+  return true;
+}
+
+static bool project_prepare_embedded_backend(project* proj, toolchain* tc, const char* platform, bool refresh_packages) {
+  if (!proj || !tc)
+    return false;
+
+  const char* build_root = project_build_root_abs(proj);
+  if (!project_ensure_dir_exists(build_root, "package build directory"))
+    return false;
+  if (!project_prepare_packages(proj, tc, platform, refresh_packages))
+    return false;
+  return project_generate_cmakelists(proj, tc, platform, NULL);
+}
+
+static bool project_prepare_bbs_package(target* tgt, toolchain* tc, const char* platform, bool refresh) {
+  if (!tgt || tgt->package_backend != PACKAGE_BACKEND_BBS || !tgt->package_project_cfg_path)
+    return true;
+
+  project pkg = {0};
+  if (!project_load_file(tgt->package_project_cfg_path, &pkg)) {
+    error("Failed to load package project for '%s': %s", tgt->meta.id ? tgt->meta.id : "", tgt->package_project_cfg_path ? tgt->package_project_cfg_path : "");
+    return false;
+  }
+
+  toolchain nested_tc = *tc;
+  nested_tc.project_cfg_path = pkg.config_path;
+  nested_tc.local_cfg_path = pkg.local_cfg_path;
+  if (!project_prepare_embedded_backend(&pkg, &nested_tc, platform, refresh)) {
+    error("Failed to prepare nested package backend for '%s'.", tgt->meta.id ? tgt->meta.id : "");
+    return false;
+  }
+
+  tgt->package_build_dir = project_build_root_abs(&pkg);
   return true;
 }
 
@@ -2851,7 +2950,7 @@ static bool project_fetch_archive_package(target* tgt, toolchain* tc, bool refre
   return true;
 }
 
-static bool project_resolve_package_target(target* tgt, toolchain* tc, bool refresh) {
+static bool project_resolve_package_target(target* tgt, toolchain* tc, const char* platform, bool refresh) {
   if (!tgt)
     return false;
 
@@ -2866,9 +2965,13 @@ static bool project_resolve_package_target(target* tgt, toolchain* tc, bool refr
   if (tgt->package_source == PACKAGE_SOURCE_NONE)
     return true;
 
+  tgt->package_backend = PACKAGE_BACKEND_NONE;
+  tgt->package_project_cfg_path = NULL;
+  tgt->package_build_dir = NULL;
+
   if (tgt->package_source == PACKAGE_SOURCE_PATH) {
     tgt->package_cache_dir = NULL;
-    tgt->package_resolved_dir = project_package_effective_dir(tgt, project_resolve_input_path(tgt->package_path));
+    tgt->package_resolved_dir = project_package_effective_dir(tgt, project_resolve_path_from_root(project_toolchain_root_dir(tc), tgt->package_path));
   } else if (!project_fetch_repo_package(tgt, tc, refresh)) {
     return false;
   } else if (tgt->package_source == PACKAGE_SOURCE_ARCHIVE && !project_fetch_archive_package(tgt, tc, refresh)) {
@@ -2880,30 +2983,33 @@ static bool project_resolve_package_target(target* tgt, toolchain* tc, bool refr
     return false;
   }
 
-  const char* cmakelists = toolchain_join2(tgt->package_resolved_dir, "CMakeLists.txt");
-  if (!file_exists(cmakelists)) {
-    error("Package '%s' must provide a CMakeLists.txt at %s", tgt->meta.id ? tgt->meta.id : "", cmakelists ? cmakelists : "");
+  tgt->package_backend = project_package_backend_detect(tgt->package_resolved_dir, &tgt->package_project_cfg_path);
+  if (tgt->package_backend == PACKAGE_BACKEND_NONE) {
+    error("Package '%s' must provide either CMakeLists.txt or project.bbs in %s", tgt->meta.id ? tgt->meta.id : "", tgt->package_resolved_dir ? tgt->package_resolved_dir : "");
     return false;
   }
+
+  if (!project_prepare_bbs_package(tgt, tc, platform, refresh))
+    return false;
 
   return true;
 }
 
-static bool project_prepare_packages(project* proj, toolchain* tc, bool refresh) {
+static bool project_prepare_packages(project* proj, toolchain* tc, const char* platform, bool refresh) {
   if (!proj)
     return false;
   for (int i = 0; i < proj->target_c; ++i)
-    if (!project_resolve_package_target(&proj->targets[i], tc, refresh))
+    if (!project_resolve_package_target(&proj->targets[i], tc, platform, refresh))
       return false;
   return true;
 }
 
 static const char* project_dist_root_abs(const project* proj) {
-  return get_path_cwd(proj && proj->user_cfg.distdir ? proj->user_cfg.distdir : DEF_DIST_DIR);
+  return project_resolve_path_from_root(project_root_dir(proj), proj && proj->user_cfg.distdir ? proj->user_cfg.distdir : DEF_DIST_DIR);
 }
 
 static const char* project_dist_config_dir_abs(const project* proj, const char* config, const char* platform) {
-  return get_path_cwd(project_resolved_dir(proj && proj->user_cfg.distdir ? proj->user_cfg.distdir : DEF_DIST_DIR, config, platform));
+  return project_resolve_path_from_root(project_root_dir(proj), project_resolved_dir(proj && proj->user_cfg.distdir ? proj->user_cfg.distdir : DEF_DIST_DIR, config, platform));
 }
 
 static const char* project_dist_gen_dir_abs(const project* proj, const char* config, const char* platform) {
@@ -3349,7 +3455,8 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
     return false;
 
   if (project_target_is_package(tgt)) {
-    const char* package_dir = project_cmake_path_text(tgt->package_resolved_dir ? tgt->package_resolved_dir : "");
+    const char* package_source_dir = tgt->package_backend == PACKAGE_BACKEND_BBS && tgt->package_build_dir ? tgt->package_build_dir : tgt->package_resolved_dir;
+    const char* package_dir = project_cmake_path_text(package_source_dir ? package_source_dir : "");
     const char* ext_target_name = project_escape_cmake_string(project_target_build_target_name(tgt));
     if (!package_dir || !ext_target_name)
       return false;
@@ -3737,10 +3844,14 @@ static bool project_generate_cmakelists(const project* proj, toolchain* tc, cons
     return false;
   if (!project_textbuf_appendf(&buf, "project(%s LANGUAGES C%s)\n\n", proj_id, has_cpp ? " CXX" : ""))
     return false;
-  if (!project_textbuf_append(&buf,
-                              "set(BBS_PROJECT_ROOT \"${CMAKE_CURRENT_SOURCE_DIR}/..\")\n"
-                              "include(CTest)\n"
-                              "enable_testing()\n\n"))
+  const char* project_root = project_cmake_path_text(project_root_dir(proj));
+  if (!project_root)
+    return false;
+  if (!project_textbuf_appendf(&buf,
+                               "set(BBS_PROJECT_ROOT \"%s\")\n"
+                               "include(CTest)\n"
+                               "enable_testing()\n\n",
+                               project_root))
     return false;
 
   for (int i = 0; i < proj->target_c; ++i)
@@ -4003,7 +4114,7 @@ static bool project_prepare_backend(project* proj, toolchain* tc, const char* pl
   }
 
   const char* build_root = project_build_root_abs(proj);
-  const char* dist_root = get_path_cwd(proj->user_cfg.distdir);
+  const char* dist_root = project_dist_root_abs(proj);
   if (!project_ensure_dir_exists(build_root, "build directory"))
     return false;
   if (!project_ensure_dir_exists(dist_root, "dist directory"))
@@ -4015,7 +4126,7 @@ static bool project_prepare_backend(project* proj, toolchain* tc, const char* pl
       return false;
   }
 
-  if (!project_prepare_packages(proj, tc, refresh_packages))
+  if (!project_prepare_packages(proj, tc, platform, refresh_packages))
     return false;
 
   bool toolchain_changed = false;
@@ -4258,7 +4369,7 @@ static bool project_refresh_packages(project* proj, toolchain* tc, const char* n
       target* tgt = &proj->targets[i];
       if (!project_target_is_package(tgt) || !project_package_needs_refresh(tgt))
         continue;
-      if (!project_resolve_package_target(tgt, tc, true))
+      if (!project_resolve_package_target(tgt, tc, NULL, true))
         return false;
     }
     return true;
@@ -4275,7 +4386,7 @@ static bool project_refresh_packages(project* proj, toolchain* tc, const char* n
     print("Package '%s' uses a local path and does not need refresh.", name);
     return true;
   }
-  return project_resolve_package_target(&proj->targets[idx], tc, true);
+  return project_resolve_package_target(&proj->targets[idx], tc, NULL, true);
 }
 
 static void project_print_package_list_header(void) {
@@ -4315,6 +4426,7 @@ static void project_print_package_summary(const target* tgt, toolchain* tc) {
   print("Package: %s", copy.meta.id ? copy.meta.id : "");
   print("  Type: %s", project_target_type_name(copy.type));
   print("  Source: %s", project_package_source_name(copy.package_source));
+  print("  Backend: %s", project_package_backend_name(info.backend));
   print("  CMake Target: %s", project_target_build_target_name(&copy) ? project_target_build_target_name(&copy) : "");
   if (copy.package_repo_link)
     print("  Repo: %s", copy.package_repo_link);
@@ -4339,6 +4451,7 @@ static void project_print_package_summary(const target* tgt, toolchain* tc) {
   print("  Status: %s", project_package_status_label(&info));
   print("  Present: %s", info.exists ? "yes" : "no");
   print("  CMakeLists: %s", info.has_cmakelists ? "yes" : "no");
+  print("  project.bbs: %s", info.has_project_config ? "yes" : "no");
   if (info.local_ref)
     print("  Local Ref: %s", info.local_ref);
   if (info.remote_ref)
@@ -4692,7 +4805,7 @@ static bool project_cleanup(void) {
   bool ok = true;
 
   user cfg = {0};
-  if (!project_load_user_config(&cfg))
+  if (!project_load_user_config(get_path_cwd(CFG_INFOS[CFG_LOCAL].filename), &cfg))
     return false;
 
   const char* build_dir = get_path_cwd(cfg.builddir);

@@ -12,7 +12,12 @@ A package target is a target that uses one of these source modes:
 - git repository
 - archive download
 
-Once resolved, `bbs` expects the package to provide a `CMakeLists.txt` and links it into the generated backend with the configured `cmake_target`.
+Once resolved, `bbs` expects the package to provide either:
+
+- a native `CMakeLists.txt`, or
+- a `project.bbs` file that `bbs` can translate into an embedded CMake backend
+
+In both cases, `bbs` links the package into the generated backend with the configured `cmake_target`.
 
 ## Why Packages Exist
 
@@ -67,7 +72,7 @@ Behavior:
 
 - `bbs` does not fetch anything
 - the directory must exist locally
-- the resolved directory must contain `CMakeLists.txt`
+- the resolved directory must contain either `CMakeLists.txt` or `project.bbs`
 
 ## 2. Repo Package
 
@@ -132,11 +137,24 @@ Behavior:
 - the archive is downloaded into the shared package cache
 - `bbs` extracts it
 - `strip_prefix` lets you point at the real package root inside the extracted archive tree
-- the resolved directory must contain `CMakeLists.txt`
+- the resolved directory must contain either `CMakeLists.txt` or `project.bbs`
+
+## Backend Detection
+
+`bbs` checks the resolved package directory in this order:
+
+- `CMakeLists.txt`
+- `project.bbs`
+
+If both files are present, `bbs` uses the native `CMakeLists.txt`.
+
+If only `project.bbs` is present, `bbs` loads that package as its own `bbs` project, generates an internal CMakeLists for it, and includes that generated backend in the parent build.
+
+Nested `project.bbs` packages use their own default package config. They do not inherit the parent project's selected `bbs` config name.
 
 ## `cmake_target`
 
-`cmake_target` is the expected target name defined by the package's own CMake project.
+`cmake_target` is the expected target name exported by the package backend.
 
 Example:
 
@@ -146,8 +164,9 @@ cmake_target(raylib)
 
 Why it matters:
 
-- `bbs` adds the package directory as a CMake subdirectory
-- then it expects that package to define the target named by `cmake_target`
+- for native CMake packages, `bbs` adds the package directory as a CMake subdirectory
+- for `project.bbs` packages, `bbs` generates an internal CMake backend first and then adds that generated directory as a subdirectory
+- then it expects that package backend to define the target named by `cmake_target`
 - if that target does not exist, the build fails
 
 ## Package Cache
@@ -185,7 +204,7 @@ Typical meaning:
 - `cached`: archive or repo exists in cache
 - `up-to-date`: repo package local ref matches remote/tag/commit resolution
 - `outdated`: repo package exists but does not match the expected remote ref
-- `invalid`: package was found or extracted but does not look usable, usually because `CMakeLists.txt` is missing
+- `invalid`: package was found or extracted but does not look usable, usually because both `CMakeLists.txt` and `project.bbs` are missing
 
 ## Using Packages From Other Targets
 
@@ -290,7 +309,7 @@ Typical package problems are:
 - missing `git` for repo-backed packages
 - bad repo/archive URL
 - invalid `tag` or `commit`
-- missing `CMakeLists.txt` in the resolved package directory
+- missing both `CMakeLists.txt` and `project.bbs` in the resolved package directory
 - wrong `cmake_target`
 - wrong `strip_prefix`
 

@@ -1,0 +1,21 @@
+id(bbs_package_consumer)
+name("BBS Package Consumer")
+ver(0.1.0)
+
+targets(
+  static_lib(
+    id(greeter_pkg)
+    path("../bbs_package_dep")
+    cmake_target(bbs_greeter)
+  )
+
+  console(
+    output(bbs_package_consumer)
+    dependencies(
+      greeter_pkg
+    )
+    units(
+      src/main.c
+    )
+  )
+)

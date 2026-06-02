@@ -171,6 +171,7 @@ The numbered docs are meant to be read in roughly this order:
 - [docs/4_EXAMPLES.md](./docs/4_EXAMPLES.md)
 - [`examples/static_lib/`](./examples/static_lib/)
 - [`examples/raylib_example/`](./examples/raylib_example/)
+- [`examples/bbs_package_consumer/`](./examples/bbs_package_consumer/) consuming [`examples/bbs_package_dep/`](./examples/bbs_package_dep/) as a nested `project.bbs` package
 
 ## Repository Layout
 

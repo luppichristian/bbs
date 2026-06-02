@@ -2390,7 +2390,7 @@ static int run_cmd_package(cmd_ctx* cmdctx) {
     if (opts[REFRESH].present) {
       if (!tc)
         return error_code(CMD_PACKAGE, 4);
-      if (!project_prepare_packages(&proj, tc, true))
+      if (!project_prepare_packages(&proj, tc, NULL, true))
         return error_code(CMD_PACKAGE, 5);
     }
     project_print_package_list_header();
@@ -2416,7 +2416,7 @@ static int run_cmd_package(cmd_ctx* cmdctx) {
   if (opts[REFRESH].present) {
     if (!tc)
       return error_code(CMD_PACKAGE, 4);
-    if (!project_resolve_package_target(&proj.targets[idx], tc, true))
+    if (!project_resolve_package_target(&proj.targets[idx], tc, NULL, true))
       return error_code(CMD_PACKAGE, 5);
   }
 

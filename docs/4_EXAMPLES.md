@@ -201,7 +201,70 @@ What this demonstrates:
 - package targets can come from a repository
 - the package target still behaves like a normal dependency for your own targets
 
-## 6. Local Machine Overrides
+## 6. Package From Another `project.bbs`
+
+This follows `examples/bbs_package_consumer/project.bbs` and `examples/bbs_package_dep/project.bbs`.
+
+Consumer project:
+
+```txt
+id(bbs_package_consumer)
+name("BBS Package Consumer")
+ver(0.1.0)
+
+targets(
+  static_lib(
+    id(greeter_pkg)
+    path("../bbs_package_dep")
+    cmake_target(bbs_greeter)
+  )
+
+  console(
+    output(bbs_package_consumer)
+    dependencies(
+      greeter_pkg
+    )
+    units(
+      src/main.c
+    )
+  )
+)
+```
+
+Package project:
+
+```txt
+id(bbs_package_dep)
+
+targets(
+  static_lib(
+    id(bbs_greeter)
+    include_dirs(
+      src
+    )
+    units(
+      src/greeter.c
+    )
+  )
+)
+```
+
+Useful commands:
+
+```bat
+bbs package list
+bbs package greeter_pkg
+bbs build
+bbs run
+```
+
+What this demonstrates:
+
+- a package target can point at a directory that has its own `project.bbs`
+- `bbs` generates an embedded backend for that nested package project automatically
+- `cmake_target(...)` still names the exported target that the parent project links
+
+## 7. Local Machine Overrides
 
 `user.bbs`
 
@@ -224,7 +287,7 @@ Why split them:
 - `local.bbs` is specific to one project on one machine
 - `local.bbs` overrides `user.bbs`
 
-## 7. Pre/Post Build Hooks
+## 8. Pre/Post Build Hooks
 
 ```txt
 targets(
@@ -248,7 +311,7 @@ What this demonstrates:
 
 See [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md) for the full token list.
 
-## 8. Distribution Archive
+## 9. Distribution Archive
 
 `user.bbs`
 
@@ -285,7 +348,7 @@ What this demonstrates:
 - a target can override the dist archive name
 - the dist flow has its own hooks and staging directory
 
-## 9. Custom Generator
+## 10. Custom Generator
 
 `user.bbs`
 
@@ -304,7 +367,7 @@ bbs gen .clang-format
 
 This is a small but useful way to share project bootstrap files across many projects.
 
-## 10. Inspecting Parsed Config
+## 11. Inspecting Parsed Config
 
 Useful while learning or debugging:
 
@@ -322,7 +385,7 @@ This is especially helpful when you are unsure whether a value came from:
 - local overrides
 - generated toolchain state
 
-## 11. Full Beginner Flow
+## 12. Full Beginner Flow
 
 Create:
 

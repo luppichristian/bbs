@@ -1,0 +1,16 @@
+id(bbs_package_dep)
+name("BBS Package Dependency")
+ver(0.1.0)
+
+targets(
+  static_lib(
+    id(bbs_greeter)
+    output(bbs_greeter)
+    include_dirs(
+      src
+    )
+    units(
+      src/greeter.c
+    )
+  )
+)
