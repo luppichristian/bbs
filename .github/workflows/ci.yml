@@ -70,56 +70,56 @@ jobs:
         shell: pwsh
         working-directory: examples/hello_world
         run: |
-          ../../build/ci-bbs/bbs.exe build -t * -p ${{ matrix.platform }}
+          ../../build/ci-bbs/bbs.exe build -t '*' -p ${{ matrix.platform }}
 
       - name: Build example (Unix)
         if: runner.os != 'Windows'
         shell: bash
         working-directory: examples/hello_world
         run: |
-          ../../build/ci-bbs/bbs build -t * -p ${{ matrix.platform }}
+          ../../build/ci-bbs/bbs build -t '*' -p ${{ matrix.platform }}
 
       - name: Test example (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: examples/hello_world
         run: |
-          ../../build/ci-bbs/bbs.exe test -t * -p ${{ matrix.platform }}
+          ../../build/ci-bbs/bbs.exe test -t '*' -p ${{ matrix.platform }}
 
       - name: Test example (Unix)
         if: runner.os != 'Windows'
         shell: bash
         working-directory: examples/hello_world
         run: |
-          ../../build/ci-bbs/bbs test -t * -p ${{ matrix.platform }}
+          ../../build/ci-bbs/bbs test -t '*' -p ${{ matrix.platform }}
 
       - name: Run example (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: examples/hello_world
         run: |
-          ../../build/ci-bbs/bbs.exe run -t * -p *
+          ../../build/ci-bbs/bbs.exe run -t '*' -p '*'
 
       - name: Run example (Unix)
         if: runner.os != 'Windows'
         shell: bash
         working-directory: examples/hello_world
         run: |
-          ../../build/ci-bbs/bbs run -t * -p *
+          ../../build/ci-bbs/bbs run -t '*' -p '*'
 
       - name: Dist example (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: examples/hello_world
         run: |
-          ../../build/ci-bbs/bbs.exe dist -t * -p ${{ matrix.platform }}
+          ../../build/ci-bbs/bbs.exe dist -t '*' -p ${{ matrix.platform }}
 
       - name: Dist example (Unix)
         if: runner.os != 'Windows'
         shell: bash
         working-directory: examples/hello_world
         run: |
-          ../../build/ci-bbs/bbs dist -t * -p ${{ matrix.platform }}
+          ../../build/ci-bbs/bbs dist -t '*' -p ${{ matrix.platform }}
 
       - name: Upload example dist artifacts
         uses: actions/upload-artifact@v4

@@ -1373,7 +1373,7 @@ static const char* gen_build_platform_command_block(const char* exe_path, const 
   project_textbuf buf = {0};
   for (int i = 0; i < platform_c; ++i) {
     if (!project_textbuf_appendf(&buf,
-                                 i == 0 ? "%s %s -t * -p %s -c ${{ matrix.config }}" : "\n          %s %s -t * -p %s -c ${{ matrix.config }}",
+                                 i == 0 ? "%s %s -t '*' -p %s -c ${{ matrix.config }}" : "\n          %s %s -t '*' -p %s -c ${{ matrix.config }}",
                                  exe_path,
                                  action,
                                  platforms[i])) {
@@ -1394,7 +1394,7 @@ static const char* gen_build_host_command_block(const char* exe_path, const char
     return NULL;
 
   char text[512] = {0};
-  snprintf(text, sizeof(text), "%s %s -t * -p %s -c ${{ matrix.config }}", exe_path, action, host_platform);
+  snprintf(text, sizeof(text), "%s %s -t '*' -p %s -c ${{ matrix.config }}", exe_path, action, host_platform);
   return arena_text(text, strlen(text));
 }
 
