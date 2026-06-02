@@ -13,6 +13,9 @@ typedef struct {
 typedef struct {
   const char* builddir;
   const char* distdir;
+  unsigned int auto_debounce_ms;
+  unsigned int auto_retry_count;
+  unsigned int auto_retry_delay_ms;
   const char* dist_archive_format;
   const char* dist_archive_name;
   const char* cmake_args;

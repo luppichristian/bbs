@@ -2047,6 +2047,334 @@ static void toolchain_print(toolchain* tc) {
   toolchain_print_with_opts(tc, &opts);
 }
 
+static bool toolchain_validate_named_string(node* value_n, const char* scope_label, const char* attr_name, bool required) {
+  if (!value_n)
+    return !required;
+  if (value_n->type != NODE_TYPE_STR) {
+    error("Attribute '%s' in %s must be a string.", attr_name, scope_label);
+    return false;
+  }
+  if (required && (!node_get_str(value_n) || !node_get_str(value_n)[0])) {
+    error("Attribute '%s' in %s is required.", attr_name, scope_label);
+    return false;
+  }
+  return true;
+}
+
+static bool toolchain_validate_host_section(node* host_n, const char* scope_label) {
+  if (!host_n)
+    return true;
+  if (host_n->type != NODE_TYPE_DEF) {
+    error("Attribute 'host' in %s must be a section.", scope_label);
+    return false;
+  }
+
+  node_foreach(host_n, child) {
+    if (!child || !child->name) {
+      error("Attribute 'host' in %s must use named attributes.", scope_label);
+      return false;
+    }
+
+    if (_stricmp(child->name, "arch") == 0) {
+      const char* arch_id = node_get_idf(child);
+      if (!arch_id) {
+        error("Attribute 'arch' in %s must be an identifier.", scope_label);
+        return false;
+      }
+      bool known = false;
+      for (int i = 0; i < ARCH_MAX; ++i)
+        if (_stricmp(ARCH_NAMES[i], arch_id) == 0)
+          known = true;
+      if (!known) {
+        error("Unknown host arch '%s' in %s.", arch_id, scope_label);
+        return false;
+      }
+      continue;
+    }
+
+    if (_stricmp(child->name, "os") == 0) {
+      const char* os_id = node_get_idf(child);
+      if (!os_id) {
+        error("Attribute 'os' in %s must be an identifier.", scope_label);
+        return false;
+      }
+      bool known = false;
+      for (int i = 0; i < OS_MAX; ++i)
+        if (_stricmp(OS_NAMES[i], os_id) == 0)
+          known = true;
+      if (!known) {
+        error("Unknown host os '%s' in %s.", os_id, scope_label);
+        return false;
+      }
+      continue;
+    }
+
+    error("Unknown host attribute '%s' in %s.", child->name, scope_label);
+    return false;
+  }
+
+  return true;
+}
+
+static bool toolchain_validate_tool_item(node* tool_n, const char* scope_label) {
+  if (!tool_n)
+    return false;
+  if (tool_n->type != NODE_TYPE_DEF) {
+    error("Tool entries in %s must be sections.", scope_label);
+    return false;
+  }
+
+  node_foreach(tool_n, child) {
+    if (!child || !child->name) {
+      error("Tool entries in %s must use named attributes.", scope_label);
+      return false;
+    }
+    if (_stricmp(child->name, "id") != 0 && _stricmp(child->name, "path") != 0 && _stricmp(child->name, "version") != 0) {
+      error("Unknown tool attribute '%s' in %s.", child->name, scope_label);
+      return false;
+    }
+  }
+
+  if (!toolchain_validate_named_string(node_get_child(tool_n, "id"), scope_label, "id", false))
+    return false;
+  if (!toolchain_validate_named_string(node_get_child(tool_n, "path"), scope_label, "path", true))
+    return false;
+  if (!toolchain_validate_named_string(node_get_child(tool_n, "version"), scope_label, "version", false))
+    return false;
+  return true;
+}
+
+static bool toolchain_validate_sdk_item(node* sdk_n, const char* scope_label) {
+  if (!sdk_n)
+    return false;
+  if (sdk_n->type != NODE_TYPE_DEF) {
+    error("SDK entries in %s must be sections.", scope_label);
+    return false;
+  }
+
+  node_foreach(sdk_n, child) {
+    if (!child || !child->name) {
+      error("SDK entries in %s must use named attributes.", scope_label);
+      return false;
+    }
+    if (_stricmp(child->name, "name") != 0 &&
+        _stricmp(child->name, "version") != 0 &&
+        _stricmp(child->name, "base_path") != 0 &&
+        _stricmp(child->name, "inc_path") != 0 &&
+        _stricmp(child->name, "src_path") != 0 &&
+        _stricmp(child->name, "lib_path") != 0 &&
+        _stricmp(child->name, "bin_path") != 0) {
+      error("Unknown sdk attribute '%s' in %s.", child->name, scope_label);
+      return false;
+    }
+  }
+
+  if (!toolchain_validate_named_string(node_get_child(sdk_n, "name"), scope_label, "name", false))
+    return false;
+  if (!toolchain_validate_named_string(node_get_child(sdk_n, "version"), scope_label, "version", false))
+    return false;
+  if (!toolchain_validate_named_string(node_get_child(sdk_n, "base_path"), scope_label, "base_path", false))
+    return false;
+  if (!toolchain_validate_named_string(node_get_child(sdk_n, "inc_path"), scope_label, "inc_path", false))
+    return false;
+  if (!toolchain_validate_named_string(node_get_child(sdk_n, "src_path"), scope_label, "src_path", false))
+    return false;
+  if (!toolchain_validate_named_string(node_get_child(sdk_n, "lib_path"), scope_label, "lib_path", false))
+    return false;
+  if (!toolchain_validate_named_string(node_get_child(sdk_n, "bin_path"), scope_label, "bin_path", false))
+    return false;
+  return true;
+}
+
+static bool toolchain_validate_probes_section(node* probes_n, const char* scope_label) {
+  if (!probes_n)
+    return true;
+  if (probes_n->type != NODE_TYPE_DEF) {
+    error("Attribute 'probes' in %s must be a section.", scope_label);
+    return false;
+  }
+
+  node_foreach(probes_n, child) {
+    if (!child || !child->name) {
+      error("Attribute 'probes' in %s must use named attributes.", scope_label);
+      return false;
+    }
+    if (_stricmp(child->name, "docker_buildx_platforms") != 0) {
+      error("Unknown probe attribute '%s' in %s.", child->name, scope_label);
+      return false;
+    }
+  }
+
+  return toolchain_validate_named_string(node_get_child(probes_n, "docker_buildx_platforms"), scope_label, "docker_buildx_platforms", false);
+}
+
+static bool toolchain_validate_env_item(node* env_n, const char* scope_label) {
+  if (!env_n)
+    return false;
+  if (env_n->type != NODE_TYPE_DEF) {
+    error("Environment entries in %s must be sections.", scope_label);
+    return false;
+  }
+
+  node_foreach(env_n, child) {
+    if (!child || !child->name) {
+      error("Environment entries in %s must use named attributes.", scope_label);
+      return false;
+    }
+
+    if (_stricmp(child->name, "id") == 0 ||
+        _stricmp(child->name, "provider") == 0 ||
+        _stricmp(child->name, "name") == 0) {
+      continue;
+    }
+    if (_stricmp(child->name, "host") == 0 ||
+        _stricmp(child->name, "probes") == 0 ||
+        _stricmp(child->name, "tools") == 0 ||
+        _stricmp(child->name, "sdks") == 0) {
+      continue;
+    }
+
+    error("Unknown environment attribute '%s' in %s.", child->name, scope_label);
+    return false;
+  }
+
+  if (!toolchain_validate_named_string(node_get_child(env_n, "id"), scope_label, "id", true))
+    return false;
+  if (!toolchain_validate_named_string(node_get_child(env_n, "provider"), scope_label, "provider", true))
+    return false;
+  if (!toolchain_validate_named_string(node_get_child(env_n, "name"), scope_label, "name", true))
+    return false;
+  if (!toolchain_validate_host_section(node_get_child(env_n, "host"), scope_label))
+    return false;
+  if (!toolchain_validate_probes_section(node_get_child(env_n, "probes"), scope_label))
+    return false;
+
+  node* tools_n = node_get_child(env_n, "tools");
+  if (tools_n) {
+    if (tools_n->type != NODE_TYPE_DEF) {
+      error("Attribute 'tools' in %s must be a section.", scope_label);
+      return false;
+    }
+    node_foreach(tools_n, child) {
+      if (!child || !child->name) {
+        error("tools(...) in %s must contain only named tool sections.", scope_label);
+        return false;
+      }
+      if (_stricmp(child->name, "tool") != 0) {
+        error("tools(...) in %s must contain only tool(...) entries.", scope_label);
+        return false;
+      }
+      if (!toolchain_validate_tool_item(child, scope_label))
+        return false;
+    }
+  }
+
+  node* sdks_n = node_get_child(env_n, "sdks");
+  if (sdks_n) {
+    if (sdks_n->type != NODE_TYPE_DEF) {
+      error("Attribute 'sdks' in %s must be a section.", scope_label);
+      return false;
+    }
+    node_foreach(sdks_n, child) {
+      if (!child || !child->name) {
+        error("sdks(...) in %s must contain only named sdk sections.", scope_label);
+        return false;
+      }
+      if (_stricmp(child->name, "sdk") != 0) {
+        error("sdks(...) in %s must contain only sdk(...) entries.", scope_label);
+        return false;
+      }
+      if (!toolchain_validate_sdk_item(child, scope_label))
+        return false;
+    }
+  }
+
+  return true;
+}
+
+static bool toolchain_validate_tree(node* tree) {
+  if (!tree)
+    return false;
+
+  node_foreach(tree, child) {
+    if (!child || !child->name) {
+      error("Unexpected scalar item in toolchain config.");
+      return false;
+    }
+
+    if (_stricmp(child->name, "host") == 0) {
+      if (!toolchain_validate_host_section(child, "toolchain config"))
+        return false;
+      continue;
+    }
+
+    if (_stricmp(child->name, "tools") == 0) {
+      if (child->type != NODE_TYPE_DEF) {
+        error("Attribute 'tools' in toolchain config must be a section.");
+        return false;
+      }
+      node_foreach(child, item) {
+        if (!item || !item->name) {
+          error("tools(...) in toolchain config must contain only named tool sections.");
+          return false;
+        }
+        if (_stricmp(item->name, "tool") != 0) {
+          error("tools(...) in toolchain config must contain only tool(...) entries.");
+          return false;
+        }
+        if (!toolchain_validate_tool_item(item, "toolchain config"))
+          return false;
+      }
+      continue;
+    }
+
+    if (_stricmp(child->name, "sdks") == 0) {
+      if (child->type != NODE_TYPE_DEF) {
+        error("Attribute 'sdks' in toolchain config must be a section.");
+        return false;
+      }
+      node_foreach(child, item) {
+        if (!item || !item->name) {
+          error("sdks(...) in toolchain config must contain only named sdk sections.");
+          return false;
+        }
+        if (_stricmp(item->name, "sdk") != 0) {
+          error("sdks(...) in toolchain config must contain only sdk(...) entries.");
+          return false;
+        }
+        if (!toolchain_validate_sdk_item(item, "toolchain config"))
+          return false;
+      }
+      continue;
+    }
+
+    if (_stricmp(child->name, "environments") == 0) {
+      if (child->type != NODE_TYPE_DEF) {
+        error("Attribute 'environments' in toolchain config must be a section.");
+        return false;
+      }
+      node_foreach(child, item) {
+        if (!item || !item->name) {
+          error("environments(...) in toolchain config must contain only named environment sections.");
+          return false;
+        }
+        if (_stricmp(item->name, "environment") != 0) {
+          error("environments(...) in toolchain config must contain only environment(...) entries.");
+          return false;
+        }
+        if (!toolchain_validate_env_item(item, "toolchain config"))
+          return false;
+      }
+      continue;
+    }
+
+    error("Unknown attribute '%s' in toolchain config.", child->name);
+    return false;
+  }
+
+  return true;
+}
+
 static toolchain* toolchain_read(node* tree) {
   toolchain* tc = push(sizeof(toolchain));
   memset(tc, 0, sizeof(toolchain));
@@ -2317,6 +2645,10 @@ static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx)
       error("Failed to parse file %s.", path);
       return NULL;
     }
+    if (!toolchain_validate_tree(tree)) {
+      error("Failed to validate file %s.", path);
+      return NULL;
+    }
 
     toolchain* tc = toolchain_read(tree);
     if (tc && cmdctx) {
@@ -2334,8 +2666,10 @@ static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx)
     const char* data = read_entire_file(path);
     if (data) {
       node* old_tree = node_parse(data);
-      if (old_tree)
+      if (old_tree && toolchain_validate_tree(old_tree))
         previous = toolchain_read(old_tree);
+      else if (old_tree)
+        warn("Ignoring invalid existing toolchain cache while regenerating %s.", path);
     }
   }
   toolchain* tc = push(sizeof(toolchain));

@@ -75,6 +75,7 @@ typedef struct {
   const char* package_subdir;
   const char* package_repo_link;
   const char* package_repo_tag;
+  const char* package_repo_commit;
   const char* package_cmake_target;
   const char* package_archive_link;
   const char* package_archive_strip_prefix;

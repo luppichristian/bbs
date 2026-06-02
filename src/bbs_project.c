@@ -723,6 +723,8 @@ static bool project_apply_target_attrs(node* scope, target* out, const char* tar
       return false;
     if (!project_read_text_child(repo_n, "tag", &out->package_repo_tag))
       return false;
+    if (!project_read_text_child(repo_n, "commit", &out->package_repo_commit))
+      return false;
   }
 
   node* archive_n = node_get_child(scope, "archive");
@@ -876,6 +878,7 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
     out->package_path = text;
     out->package_repo_link = NULL;
     out->package_repo_tag = NULL;
+    out->package_repo_commit = NULL;
     out->package_archive_link = NULL;
     out->package_archive_strip_prefix = NULL;
     return true;
@@ -907,6 +910,8 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
       return false;
     if (!project_read_text_child(attr_n, "tag", &out->package_repo_tag))
       return false;
+    if (!project_read_text_child(attr_n, "commit", &out->package_repo_commit))
+      return false;
     out->package_path = NULL;
     out->package_archive_link = NULL;
     out->package_archive_strip_prefix = NULL;
@@ -924,6 +929,7 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
     out->package_path = NULL;
     out->package_repo_link = NULL;
     out->package_repo_tag = NULL;
+    out->package_repo_commit = NULL;
     return true;
   }
   if (_stricmp(attr_n->name, "units") == 0)
@@ -1344,6 +1350,200 @@ static bool project_validate(const project* proj) {
   return true;
 }
 
+static bool project_validate_license_shape(node* lic_n, const char* scope_label) {
+  if (!lic_n)
+    return true;
+  if (lic_n->type != NODE_TYPE_DEF) {
+    error("Attribute 'license' must be a section in %s.", scope_label ? scope_label : "project config");
+    return false;
+  }
+
+  node_foreach(lic_n, child) {
+    if (!child || !child->name) {
+      error("Attribute 'license' in %s must use named attributes.", scope_label ? scope_label : "project config");
+      return false;
+    }
+    if (_stricmp(child->name, "type") != 0 && _stricmp(child->name, "file") != 0) {
+      error("Unknown license attribute '%s' in %s.", child->name, scope_label ? scope_label : "project config");
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool project_validate_filter_shape(node* filter_n, const char* target_label) {
+  if (!filter_n)
+    return false;
+  if (filter_n->type != NODE_TYPE_DEF) {
+    error("Attribute 'filter' must be a section for target '%s'.", target_label ? target_label : "");
+    return false;
+  }
+
+  int child_count = 0;
+  node** children = project_children_in_source_order(filter_n, &child_count);
+  const char* filter_config = project_filter_config_name(filter_n);
+  if (!filter_config)
+    return false;
+
+  target scratch = {0};
+  project_set_default_target(&scratch, TARGET_TYPE_CONSOLE);
+  for (int i = 1; i < child_count; ++i) {
+    node* child = children[i];
+    if (!child || !child->name) {
+      error("filter(%s ...) entries must use named attributes.", filter_config);
+      return false;
+    }
+    if (!project_apply_target_attr_node(child, &scratch, target_label))
+      return false;
+  }
+
+  return true;
+}
+
+static bool project_validate_target_shape(node* target_n) {
+  if (!target_n || !target_n->name)
+    return false;
+  if (!project_is_known_target_type_name(target_n->name)) {
+    error("Unknown target type '%s'.", target_n->name ? target_n->name : "");
+    return false;
+  }
+
+  meta meta_tmp = {0};
+  if (!project_parse_meta_fields(target_n, &meta_tmp))
+    return false;
+
+  if (!project_validate_license_shape(node_get_child(target_n, "license"), target_n->name))
+    return false;
+
+  target scratch = {0};
+  project_set_default_target(&scratch, project_target_type_from_text(target_n->name));
+  if (!project_apply_target_attrs(target_n, &scratch, target_n->name))
+    return false;
+
+  node_foreach(target_n, child) {
+    if (!child || !child->name) {
+      error("Unexpected scalar item in target '%s'.", target_n->name);
+      return false;
+    }
+
+    if (_stricmp(child->name, "id") == 0 ||
+        _stricmp(child->name, "name") == 0 ||
+        _stricmp(child->name, "authors") == 0 ||
+        _stricmp(child->name, "ver") == 0 ||
+        _stricmp(child->name, "license") == 0 ||
+        _stricmp(child->name, "lang") == 0 ||
+        _stricmp(child->name, "output") == 0 ||
+        _stricmp(child->name, "path") == 0 ||
+        _stricmp(child->name, "subdir") == 0 ||
+        _stricmp(child->name, "cmake_target") == 0 ||
+        _stricmp(child->name, "repo") == 0 ||
+        _stricmp(child->name, "archive") == 0 ||
+        _stricmp(child->name, "units") == 0 ||
+        _stricmp(child->name, "include_dirs") == 0 ||
+        _stricmp(child->name, "link_dirs") == 0 ||
+        _stricmp(child->name, "dependencies") == 0 ||
+        _stricmp(child->name, "link_libs") == 0 ||
+        _stricmp(child->name, "defines") == 0 ||
+        _stricmp(child->name, "additional_compile_args") == 0 ||
+        _stricmp(child->name, "additional_link_args") == 0 ||
+        _stricmp(child->name, "warning_level") == 0 ||
+        _stricmp(child->name, "opt_level") == 0 ||
+        _stricmp(child->name, "stack_size") == 0 ||
+        _stricmp(child->name, "warnings_as_errors") == 0 ||
+        _stricmp(child->name, "runtime") == 0 ||
+        _stricmp(child->name, "stdver") == 0 ||
+        _stricmp(child->name, "testing") == 0 ||
+        _stricmp(child->name, "test_args") == 0 ||
+        _stricmp(child->name, "post_build_cmds") == 0 ||
+        _stricmp(child->name, "pre_build_cmds") == 0 ||
+        _stricmp(child->name, "pre_run_cmds") == 0 ||
+        _stricmp(child->name, "post_run_cmds") == 0 ||
+        _stricmp(child->name, "pre_dist_cmds") == 0 ||
+        _stricmp(child->name, "post_dist_cmds") == 0 ||
+        _stricmp(child->name, "dist") == 0) {
+      continue;
+    }
+
+    if (_stricmp(child->name, "filter") == 0) {
+      if (!project_validate_filter_shape(child, target_n->name))
+        return false;
+      continue;
+    }
+
+    error("Unknown attribute '%s' in target '%s'.", child->name, target_n->name);
+    return false;
+  }
+
+  return true;
+}
+
+static bool project_validate_project_shape(node* project_n) {
+  if (!project_n)
+    return false;
+
+  project scratch = {0};
+  if (!project_parse_configs(project_n, &scratch))
+    return false;
+
+  meta meta_tmp = {0};
+  if (!project_parse_meta_fields(project_n, &meta_tmp))
+    return false;
+
+  node* repo_n = node_get_child(project_n, "repo");
+  if (repo_n && repo_n->type == NODE_TYPE_DEF) {
+    error("Attribute 'repo' must be a string or identifier.");
+    return false;
+  }
+
+  if (!project_validate_license_shape(node_get_child(project_n, "license"), "project config"))
+    return false;
+
+  node_foreach(project_n, child) {
+    if (!child || !child->name) {
+      error("Unexpected scalar item in project config.");
+      return false;
+    }
+
+    if (_stricmp(child->name, "id") == 0 ||
+        _stricmp(child->name, "name") == 0 ||
+        _stricmp(child->name, "authors") == 0 ||
+        _stricmp(child->name, "repo") == 0 ||
+        _stricmp(child->name, "ver") == 0 ||
+        _stricmp(child->name, "license") == 0 ||
+        _stricmp(child->name, "configs") == 0) {
+      continue;
+    }
+
+    if (_stricmp(child->name, "filter") == 0) {
+      if (!project_validate_filter_shape(child, "project filter"))
+        return false;
+      continue;
+    }
+
+    if (_stricmp(child->name, "targets") == 0) {
+      if (child->type != NODE_TYPE_DEF) {
+        error("Attribute 'targets' must be a section.");
+        return false;
+      }
+      node_foreach(child, target_n) {
+        if (!target_n || !target_n->name) {
+          error("targets(...) must contain only named target sections.");
+          return false;
+        }
+        if (!project_validate_target_shape(target_n))
+          return false;
+      }
+      continue;
+    }
+
+    error("Unknown attribute '%s' in project config.", child->name);
+    return false;
+  }
+
+  return true;
+}
+
 static const char* project_lang_name(lang value) {
   return value == LANG_CPP ? "cpp" : "c";
 }
@@ -1493,6 +1693,8 @@ static void project_print(const project* proj) {
         print("Package Repo: %s", tgt->package_repo_link);
       if (tgt->package_repo_tag)
         print("Package Tag: %s", tgt->package_repo_tag);
+      if (tgt->package_repo_commit)
+        print("Package Commit: %s", tgt->package_repo_commit);
       if (tgt->package_path)
         print("Package Path: %s", tgt->package_path);
       if (tgt->package_subdir)
@@ -1621,6 +1823,9 @@ static bool project_load_file_config(const char* path, const char* config, proje
     error("Multiple top-level project nodes found in %s.", path);
     return false;
   }
+
+  if (!project_validate_project_shape(project_n))
+    return false;
 
   if (!project_parse_project_node(project_n, config, out))
     return false;
@@ -2244,9 +2449,10 @@ static const char* project_package_cache_key_compact(const target* tgt) {
   char suffix_src[1024] = {0};
   snprintf(suffix_src,
            sizeof(suffix_src),
-           "%s|%s|%s|%s",
+           "%s|%s|%s|%s|%s",
            tgt->package_repo_link ? tgt->package_repo_link : "",
            tgt->package_repo_tag ? tgt->package_repo_tag : "",
+           tgt->package_repo_commit ? tgt->package_repo_commit : "",
            tgt->package_archive_link ? tgt->package_archive_link : "",
            tgt->package_archive_strip_prefix ? tgt->package_archive_strip_prefix : "");
   uint32_t hash = project_hash_text(suffix_src);
@@ -2430,11 +2636,14 @@ static const char* project_git_resolve_local_head(toolchain* tc, const char* rep
   return project_bash_capture_first_line(tc, script);
 }
 
-static const char* project_git_resolve_remote_ref(toolchain* tc, const char* repo_link, const char* repo_tag) {
+static const char* project_git_resolve_remote_ref(toolchain* tc, const char* repo_link, const char* repo_tag, const char* repo_commit) {
   const char* git = toolchain_get_host_tool_path(tc, "git");
   if (!git || !git[0] || !repo_link || !repo_link[0])
     return NULL;
   const char* resolved_link = project_resolve_repo_link(repo_link);
+
+  if (repo_commit && repo_commit[0])
+    return repo_commit;
 
   char script[4096] = {0};
   if (repo_tag && repo_tag[0]) {
@@ -2481,7 +2690,7 @@ static bool project_package_query(const target* tgt, toolchain* tc, project_pack
     out->exists = dir_exists(out->source);
     out->has_cmakelists = out->source && file_exists(toolchain_join2(out->source, "CMakeLists.txt"));
     out->local_ref = dir_exists(out->cache_dir) ? project_git_resolve_local_head(tc, out->cache_dir) : NULL;
-    out->remote_ref = project_git_resolve_remote_ref(tc, tgt->package_repo_link, tgt->package_repo_tag);
+    out->remote_ref = project_git_resolve_remote_ref(tc, tgt->package_repo_link, tgt->package_repo_tag, tgt->package_repo_commit);
     if (!dir_exists(out->cache_dir))
       out->status = "missing";
     else if (out->local_ref && out->remote_ref)
@@ -2543,11 +2752,25 @@ static bool project_fetch_repo_package(target* tgt, toolchain* tc, bool refresh)
   const char* git_q = project_shell_quote(toolchain_norm_path(git));
   const char* link_q = project_shell_quote(project_resolve_repo_link(tgt->package_repo_link));
   const char* dir_q = project_shell_quote(info.cache_dir);
-  if (tgt->package_repo_tag && tgt->package_repo_tag[0]) {
+  if (tgt->package_repo_commit && tgt->package_repo_commit[0]) {
+    const char* commit_q = project_shell_quote(tgt->package_repo_commit);
+    snprintf(script,
+             sizeof(script),
+             "mkdir -p %s && %s clone --recurse-submodules %s %s && %s -C %s -c advice.detachedHead=false checkout %s && %s -C %s submodule update --init --recursive",
+             root_q,
+             git_q,
+             link_q,
+             dir_q,
+             git_q,
+             dir_q,
+             commit_q,
+             git_q,
+             dir_q);
+  } else if (tgt->package_repo_tag && tgt->package_repo_tag[0]) {
     const char* tag_q = project_shell_quote(tgt->package_repo_tag);
     snprintf(script,
              sizeof(script),
-             "mkdir -p %s && %s clone --depth 1 --branch %s --recurse-submodules %s %s",
+             "mkdir -p %s && %s -c advice.detachedHead=false clone --depth 1 --branch %s --recurse-submodules %s %s",
              root_q,
              git_q,
              tag_q,
@@ -2631,6 +2854,11 @@ static bool project_fetch_archive_package(target* tgt, toolchain* tc, bool refre
 static bool project_resolve_package_target(target* tgt, toolchain* tc, bool refresh) {
   if (!tgt)
     return false;
+
+  if (tgt->package_repo_tag && tgt->package_repo_tag[0] && tgt->package_repo_commit && tgt->package_repo_commit[0]) {
+    error("Package '%s' cannot declare both repo tag and commit.", tgt->meta.id ? tgt->meta.id : "");
+    return false;
+  }
 
   tgt->package_source = tgt->package_path && tgt->package_path[0] ? PACKAGE_SOURCE_PATH :
                         (tgt->package_repo_link && tgt->package_repo_link[0] ? PACKAGE_SOURCE_REPO :
@@ -4052,6 +4280,8 @@ static void project_print_package_summary(const target* tgt, toolchain* tc) {
     print("  Repo: %s", copy.package_repo_link);
   if (copy.package_repo_tag)
     print("  Tag: %s", copy.package_repo_tag);
+  if (copy.package_repo_commit)
+    print("  Commit: %s", copy.package_repo_commit);
   if (copy.package_path)
     print("  Path: %s", copy.package_path);
   if (copy.package_subdir)

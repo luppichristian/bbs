@@ -96,6 +96,10 @@ static platform_timestamp now_ms(void) {
   return platform_now_ms();
 }
 
+static void sleep_ms(unsigned int ms) {
+  platform_sleep_ms(ms);
+}
+
 static void format_elapsed_ms(platform_timestamp elapsed_ms, char* out, size_t out_dim) {
   if (!out || out_dim == 0)
     return;
@@ -376,6 +380,7 @@ typedef struct {
   const char* cur;
   bool has_look;
   token look;
+  bool failed;
 } parser;
 
 static size_t token_len(token t) {
@@ -396,6 +401,33 @@ static size_t token_src_len(token t) {
     return len;
   }
   return token_len(t);
+}
+
+static void parser_error_at(parser* p, const char* at, const char* fmt, ...) {
+  if (!p || p->failed)
+    return;
+
+  size_t line = 1;
+  size_t col = 1;
+  if (p->src && at && at >= p->src) {
+    for (const char* it = p->src; it < at; ++it) {
+      if (*it == '\n') {
+        ++line;
+        col = 1;
+      } else {
+        ++col;
+      }
+    }
+  }
+
+  char msg[512] = {0};
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(msg, sizeof(msg), fmt, args);
+  va_end(args);
+
+  error("Parse error at line %zu, column %zu: %s", line, col, msg);
+  p->failed = true;
 }
 
 static const char* arena_text(const char* begin, size_t len) {
@@ -574,7 +606,7 @@ static token lexer_next(parser* p) {
   parser_skip(p);
 
   token t = {.type = TOK_EOF, .begin = p->cur, .end = p->cur};
-  if (!*p->cur)
+  if (!*p->cur || p->failed)
     return t;
 
   switch (*p->cur) {
@@ -587,6 +619,7 @@ static token lexer_next(parser* p) {
       t.end = ++p->cur;
       return t;
     case '"': {
+      const char* quote = p->cur;
       ++p->cur;
       t.type = TOK_STRING;
       t.begin = p->cur;
@@ -600,8 +633,12 @@ static token lexer_next(parser* p) {
         ++p->cur;
       }
       t.end = p->cur;
-      if (*p->cur == '"')
+      if (*p->cur == '"') {
         ++p->cur;
+      } else {
+        parser_error_at(p, quote, "Unterminated string literal.");
+        t.type = TOK_EOF;
+      }
       return t;
     }
     default:
@@ -823,7 +860,10 @@ static node* node_parse_named(parser* p, token name_tok) {
     return NULL;
 
   token lp = parser_next(p);
-  (void)lp;
+  if (lp.type != TOK_LPAREN) {
+    parser_error_at(p, lp.begin, "Expected '(' after '%s'.", name_buf);
+    return NULL;
+  }
 
   parser saved = *p;
   token first = parser_next(p);
@@ -854,6 +894,7 @@ static node* node_parse_named(parser* p, token name_tok) {
   while (true) {
     token t = parser_peek(p);
     if (t.type == TOK_EOF) {
+      parser_error_at(p, name_tok.begin, "Missing ')' to close '%s('.", name_buf);
       break;
     }
     if (t.type == TOK_RPAREN) {
@@ -874,8 +915,18 @@ static node* node_parse_named(parser* p, token name_tok) {
 
 static node* node_parse_item(parser* p) {
   token t = parser_next(p);
-  if (t.type == TOK_EOF || t.type == TOK_RPAREN)
+  if (t.type == TOK_EOF)
     return NULL;
+
+  if (t.type == TOK_RPAREN) {
+    parser_error_at(p, t.begin, "Unexpected ')'.");
+    return NULL;
+  }
+
+  if (t.type == TOK_LPAREN) {
+    parser_error_at(p, t.begin, "Unexpected '('.");
+    return NULL;
+  }
 
   if (t.type == TOK_NAME) {
     token next = parser_peek(p);
@@ -921,6 +972,9 @@ static node* node_parse(const char* str) {
     child->parent = root;
     node_push_child(root, child);
   }
+
+  if (p.failed)
+    return NULL;
 
   return root;
 }

@@ -73,6 +73,7 @@ typedef enum {
   CMD_GEN,
   CMD_CFG,
   CMD_BUILD,
+  CMD_AUTO,
   CMD_RUN,
   CMD_INFO,
   CMD_PACKAGE,
@@ -127,17 +128,26 @@ static cmd_info CMD_INFOS[CMD_MAX] = {
                    "Use -t or --toolchain to print the toolchain config path.\n"
                    "If none of -p, -u, -t or -l is provided, bbs prints all four paths."},
 
-     [CMD_BUILD] = {  .name = "build",
-                   .params = "[-t target|*] [-p platform|*] [-c config|*]",
-                   .desc = "Build selected targets",
-                   .detailed_desc = "Builds the selected target for the requested platform.\n"
-                   "If no target is provided, bbs uses the only project target when possible or operates on all targets.\n"
-                   "If no platform is provided, the default platform selection is used.\n"
-                   "Use '*' with -t, -p, or -c to execute the command for all matching targets, platforms, or configs.\n"
-                   "If no config is provided, bbs resolves the project using the 'default' config."},
+      [CMD_BUILD] = {  .name = "build",
+                    .params = "[-t target|*] [-p platform|*] [-c config|*]",
+                    .desc = "Build selected targets",
+                    .detailed_desc = "Builds the selected target for the requested platform.\n"
+                    "If no target is provided, bbs uses the only project target when possible or operates on all targets.\n"
+                    "If no platform is provided, the default platform selection is used.\n"
+                    "Use '*' with -t, -p, or -c to execute the command for all matching targets, platforms, or configs.\n"
+                    "If no config is provided, bbs resolves the project using the 'default' config."},
 
-     [CMD_RUN] = {    .name = "run",
-                   .params = "[-t target|*] [-p platform|*] [-c config|*] | [optional args]",
+      [CMD_AUTO] = {   .name = "auto",
+                    .params = "[-t target|*] [-p platform|*] [-c config|*] [--debounce ms]",
+                    .desc = "Watch files and rebuild automatically",
+                    .detailed_desc = "Runs the same build selection as 'bbs build', then keeps watching the project for file changes.\n"
+                    "When a source or config file changes, bbs rebuilds using the same target, platform, and config arguments.\n"
+                    "Use '--debounce' to wait for a quiet period before rebuilding when editors save through multiple file updates.\n"
+                    "Use '*' with -t, -p, or -c to execute the command for all matching targets, platforms, or configs.\n"
+                    "Generated output directories are ignored to avoid rebuild loops."},
+
+      [CMD_RUN] = {    .name = "run",
+                    .params = "[-t target|*] [-p platform|*] [-c config|*] | [optional args]",
                    .desc = "Run a target, building it if needed",
                    .detailed_desc = "Builds the selected runnable target if needed, then executes it.\n"
                    "Any remaining arguments are forwarded to the program.\n"

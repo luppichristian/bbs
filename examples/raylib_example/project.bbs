@@ -1,0 +1,29 @@
+configs(
+  debug
+)
+
+id(raylib_example)
+name("Raylib Package Example")
+ver(0.1.0)
+
+targets(
+  header_lib(
+    id(raylib_pkg)
+    name("raylib package")
+    repo(
+      link("https://github.com/raysan5/raylib.git")
+      tag("5.5")
+    )
+    cmake_target(raylib)
+  )
+
+  console(
+    output(raylib_example)
+    dependencies(
+      raylib_pkg
+    )
+    units(
+      src/main.c
+    )
+  )
+)

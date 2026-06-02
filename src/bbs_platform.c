@@ -144,6 +144,14 @@ static platform_timestamp platform_now_ms(void) {
 #endif
 }
 
+static void platform_sleep_ms(unsigned int ms) {
+#if defined(_WIN32)
+  Sleep(ms);
+#else
+  usleep((useconds_t)ms * 1000U);
+#endif
+}
+
 static bool platform_dir_exists(const char* path) {
   if (!path || !path[0])
     return false;

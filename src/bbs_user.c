@@ -192,6 +192,31 @@ static bool user_read_text_child(node* scope, const char* name, const char** out
   return true;
 }
 
+static bool user_read_uint_child(node* scope, const char* name, unsigned int* out) {
+  if (out)
+    *out = 0;
+  if (!scope || !name || !name[0])
+    return false;
+
+  node* child = node_get_child(scope, name);
+  if (!child)
+    return true;
+  if (child->type != NODE_TYPE_INT) {
+    error("Attribute '%s' must be an integer.", name);
+    return false;
+  }
+
+  int64_t value = node_get_int(child);
+  if (value < 0) {
+    error("Attribute '%s' cannot be negative.", name);
+    return false;
+  }
+
+  if (out)
+    *out = (unsigned int)value;
+  return true;
+}
+
 static int user_find_gen_index(const user* u, const char* name) {
   if (!u || !name || !name[0])
     return -1;
@@ -289,6 +314,9 @@ static void user_apply_defaults(user* u) {
 
   u->builddir = DEF_BUILD_DIR;
   u->distdir = DEF_DIST_DIR;
+  u->auto_debounce_ms = 500;
+  u->auto_retry_count = 3;
+  u->auto_retry_delay_ms = 250;
   u->dist_archive_format = "zip";
   u->dist_archive_name = "$CFG-$OS-$ARC--$VER";
   u->cmake_args = NULL;
@@ -313,6 +341,24 @@ static bool user_apply_scope(node* scope, user* out) {
     return false;
   if (text && text[0])
     out->distdir = text;
+
+  unsigned int uint_value = 0;
+  if (!user_read_uint_child(scope, "auto_debounce_ms", &uint_value))
+    return false;
+  if (node_get_child(scope, "auto_debounce_ms"))
+    out->auto_debounce_ms = uint_value;
+
+  uint_value = 0;
+  if (!user_read_uint_child(scope, "auto_retry_count", &uint_value))
+    return false;
+  if (node_get_child(scope, "auto_retry_count"))
+    out->auto_retry_count = uint_value;
+
+  uint_value = 0;
+  if (!user_read_uint_child(scope, "auto_retry_delay_ms", &uint_value))
+    return false;
+  if (node_get_child(scope, "auto_retry_delay_ms"))
+    out->auto_retry_delay_ms = uint_value;
 
   text = NULL;
   if (!user_read_text_child(scope, "dist_archive_format", &text))
@@ -352,6 +398,70 @@ static bool user_apply_scope(node* scope, user* out) {
   return true;
 }
 
+static bool user_validate_gen_shape(node* gen_n, const char* scope_label) {
+  if (!gen_n)
+    return false;
+  if (gen_n->type != NODE_TYPE_DEF) {
+    error("Attribute 'gen' must be a section in %s config.", scope_label);
+    return false;
+  }
+
+  node_foreach(gen_n, child) {
+    if (!child || !child->name) {
+      error("Generator entries in %s config must use named attributes.", scope_label);
+      return false;
+    }
+    if (_stricmp(child->name, "name") != 0 && _stricmp(child->name, "copyfile") != 0) {
+      error("Unknown generator attribute '%s' in %s config.", child->name, scope_label);
+      return false;
+    }
+  }
+
+  user_gen gen = {0};
+  return user_parse_gen_node(gen_n, &gen);
+}
+
+static bool user_validate_scope(node* scope, const char* scope_label) {
+  if (!scope)
+    return true;
+
+  user tmp = {0};
+  user_apply_defaults(&tmp);
+  if (!user_apply_scope(scope, &tmp))
+    return false;
+
+  node_foreach(scope, child) {
+    if (!child || !child->name) {
+      error("Unexpected scalar item in %s config.", scope_label);
+      return false;
+    }
+
+    if (_stricmp(child->name, "builddir") == 0 ||
+        _stricmp(child->name, "distdir") == 0 ||
+        _stricmp(child->name, "auto_debounce_ms") == 0 ||
+        _stricmp(child->name, "auto_retry_count") == 0 ||
+        _stricmp(child->name, "auto_retry_delay_ms") == 0 ||
+        _stricmp(child->name, "dist_archive_format") == 0 ||
+        _stricmp(child->name, "dist_archive_name") == 0 ||
+        _stricmp(child->name, "cmake_args") == 0 ||
+        _stricmp(child->name, "cmake_build_args") == 0 ||
+        _stricmp(child->name, "ctest_args") == 0) {
+      continue;
+    }
+
+    if (_stricmp(child->name, "gen") == 0) {
+      if (!user_validate_gen_shape(child, scope_label))
+        return false;
+      continue;
+    }
+
+    error("Unknown attribute '%s' in %s config.", child->name, scope_label);
+    return false;
+  }
+
+  return true;
+}
+
 static bool user_load_paths(const char* user_path, const char* local_path, user* out) {
   if (!out)
     return false;
@@ -361,9 +471,13 @@ static bool user_load_paths(const char* user_path, const char* local_path, user*
   node* user_scope = user_parse_scope_file(user_path);
   if (user_path && user_path[0] && file_exists(user_path) && !user_scope)
     return false;
+  if (user_scope && !user_validate_scope(user_scope, "user"))
+    return false;
 
   node* local_scope = user_parse_scope_file(local_path);
   if (local_path && local_path[0] && file_exists(local_path) && !local_scope)
+    return false;
+  if (local_scope && !user_validate_scope(local_scope, "local"))
     return false;
 
   node* merged = user_merge_scopes(user_scope, local_scope);

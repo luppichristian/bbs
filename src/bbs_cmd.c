@@ -216,8 +216,362 @@ static int error_code(cmd c, char idx) {
   return 200 + c * 255 + idx;
 }
 
+typedef struct {
+  const char* target;
+  const char* platform;
+  const char* config;
+} build_cmd_args;
+
+typedef struct {
+  platform_timestamp newest_ts;
+  unsigned long long file_count;
+  unsigned long long hash;
+} watch_snapshot;
+
+enum {
+  AUTO_POLL_MS = 250,
+  AUTO_DEBOUNCE_MS = 500,
+};
+
+static bool cmd_run_build_matrix(const char* target, const char* platform, const char* config, toolchain* tc);
+static const char* cmdline_extract_option_value(cmdline* cl, const char* short_name, const char* long_name);
+
 static bool cmdopt_is_star(const char* value) {
   return value && strcmp(value, "*") == 0;
+}
+
+static bool watch_snapshot_equals(const watch_snapshot* a, const watch_snapshot* b) {
+  if (!a || !b)
+    return false;
+  return a->hash == b->hash && a->file_count == b->file_count && a->newest_ts == b->newest_ts;
+}
+
+static unsigned long long watch_hash_bytes(unsigned long long hash, const char* text) {
+  const unsigned char* p = (const unsigned char*)(text ? text : "");
+  while (*p) {
+    hash ^= (unsigned long long)(*p++);
+    hash *= 1099511628211ULL;
+  }
+  return hash;
+}
+
+static unsigned long long watch_hash_u64(unsigned long long hash, unsigned long long value) {
+  for (int i = 0; i < 8; ++i) {
+    hash ^= (unsigned long long)((value >> (i * 8)) & 0xffU);
+    hash *= 1099511628211ULL;
+  }
+  return hash;
+}
+
+static const char* watch_basename(const char* path) {
+  if (!path)
+    return NULL;
+
+  const char* slash = strrchr(path, '/');
+  const char* bslash = strrchr(path, '\\');
+  const char* last = slash;
+  if (!last || (bslash && bslash > last))
+    last = bslash;
+  return last ? last + 1 : path;
+}
+
+static bool watch_path_equals(const char* a, const char* b) {
+  if (!a || !b)
+    return false;
+#if defined(_WIN32)
+  return _stricmp(a, b) == 0;
+#else
+  return strcmp(a, b) == 0;
+#endif
+}
+
+static bool watch_should_skip_dir(const char* dir_path, const char** ignored_dirs, int ignored_dir_c) {
+  const char* name = watch_basename(dir_path);
+  if (name && (_stricmp(name, ".git") == 0 || _stricmp(name, ".bbs-bootstrap") == 0))
+    return true;
+
+  for (int i = 0; i < ignored_dir_c; ++i) {
+    if (ignored_dirs[i] && watch_path_equals(dir_path, ignored_dirs[i]))
+      return true;
+  }
+
+  return false;
+}
+
+static void watch_snapshot_add_file(watch_snapshot* snap, const char* rel_path, platform_timestamp ts) {
+  if (!snap || !rel_path)
+    return;
+  if (ts > snap->newest_ts)
+    snap->newest_ts = ts;
+  ++snap->file_count;
+  snap->hash = watch_hash_bytes(snap->hash, rel_path);
+  snap->hash = watch_hash_u64(snap->hash, ts);
+}
+
+static void watch_snapshot_add_dir(watch_snapshot* snap, const char* rel_path, platform_timestamp ts) {
+  if (!snap || !rel_path || !rel_path[0])
+    return;
+  if (ts > snap->newest_ts)
+    snap->newest_ts = ts;
+  ++snap->file_count;
+  snap->hash = watch_hash_bytes(snap->hash, "dir:");
+  snap->hash = watch_hash_bytes(snap->hash, rel_path);
+  snap->hash = watch_hash_u64(snap->hash, ts);
+}
+
+static bool watch_collect_snapshot_dir(const char* root, const char* rel_path, const char** ignored_dirs, int ignored_dir_c, watch_snapshot* snap) {
+  const char* dir_path = rel_path && rel_path[0] ? toolchain_join2(root, rel_path) : root;
+  if (!dir_path)
+    return false;
+  if (watch_should_skip_dir(dir_path, ignored_dirs, ignored_dir_c))
+    return true;
+
+#if defined(_WIN32)
+  char pattern[_MAX_PATH * 2] = {0};
+  snprintf(pattern, sizeof(pattern), "%s\\*", dir_path);
+
+  WIN32_FIND_DATAA data;
+  HANDLE handle = FindFirstFileA(pattern, &data);
+  if (handle == INVALID_HANDLE_VALUE)
+    return true;
+
+  bool ok = true;
+  do {
+    if (_stricmp(data.cFileName, ".") == 0 || _stricmp(data.cFileName, "..") == 0)
+      continue;
+
+    const char* child_rel = rel_path && rel_path[0] ? toolchain_join2(rel_path, data.cFileName) : arena_text(data.cFileName, strlen(data.cFileName));
+    const char* child_path = toolchain_join2(root, child_rel);
+    if (!child_rel || !child_path) {
+      ok = false;
+      break;
+    }
+
+    if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      watch_snapshot_add_dir(snap, child_rel, file_timestamp(child_path));
+      if (!watch_collect_snapshot_dir(root, child_rel, ignored_dirs, ignored_dir_c, snap)) {
+        ok = false;
+        break;
+      }
+      continue;
+    }
+
+    watch_snapshot_add_file(snap, child_rel, file_timestamp(child_path));
+  } while (FindNextFileA(handle, &data) != 0);
+
+  FindClose(handle);
+  return ok;
+#else
+  DIR* dir = opendir(dir_path);
+  if (!dir)
+    return true;
+
+  bool ok = true;
+  struct dirent* entry = NULL;
+  while ((entry = readdir(dir)) != NULL) {
+    if (_stricmp(entry->d_name, ".") == 0 || _stricmp(entry->d_name, "..") == 0)
+      continue;
+
+    const char* child_rel = rel_path && rel_path[0] ? toolchain_join2(rel_path, entry->d_name) : arena_text(entry->d_name, strlen(entry->d_name));
+    const char* child_path = toolchain_join2(root, child_rel);
+    if (!child_rel || !child_path) {
+      ok = false;
+      break;
+    }
+
+    struct stat st;
+    if (stat(child_path, &st) != 0)
+      continue;
+
+    if (S_ISDIR(st.st_mode)) {
+      watch_snapshot_add_dir(snap, child_rel, file_timestamp(child_path));
+      if (!watch_collect_snapshot_dir(root, child_rel, ignored_dirs, ignored_dir_c, snap)) {
+        ok = false;
+        break;
+      }
+      continue;
+    }
+
+    watch_snapshot_add_file(snap, child_rel, file_timestamp(child_path));
+  }
+
+  closedir(dir);
+  return ok;
+#endif
+}
+
+static bool watch_collect_snapshot(const char* root, const char** ignored_dirs, int ignored_dir_c, watch_snapshot* out) {
+  if (!root || !root[0] || !out)
+    return false;
+
+  out->newest_ts = 0;
+  out->file_count = 0;
+  out->hash = 1469598103934665603ULL;
+  return watch_collect_snapshot_dir(root, NULL, ignored_dirs, ignored_dir_c, out);
+}
+
+static void cmd_parse_build_args(cmd_ctx* cmdctx, build_cmd_args* out, cmdopt* extra_opts, size_t extra_opt_c) {
+  if (!cmdctx || !out)
+    return;
+
+  out->target = cmdline_extract_option_value(cmdctx->cl, "t", "target");
+  out->platform = cmdline_extract_option_value(cmdctx->cl, "p", "platform");
+  out->config = cmdline_extract_option_value(cmdctx->cl, "c", "config");
+
+  enum {
+    TARGET = 0,
+    PLATFORM,
+  };
+
+  cmdopt opts[] = {
+      [TARGET] = {"t",   "target"},
+      [PLATFORM] = {"p", "platform"},
+  };
+
+  cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
+  if (extra_opts && extra_opt_c > 0)
+    cmdline_consume_all_options(cmdctx->cl, extra_opts, extra_opt_c);
+  cmdline_validate(cmdctx->cl);
+}
+
+static bool cmd_parse_uint_option(const char* value, const char* option_name, unsigned int* out_value) {
+  if (!option_name || !out_value)
+    return false;
+  if (!value || !value[0]) {
+    error("option '--%s' expects a value.", option_name);
+    return false;
+  }
+
+  char* end = NULL;
+  unsigned long parsed = strtoul(value, &end, 10);
+  if (!end || *end != '\0') {
+    error("option '--%s' expects an integer value. Got '%s'.", option_name, value);
+    return false;
+  }
+
+  *out_value = (unsigned int)parsed;
+  return true;
+}
+
+static bool cmd_exec_build_args(const build_cmd_args* args, toolchain* tc) {
+  const char* target = args ? args->target : NULL;
+  const char* platform = args ? args->platform : NULL;
+  const char* config = args ? args->config : NULL;
+  if (cmdopt_is_star(target) || cmdopt_is_star(platform) || cmdopt_is_star(config))
+    return cmd_run_build_matrix(target, platform, config, tc);
+  return project_build(target, platform, config, tc);
+}
+
+static bool cmd_exec_build_args_retry(const build_cmd_args* args, toolchain* tc, unsigned int retry_count, unsigned int retry_delay_ms) {
+  for (unsigned int attempt = 0; attempt <= retry_count; ++attempt) {
+    if (cmd_exec_build_args(args, tc))
+      return true;
+    if (attempt == retry_count)
+      break;
+    warn("Rebuild attempt %u failed. Retrying in %ums.", attempt + 2, retry_delay_ms);
+    sleep_ms(retry_delay_ms);
+  }
+
+  return false;
+}
+
+static bool watch_wait_for_quiet(const char* root,
+                                 const char** ignored_dirs,
+                                 int ignored_dir_c,
+                                 unsigned int poll_ms,
+                                 unsigned int debounce_ms,
+                                 watch_snapshot* snapshot) {
+  if (!snapshot)
+    return false;
+  if (debounce_ms == 0)
+    return true;
+
+  watch_snapshot stable = *snapshot;
+  platform_timestamp quiet_started = now_ms();
+  for (;;) {
+    sleep_ms(poll_ms);
+
+    watch_snapshot next = {0};
+    if (!watch_collect_snapshot(root, ignored_dirs, ignored_dir_c, &next))
+      continue;
+    if (!watch_snapshot_equals(&next, &stable)) {
+      stable = next;
+      quiet_started = now_ms();
+      continue;
+    }
+
+    platform_timestamp elapsed = now_ms() - quiet_started;
+    if (elapsed >= debounce_ms) {
+      *snapshot = stable;
+      return true;
+    }
+  }
+}
+
+static int run_cmd_auto(cmd_ctx* cmdctx) {
+  build_cmd_args args = {0};
+  const char* debounce_value = cmdline_extract_option_value(cmdctx->cl, NULL, "debounce");
+  cmd_parse_build_args(cmdctx, &args, NULL, 0);
+
+  toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  if (!cmd_exec_build_args(&args, tc))
+    return error_code(CMD_AUTO, 0);
+
+  project proj = {0};
+  const char* watch_root = project_current_workdir();
+  const char* ignored_dirs[2] = {0};
+  int ignored_dir_c = 0;
+  if (project_load_config(args.config, &proj)) {
+    ignored_dirs[ignored_dir_c++] = get_path_cwd(proj.user_cfg.builddir ? proj.user_cfg.builddir : DEF_BUILD_DIR);
+    ignored_dirs[ignored_dir_c++] = get_path_cwd(proj.user_cfg.distdir ? proj.user_cfg.distdir : DEF_DIST_DIR);
+  } else {
+    ignored_dirs[ignored_dir_c++] = get_path_cwd(DEF_BUILD_DIR);
+    ignored_dirs[ignored_dir_c++] = get_path_cwd(DEF_DIST_DIR);
+  }
+
+  unsigned int debounce_ms = proj.user_cfg.auto_debounce_ms ? proj.user_cfg.auto_debounce_ms : AUTO_DEBOUNCE_MS;
+  unsigned int retry_count = proj.user_cfg.auto_retry_count;
+  unsigned int retry_delay_ms = proj.user_cfg.auto_retry_delay_ms;
+  if (debounce_value && !cmd_parse_uint_option(debounce_value, "debounce", &debounce_ms))
+    return error_code(CMD_AUTO, 3);
+
+  watch_snapshot prev = {0};
+  if (!watch_collect_snapshot(watch_root, ignored_dirs, ignored_dir_c, &prev)) {
+    error("Failed to initialize file watcher snapshot.");
+    return error_code(CMD_AUTO, 1);
+  }
+
+  print("Auto");
+  project_print_field("Directory", watch_root);
+  project_print_fieldf("Debounce", "%ums", debounce_ms);
+  project_print_fieldf("Retry Count", "%u", retry_count);
+  project_print_fieldf("Retry Delay", "%ums", retry_delay_ms);
+  print("Watching for changes. Press Ctrl+C to stop.");
+
+  for (;;) {
+    sleep_ms(AUTO_POLL_MS);
+
+    watch_snapshot curr = {0};
+    if (!watch_collect_snapshot(watch_root, ignored_dirs, ignored_dir_c, &curr))
+      continue;
+    if (watch_snapshot_equals(&curr, &prev))
+      continue;
+
+    print("\nChange detected. Waiting for files to settle...");
+    if (!watch_wait_for_quiet(watch_root, ignored_dirs, ignored_dir_c, AUTO_POLL_MS, debounce_ms, &curr))
+      continue;
+
+    prev = curr;
+    print("Rebuilding...");
+    if (cmd_exec_build_args_retry(&args, tc, retry_count, retry_delay_ms)) {
+      if (!watch_collect_snapshot(watch_root, ignored_dirs, ignored_dir_c, &prev)) {
+        error("Failed to refresh file watcher snapshot after rebuild.");
+        return error_code(CMD_AUTO, 2);
+      }
+    } else {
+      error("Rebuild failed after retries. Watching for more changes.");
+    }
+  }
 }
 
 static bool cmd_collect_configs(const char* selected, const char*** out_configs, int* out_count) {
@@ -1278,31 +1632,11 @@ static int run_cmd_gen(cmd_ctx* cmdctx) {
 }
 
 static int run_cmd_build(cmd_ctx* cmdctx) {
-  const char* target = cmdline_extract_option_value(cmdctx->cl, "t", "target");
-  const char* platform = cmdline_extract_option_value(cmdctx->cl, "p", "platform");
-  const char* config = cmdline_extract_option_value(cmdctx->cl, "c", "config");
-
-  enum {
-    TARGET = 0,
-    PLATFORM,
-  };
-
-  cmdopt opts[] = {
-      [TARGET] = {"t",   "target"},
-      [PLATFORM] = {"p", "platform"},
-  };
-
-  cmdline_consume_all_options(cmdctx->cl, opts, _countof(opts));
-  cmdline_validate(cmdctx->cl);
+  build_cmd_args args = {0};
+  cmd_parse_build_args(cmdctx, &args, NULL, 0);
 
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
-  if (cmdopt_is_star(target) || cmdopt_is_star(platform) || cmdopt_is_star(config)) {
-    if (!cmd_run_build_matrix(target, platform, config, tc))
-      return error_code(CMD_BUILD, 0);
-    return 0;
-  }
-
-  if (!project_build(target, platform, config, tc))
+  if (!cmd_exec_build_args(&args, tc))
     return error_code(CMD_BUILD, 0);
   return 0;
 }
@@ -2149,6 +2483,8 @@ static int run_cmd(cmd c, cmd_ctx* cmdctx) {
       return run_cmd_gen(cmdctx);
     case CMD_BUILD:
       return run_cmd_build(cmdctx);
+    case CMD_AUTO:
+      return run_cmd_auto(cmdctx);
     case CMD_RUN:
       return run_cmd_run(cmdctx);
     case CMD_INFO:

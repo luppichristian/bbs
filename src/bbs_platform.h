@@ -42,3 +42,5 @@
 
 typedef void* (*platform_alloc_fn)(size_t sz);
 typedef unsigned long long platform_timestamp;
+
+static void platform_sleep_ms(unsigned int ms);
