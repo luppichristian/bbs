@@ -1,0 +1,317 @@
+name: bbs
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: windows / ${{ matrix.config }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - debug
+          - default
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download bbs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .bbs-bootstrap | Out-Null
+          $asset = 'bbs-windows-x86_64.zip'
+          $uri = "https://github.com/luppichristian/bbs/releases/latest/download/$asset"
+          $archive = Join-Path '.bbs-bootstrap' $asset
+          Invoke-WebRequest $uri -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath .bbs-bootstrap -Force
+          Remove-Item $archive
+
+      - name: Download bbs (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p .bbs-bootstrap
+          asset='bbs-windows-x86_64.zip'
+          archive=.bbs-bootstrap/$asset
+          curl -L "https://github.com/luppichristian/bbs/releases/latest/download/$asset" -o "$archive"
+          tar -xzf "$archive" -C .bbs-bootstrap
+          rm -f "$archive"
+          chmod +x .bbs-bootstrap/bbs
+
+      - name: Init toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe update --init-toolchain
+
+      - name: Init toolchain (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs update --init-toolchain
+
+      - name: Build project (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe build -t '*' -p windows-x86_64 -c ${{ matrix.config }}
+
+      - name: Build project (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs build -t '*' -p windows-x86_64 -c ${{ matrix.config }}
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe test -t '*' -p windows-x86_64 -c ${{ matrix.config }}
+
+      - name: Run tests (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs test -t '*' -p windows-x86_64 -c ${{ matrix.config }}
+
+      - name: Run targets (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe run -t '*' -p windows-x86_64 -c ${{ matrix.config }}
+
+      - name: Run targets (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs run -t '*' -p windows-x86_64 -c ${{ matrix.config }}
+
+      - name: Create distributions (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe dist -t '*' -p windows-x86_64 -c ${{ matrix.config }}
+
+      - name: Create distributions (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs dist -t '*' -p windows-x86_64 -c ${{ matrix.config }}
+
+      - name: Upload windows dist (windows-x86_64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows-${{ matrix.config }}-windows-x86_64
+          path: dist/${{ matrix.config }}-windows-x86_64
+
+  linux:
+    name: linux / ${{ matrix.config }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - debug
+          - default
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download bbs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .bbs-bootstrap | Out-Null
+          $asset = 'bbs-linux-x86_64.tar.gz'
+          $uri = "https://github.com/luppichristian/bbs/releases/latest/download/$asset"
+          $archive = Join-Path '.bbs-bootstrap' $asset
+          Invoke-WebRequest $uri -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath .bbs-bootstrap -Force
+          Remove-Item $archive
+
+      - name: Download bbs (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p .bbs-bootstrap
+          asset='bbs-linux-x86_64.tar.gz'
+          archive=.bbs-bootstrap/$asset
+          curl -L "https://github.com/luppichristian/bbs/releases/latest/download/$asset" -o "$archive"
+          tar -xzf "$archive" -C .bbs-bootstrap
+          rm -f "$archive"
+          chmod +x .bbs-bootstrap/bbs
+
+      - name: Init toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe update --init-toolchain
+
+      - name: Init toolchain (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs update --init-toolchain
+
+      - name: Build project (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe build -t '*' -p linux-x86_64 -c ${{ matrix.config }}
+
+      - name: Build project (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs build -t '*' -p linux-x86_64 -c ${{ matrix.config }}
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe test -t '*' -p linux-x86_64 -c ${{ matrix.config }}
+
+      - name: Run tests (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs test -t '*' -p linux-x86_64 -c ${{ matrix.config }}
+
+      - name: Run targets (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe run -t '*' -p linux-x86_64 -c ${{ matrix.config }}
+
+      - name: Run targets (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs run -t '*' -p linux-x86_64 -c ${{ matrix.config }}
+
+      - name: Create distributions (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe dist -t '*' -p linux-x86_64 -c ${{ matrix.config }}
+
+      - name: Create distributions (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs dist -t '*' -p linux-x86_64 -c ${{ matrix.config }}
+
+      - name: Upload linux dist (linux-x86_64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-${{ matrix.config }}-linux-x86_64
+          path: dist/${{ matrix.config }}-linux-x86_64
+
+  macos:
+    name: macos / ${{ matrix.config }}
+    runs-on: macos-13
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - debug
+          - default
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download bbs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .bbs-bootstrap | Out-Null
+          $asset = 'bbs-macos-x86_64.tar.gz'
+          $uri = "https://github.com/luppichristian/bbs/releases/latest/download/$asset"
+          $archive = Join-Path '.bbs-bootstrap' $asset
+          Invoke-WebRequest $uri -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath .bbs-bootstrap -Force
+          Remove-Item $archive
+
+      - name: Download bbs (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p .bbs-bootstrap
+          asset='bbs-macos-x86_64.tar.gz'
+          archive=.bbs-bootstrap/$asset
+          curl -L "https://github.com/luppichristian/bbs/releases/latest/download/$asset" -o "$archive"
+          tar -xzf "$archive" -C .bbs-bootstrap
+          rm -f "$archive"
+          chmod +x .bbs-bootstrap/bbs
+
+      - name: Init toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe update --init-toolchain
+
+      - name: Init toolchain (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs update --init-toolchain
+
+      - name: Build project (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe build -t '*' -p macos-x86_64 -c ${{ matrix.config }}
+
+      - name: Build project (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs build -t '*' -p macos-x86_64 -c ${{ matrix.config }}
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe test -t '*' -p macos-x86_64 -c ${{ matrix.config }}
+
+      - name: Run tests (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs test -t '*' -p macos-x86_64 -c ${{ matrix.config }}
+
+      - name: Run targets (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe run -t '*' -p macos-x86_64 -c ${{ matrix.config }}
+
+      - name: Run targets (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs run -t '*' -p macos-x86_64 -c ${{ matrix.config }}
+
+      - name: Create distributions (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.bbs-bootstrap/bbs.exe dist -t '*' -p macos-x86_64 -c ${{ matrix.config }}
+
+      - name: Create distributions (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./.bbs-bootstrap/bbs dist -t '*' -p macos-x86_64 -c ${{ matrix.config }}
+
+      - name: Upload macos dist (macos-x86_64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos-${{ matrix.config }}-macos-x86_64
+          path: dist/${{ matrix.config }}-macos-x86_64
+

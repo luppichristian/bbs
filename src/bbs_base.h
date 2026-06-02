@@ -3,7 +3,7 @@
 #include "bbs_platform.h"
 
 #define VER_MAJOR 0
-#define VER_MINOR 0
+#define VER_MINOR 1
 
 #define ARENA_DIM (1024 * 1024 * 4)  // 4 megabytes, sizeof each block
 
@@ -34,9 +34,9 @@
 #define ANSI_CYAN    "\x1b[36m"
 #define ANSI_WHITE   "\x1b[37m"
 
-#define LABEL_WARN  ANSI_BOLD ANSI_FG_WARN "[warn]" ANSI_RESET " " ANSI_FG_TEXT
-#define LABEL_ERROR ANSI_BOLD ANSI_FG_ERROR "[error]" ANSI_RESET " " ANSI_FG_TEXT
-#define LABEL_DONE  ANSI_BOLD ANSI_FG_SUCCESS "[done]" ANSI_RESET " " ANSI_FG_TEXT
+#define LABEL_WARN  ANSI_BOLD ANSI_FG_WARN "Warn" ANSI_RESET " " ANSI_FG_TEXT
+#define LABEL_ERROR ANSI_BOLD ANSI_FG_ERROR "Error" ANSI_RESET " " ANSI_FG_TEXT
+#define LABEL_DONE  ANSI_BOLD ANSI_FG_SUCCESS "Done" ANSI_RESET " " ANSI_FG_TEXT
 
 typedef struct {
   const char* short_name;  // "a"

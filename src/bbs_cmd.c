@@ -1164,14 +1164,54 @@ static bool gen_append_github_command_steps(project_textbuf* buf, const char* ti
                                  unix_cmd);
 }
 
-static bool gen_append_github_checkout_bbs_step(project_textbuf* buf) {
-  return project_textbuf_append(buf,
-                                "      - name: Checkout bbs\n"
-                                "        uses: actions/checkout@v4\n"
-                                "        with:\n"
-                                "          repository: luppichristian/bbs\n"
-                                "          path: .bbs-bootstrap\n"
-                                "\n");
+static const char* gen_github_bootstrap_archive_name(os target_os) {
+  switch (target_os) {
+    case OS_WINDOWS:
+      return "bbs-windows-x86_64.zip";
+    case OS_LINUX:
+      return "bbs-linux-x86_64.tar.gz";
+    case OS_MACOS:
+      return "bbs-macos-x86_64.tar.gz";
+    default:
+      return NULL;
+  }
+}
+
+static bool gen_append_github_download_bbs_steps(project_textbuf* buf, os target_os) {
+  if (!buf)
+    return false;
+
+  const char* archive = gen_github_bootstrap_archive_name(target_os);
+  if (!archive)
+    return false;
+
+  return project_textbuf_appendf(buf,
+                                 "      - name: Download bbs (Windows)\n"
+                                 "        if: runner.os == 'Windows'\n"
+                                 "        shell: pwsh\n"
+                                 "        run: |\n"
+                                 "          New-Item -ItemType Directory -Force -Path .bbs-bootstrap | Out-Null\n"
+                                 "          $asset = '%s'\n"
+                                 "          $uri = \"https://github.com/luppichristian/bbs/releases/latest/download/$asset\"\n"
+                                 "          $archive = Join-Path '.bbs-bootstrap' $asset\n"
+                                 "          Invoke-WebRequest $uri -OutFile $archive\n"
+                                 "          Expand-Archive -LiteralPath $archive -DestinationPath .bbs-bootstrap -Force\n"
+                                 "          Remove-Item $archive\n"
+                                 "\n"
+                                 "      - name: Download bbs (Unix)\n"
+                                 "        if: runner.os != 'Windows'\n"
+                                 "        shell: bash\n"
+                                 "        run: |\n"
+                                 "          mkdir -p .bbs-bootstrap\n"
+                                 "          asset='%s'\n"
+                                 "          archive=.bbs-bootstrap/$asset\n"
+                                 "          curl -L \"https://github.com/luppichristian/bbs/releases/latest/download/$asset\" -o \"$archive\"\n"
+                                 "          tar -xzf \"$archive\" -C .bbs-bootstrap\n"
+                                 "          rm -f \"$archive\"\n"
+                                 "          chmod +x .bbs-bootstrap/bbs\n"
+                                 "\n",
+                                 archive,
+                                 archive);
 }
 
 static const char* gen_trim_text(const char* text) {
@@ -1261,9 +1301,9 @@ static const char* gen_github_runner_for_platform(const char* platform) {
       break;
     case OS_MACOS:
       if (target_arch == ARCH_X86_64)
-        return "macos-latest";
+        return "macos-13";
       if (target_arch == ARCH_ARM64)
-        return "macos-latest";
+        return "macos-13";
       break;
     default:
       break;
@@ -1283,7 +1323,7 @@ static const char* gen_github_runner_for_os(os target_os) {
     case OS_LINUX:
       return "ubuntu-latest";
     case OS_MACOS:
-      return "macos-latest";
+      return "macos-13";
     default:
       return NULL;
   }
@@ -1438,10 +1478,10 @@ static bool gen_append_github_os_job(project_textbuf* buf,
   if (!job_name || !runner || !host_platform)
     return false;
 
-  const char* build_win = gen_build_platform_command_block("./.bbs-bootstrap/build/bbs.exe", "build", platforms, platform_c);
-  const char* build_unix = gen_build_platform_command_block("./.bbs-bootstrap/build/bbs", "build", platforms, platform_c);
-  const char* dist_win = gen_build_platform_command_block("./.bbs-bootstrap/build/bbs.exe", "dist", platforms, platform_c);
-  const char* dist_unix = gen_build_platform_command_block("./.bbs-bootstrap/build/bbs", "dist", platforms, platform_c);
+  const char* build_win = gen_build_platform_command_block("./.bbs-bootstrap/bbs.exe", "build", platforms, platform_c);
+  const char* build_unix = gen_build_platform_command_block("./.bbs-bootstrap/bbs", "build", platforms, platform_c);
+  const char* dist_win = gen_build_platform_command_block("./.bbs-bootstrap/bbs.exe", "dist", platforms, platform_c);
+  const char* dist_unix = gen_build_platform_command_block("./.bbs-bootstrap/bbs", "dist", platforms, platform_c);
   if (!build_win || !build_unix || !dist_win || !dist_unix)
     return false;
 
@@ -1475,27 +1515,21 @@ static bool gen_append_github_os_job(project_textbuf* buf,
                               "      - uses: actions/checkout@v4\n\n"))
     return false;
 
-  if (!gen_append_github_checkout_bbs_step(buf))
-    return false;
-
-  if (!gen_append_github_command_steps(buf,
-                                       "Build bbs",
-                                       "cmake -S .bbs-bootstrap -B .bbs-bootstrap/build\n          cmake --build .bbs-bootstrap/build --config Release",
-                                       "cmake -S .bbs-bootstrap -B .bbs-bootstrap/build\n          cmake --build .bbs-bootstrap/build --config Release"))
+  if (!gen_append_github_download_bbs_steps(buf, target_os))
     return false;
 
   if (!gen_append_github_command_steps(buf,
                                        "Init toolchain",
-                                       "./.bbs-bootstrap/build/bbs.exe update --init-toolchain",
-                                       "./.bbs-bootstrap/build/bbs update --init-toolchain"))
+                                       "./.bbs-bootstrap/bbs.exe update --init-toolchain",
+                                       "./.bbs-bootstrap/bbs update --init-toolchain"))
     return false;
 
   if (!gen_append_github_command_steps(buf, "Build project", build_win, build_unix))
     return false;
 
   if (has_tests && gen_platform_list_contains(platforms, platform_c, host_platform)) {
-    const char* test_win = gen_build_host_command_block("./.bbs-bootstrap/build/bbs.exe", "test", host_platform);
-    const char* test_unix = gen_build_host_command_block("./.bbs-bootstrap/build/bbs", "test", host_platform);
+    const char* test_win = gen_build_host_command_block("./.bbs-bootstrap/bbs.exe", "test", host_platform);
+    const char* test_unix = gen_build_host_command_block("./.bbs-bootstrap/bbs", "test", host_platform);
     if (!test_win || !test_unix)
       return false;
     if (!gen_append_github_command_steps(buf, "Run tests", test_win, test_unix))
@@ -1503,8 +1537,8 @@ static bool gen_append_github_os_job(project_textbuf* buf,
   }
 
   if (has_runnables && gen_platform_list_contains(platforms, platform_c, host_platform)) {
-    const char* run_win = gen_build_host_command_block("./.bbs-bootstrap/build/bbs.exe", "run", host_platform);
-    const char* run_unix = gen_build_host_command_block("./.bbs-bootstrap/build/bbs", "run", host_platform);
+    const char* run_win = gen_build_host_command_block("./.bbs-bootstrap/bbs.exe", "run", host_platform);
+    const char* run_unix = gen_build_host_command_block("./.bbs-bootstrap/bbs", "run", host_platform);
     if (!run_win || !run_unix)
       return false;
     if (!gen_append_github_command_steps(buf, "Run targets", run_win, run_unix))

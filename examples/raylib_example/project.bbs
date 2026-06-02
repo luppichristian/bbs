@@ -7,7 +7,7 @@ name("Raylib Package Example")
 ver(0.1.0)
 
 targets(
-  header_lib(
+  static_lib(
     id(raylib_pkg)
     name("raylib package")
     repo(
