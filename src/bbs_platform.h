@@ -17,6 +17,7 @@
 #else
 #  include <dirent.h>
 #  include <errno.h>
+#  include <sys/time.h>
 #  include <strings.h>
 #  include <sys/stat.h>
 #  include <sys/wait.h>
@@ -36,6 +37,7 @@
 
 #if !defined(_WIN32)
 #  define _stricmp strcasecmp
+#  define _strnicmp strncasecmp
 #  define _strcmpi strcasecmp
 #  define _getcwd  getcwd
 #endif

@@ -54,9 +54,9 @@ static const char* platform_path_exe(const char* filename, platform_alloc_fn all
   if (GetModuleFileNameA(NULL, exe_path, sizeof(exe_path)))
     got_path = true;
 #elif defined(__linux__)
-  ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-  if (len != -1) {
-    exe_path[len] = '\0';
+  ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+  if (exe_len != -1) {
+    exe_path[exe_len] = '\0';
     got_path = true;
   }
 #elif defined(__APPLE__)
@@ -137,10 +137,10 @@ static platform_timestamp platform_now_ms(void) {
 #if defined(_WIN32)
   return (platform_timestamp)GetTickCount64();
 #else
-  struct timespec ts;
-  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+  struct timeval tv;
+  if (gettimeofday(&tv, NULL) != 0)
     return 0;
-  return (platform_timestamp)ts.tv_sec * 1000ULL + (platform_timestamp)(ts.tv_nsec / 1000000ULL);
+  return (platform_timestamp)tv.tv_sec * 1000ULL + (platform_timestamp)(tv.tv_usec / 1000ULL);
 #endif
 }
 
@@ -509,14 +509,52 @@ static char* platform_quote_windows_arg(const char* arg) {
   return out;
 }
 
+static char* platform_quote_bash_path(const char* path) {
+  const char* src = path ? path : "";
+  size_t len = strlen(src);
+  char* out = (char*)malloc(len * 2 + 3);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  out[wi++] = '"';
+  for (size_t i = 0; i < len; ++i) {
+    char ch = src[i] == '\\' ? '/' : src[i];
+    if (ch == '"' || ch == '$' || ch == '`')
+      out[wi++] = '\\';
+    out[wi++] = ch;
+  }
+  out[wi++] = '"';
+  out[wi] = '\0';
+  return out;
+}
+
 static int platform_run_bash(const char* bash_path, const char* workdir, const char* script) {
   if (!bash_path || !bash_path[0] || !script || !script[0])
     return -1;
 
 #if defined(_WIN32)
+  char* wrapped_script = NULL;
+  if (workdir && workdir[0]) {
+    char* quoted_workdir = platform_quote_bash_path(workdir);
+    if (!quoted_workdir)
+      return -1;
+
+    size_t wrapped_len = strlen("cd ") + strlen(quoted_workdir) + strlen(" && ") + strlen(script) + 1;
+    wrapped_script = (char*)malloc(wrapped_len);
+    if (!wrapped_script) {
+      free(quoted_workdir);
+      return -1;
+    }
+
+    snprintf(wrapped_script, wrapped_len, "cd %s && %s", quoted_workdir, script);
+    free(quoted_workdir);
+  }
+
   char* quoted_exe = platform_quote_windows_arg(bash_path);
-  char* quoted_script = platform_quote_windows_arg(script);
+  char* quoted_script = platform_quote_windows_arg(wrapped_script ? wrapped_script : script);
   if (!quoted_exe || !quoted_script) {
+    free(wrapped_script);
     free(quoted_exe);
     free(quoted_script);
     return -1;
@@ -551,6 +589,7 @@ static int platform_run_bash(const char* bash_path, const char* workdir, const c
 
   free(quoted_exe);
   free(quoted_script);
+  free(wrapped_script);
   free(cmdline);
 
   if (!ok)
