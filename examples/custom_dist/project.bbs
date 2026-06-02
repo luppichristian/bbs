@@ -1,0 +1,26 @@
+configs(
+  debug
+)
+
+id(custom_dist_example)
+name("Custom Dist Example")
+ver(0.2.0)
+
+targets(
+  console(
+    output(custom_dist_example)
+    include_dirs(
+      src
+    )
+    dist(
+      archive(true)
+      name("$PRJ-$TARGET-$VER-$CFG-$OS-$ARC")
+      precommand("cp \"$CWD/assets/README.txt\" \"$WORKDIR/README.txt\"")
+      postcommand("printf 'project=%s\\nplatform=%s\\nversion=%s\\n' '$PRJ' '$PLT' '$VER' > \"$WORKDIR/manifest.txt\"")
+    )
+    units(
+      src/main.c
+      src/info.c
+    )
+  )
+)

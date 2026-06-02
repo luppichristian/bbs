@@ -1,0 +1,6 @@
+builddir(out_build)
+distdir(artifacts_dist)
+dist_archive_format(zip)
+dist_archive_name("$PRJ-$CFG-$PLT-$VER")
+cmake_args("-DCMAKE_VERBOSE_MAKEFILE=ON")
+ctest_args("--output-on-failure")

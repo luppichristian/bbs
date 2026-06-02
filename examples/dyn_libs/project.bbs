@@ -1,0 +1,60 @@
+configs(
+  debug
+)
+
+id(dyn_libs_example)
+name("Dynamic Libraries Example")
+ver(0.1.0)
+
+targets(
+  dyn_lib(
+    id(messages)
+    output(messages)
+    include_dirs(
+      src
+    )
+    defines(
+      MESSAGES_EXPORTS
+    )
+    units(
+      src/messages.c
+    )
+  )
+
+  dyn_lib(
+    id(math_ops)
+    output(math_ops)
+    include_dirs(
+      src
+    )
+    dependencies(
+      messages
+    )
+    defines(
+      MATH_OPS_EXPORTS
+    )
+    units(
+      src/math_ops.c
+    )
+  )
+
+  console(
+    output(dyn_libs_example)
+    include_dirs(
+      src
+    )
+    dependencies(
+      math_ops
+    )
+    pre_run_cmds(
+      "mkdir -p \"$DBUILD/bin/Debug\""
+      "cp -f \"$DBUILD/lib/Debug/\"*.dll \"$DBUILD/bin/Debug/\" 2>/dev/null || true"
+    )
+    dist(
+      archive(true)
+    )
+    units(
+      src/main.c
+    )
+  )
+)

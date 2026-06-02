@@ -1,0 +1,46 @@
+configs(
+  debug
+)
+
+id(static_lib_example)
+name("Static Library Example")
+ver(0.1.0)
+
+targets(
+  static_lib(
+    id(greeter)
+    output(greeter)
+    include_dirs(
+      src
+    )
+    units(
+      src/greeter.c
+    )
+  )
+
+  console(
+    output(static_lib_example)
+    include_dirs(
+      src
+    )
+    dependencies(
+      greeter
+    )
+    units(
+      src/main.c
+    )
+  )
+
+  test(
+    output(static_lib_example_test)
+    include_dirs(
+      src
+    )
+    dependencies(
+      greeter
+    )
+    units(
+      tests/test_main.c
+    )
+  )
+)

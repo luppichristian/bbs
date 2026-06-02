@@ -1,0 +1,24 @@
+configs(
+  debug
+  release
+)
+
+id(user_config_example)
+name("User Config Example")
+ver(0.3.0)
+
+targets(
+  console(
+    output(user_config_example)
+    include_dirs(
+      src
+    )
+    dist(
+      archive(true)
+    )
+    units(
+      src/main.c
+      src/config_info.c
+    )
+  )
+)

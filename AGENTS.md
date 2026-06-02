@@ -2,8 +2,8 @@
 
 ## Build
 
-- Build the project with `build.bat` from the repository root.
-- Prefer `build.bat` for validation after code changes.
+- Build the project with `build_clang.bat` from the repository root.
+- Prefer `build_clang.bat` for validation after code changes.
 
 ## Source Layout
 

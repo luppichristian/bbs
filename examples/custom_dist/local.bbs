@@ -1,0 +1,2 @@
+distdir(releases)
+dist_archive_name("$PRJ-$TARGET-$CFG-$PLT")

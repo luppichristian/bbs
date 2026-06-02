@@ -1,0 +1,20 @@
+configs(
+  debug
+)
+
+id(obj_lib_example)
+name("Object Library Example")
+ver(0.1.0)
+
+targets(
+  obj_lib(
+    id(calc_core)
+    output(calc_core)
+    include_dirs(
+      src
+    )
+    units(
+      src/calc.c
+    )
+  )
+)

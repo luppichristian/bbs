@@ -1438,6 +1438,68 @@ static const char* gen_build_host_command_block(const char* exe_path, const char
   return arena_text(text, strlen(text));
 }
 
+static bool gen_append_github_config_matrix(project_textbuf* buf, const project* proj) {
+  if (!buf || !proj)
+    return false;
+
+  const char* default_config = gen_default_config_name(proj);
+  if (proj->config_c > 0 && proj->configs) {
+    for (int i = 0; i < proj->config_c; ++i) {
+      const char* cfg = proj->configs[i] && proj->configs[i][0] ? proj->configs[i] : default_config;
+      if (!project_textbuf_appendf(buf, "          - %s\n", cfg))
+        return false;
+    }
+  } else if (!project_textbuf_appendf(buf, "          - %s\n", default_config)) {
+    return false;
+  }
+
+  return true;
+}
+
+static const char* gen_build_release_package_block(os target_os, const char** platforms, int platform_c, const char* dist_root) {
+  if (!platforms || platform_c <= 0 || !dist_root)
+    return NULL;
+
+  project_textbuf buf = {0};
+  for (int i = 0; i < platform_c; ++i) {
+    bool first = i == 0;
+    if (target_os == OS_WINDOWS) {
+      if (!project_textbuf_appendf(&buf,
+                                   first ? "New-Item -ItemType Directory -Force -Path release | Out-Null\n          Compress-Archive -Path \"%s/${{ matrix.config }}-%s/*\" -DestinationPath \"release/${{ github.event.repository.name }}-${{ matrix.config }}-%s.zip\" -Force"
+                                         : "\n          Compress-Archive -Path \"%s/${{ matrix.config }}-%s/*\" -DestinationPath \"release/${{ github.event.repository.name }}-${{ matrix.config }}-%s.zip\" -Force",
+                                   dist_root,
+                                   platforms[i],
+                                   platforms[i],
+                                   dist_root,
+                                   platforms[i],
+                                   platforms[i])) {
+        if (buf.data)
+          free(buf.data);
+        return NULL;
+      }
+    } else {
+      if (!project_textbuf_appendf(&buf,
+                                   first ? "mkdir -p release\n          tar -czf \"release/${{ github.event.repository.name }}-${{ matrix.config }}-%s.tar.gz\" -C \"%s/${{ matrix.config }}-%s\" ."
+                                         : "\n          tar -czf \"release/${{ github.event.repository.name }}-${{ matrix.config }}-%s.tar.gz\" -C \"%s/${{ matrix.config }}-%s\" .",
+                                   platforms[i],
+                                   dist_root,
+                                   platforms[i],
+                                   platforms[i],
+                                   dist_root,
+                                   platforms[i])) {
+        if (buf.data)
+          free(buf.data);
+        return NULL;
+      }
+    }
+  }
+
+  const char* out = arena_text(buf.data ? buf.data : "", buf.len);
+  if (buf.data)
+    free(buf.data);
+  return out;
+}
+
 static bool gen_append_github_upload_steps(project_textbuf* buf, const char* dist_root, const char* job_name, const char** platforms, int platform_c) {
   if (!buf || !dist_root || !job_name || !platforms || platform_c <= 0)
     return false;
@@ -1580,7 +1642,7 @@ static bool gen_build_github_workflow_text(const project* proj, project_textbuf*
     return false;
 
   if (!project_textbuf_append(buf,
-                              "name: bbs\n\n"
+                              "name: ci\n\n"
                               "on:\n"
                               "  push:\n"
                               "  pull_request:\n"
@@ -1594,6 +1656,161 @@ static bool gen_build_github_workflow_text(const project* proj, project_textbuf*
     if (!gen_append_github_os_job(buf, proj, (os)osi, platform_groups[osi], platform_counts[osi], has_tests, has_runnables, dist_root))
       return false;
   }
+
+  return true;
+}
+
+static bool gen_append_github_release_os_job(project_textbuf* buf,
+                                             const project* proj,
+                                             os target_os,
+                                             const char** platforms,
+                                             int platform_c,
+                                             const char* dist_root) {
+  if (!buf || !proj || !platforms || platform_c <= 0 || !dist_root)
+    return false;
+
+  const char* job_name = gen_github_job_name_for_os(target_os);
+  const char* runner = gen_github_runner_for_os(target_os);
+  if (!job_name || !runner)
+    return false;
+
+  const char* build_win = gen_build_platform_command_block("./.bbs-bootstrap/bbs.exe", "build", platforms, platform_c);
+  const char* build_unix = gen_build_platform_command_block("./.bbs-bootstrap/bbs", "build", platforms, platform_c);
+  const char* dist_win = gen_build_platform_command_block("./.bbs-bootstrap/bbs.exe", "dist", platforms, platform_c);
+  const char* dist_unix = gen_build_platform_command_block("./.bbs-bootstrap/bbs", "dist", platforms, platform_c);
+  const char* package_win = gen_build_release_package_block(OS_WINDOWS, platforms, platform_c, dist_root);
+  const char* package_unix = gen_build_release_package_block(target_os, platforms, platform_c, dist_root);
+  if (!build_win || !build_unix || !dist_win || !dist_unix || !package_win || !package_unix)
+    return false;
+
+  if (!project_textbuf_appendf(buf,
+                               "  %s:\n"
+                               "    name: %s / ${{ matrix.config }}\n"
+                               "    runs-on: %s\n"
+                               "    strategy:\n"
+                               "      fail-fast: false\n"
+                               "      matrix:\n"
+                               "        config:\n",
+                               job_name,
+                               job_name,
+                               runner))
+    return false;
+
+  if (!gen_append_github_config_matrix(buf, proj))
+    return false;
+
+  if (!project_textbuf_append(buf,
+                              "\n"
+                              "    steps:\n"
+                              "      - uses: actions/checkout@v4\n"
+                              "        with:\n"
+                              "          ref: ${{ inputs.tag || github.ref }}\n\n"))
+    return false;
+
+  if (!gen_append_github_download_bbs_steps(buf, target_os))
+    return false;
+  if (!gen_append_github_command_steps(buf,
+                                       "Init toolchain",
+                                       "./.bbs-bootstrap/bbs.exe update --init-toolchain",
+                                       "./.bbs-bootstrap/bbs update --init-toolchain"))
+    return false;
+  if (!gen_append_github_command_steps(buf, "Build project", build_win, build_unix))
+    return false;
+  if (!gen_append_github_command_steps(buf, "Create distributions", dist_win, dist_unix))
+    return false;
+  if (!gen_append_github_command_steps(buf, "Package release artifacts", package_win, package_unix))
+    return false;
+
+  if (!project_textbuf_appendf(buf,
+                               "      - name: Upload %s release artifacts\n"
+                               "        uses: actions/upload-artifact@v4\n"
+                               "        with:\n"
+                               "          name: release-%s-${{ matrix.config }}\n"
+                               "          path: release/*\n\n",
+                               job_name,
+                               job_name))
+    return false;
+
+  return true;
+}
+
+static bool gen_build_github_release_workflow_text(const project* proj, project_textbuf* buf, const char** platforms, int platform_c) {
+  if (!proj || !buf)
+    return false;
+
+  const char* dist_root = (proj->user_cfg.distdir && proj->user_cfg.distdir[0]) ? proj->user_cfg.distdir : DEF_DIST_DIR;
+
+  const char* default_platforms[] = {
+      "windows-x86_64",
+      "linux-x86_64",
+      "macos-x86_64",
+  };
+  const char** selected_platforms = platforms;
+  int selected_platform_c = platform_c;
+  if (!selected_platforms || selected_platform_c <= 0) {
+    selected_platforms = default_platforms;
+    selected_platform_c = (int)_countof(default_platforms);
+  }
+
+  const char** platform_groups[OS_MAX] = {0};
+  int platform_counts[OS_MAX] = {0};
+  if (!gen_collect_platforms_by_os(selected_platforms, selected_platform_c, platform_groups, platform_counts))
+    return false;
+
+  if (!project_textbuf_append(buf,
+                              "name: release\n\n"
+                              "on:\n"
+                              "  push:\n"
+                              "    tags:\n"
+                              "      - 'v*'\n"
+                              "  workflow_dispatch:\n"
+                              "    inputs:\n"
+                              "      tag:\n"
+                              "        description: Release tag to create or update\n"
+                              "        required: true\n"
+                              "        type: string\n\n"
+                              "jobs:\n"))
+    return false;
+
+  for (int osi = 0; osi < OS_MAX; ++osi) {
+    if (platform_counts[osi] <= 0)
+      continue;
+    if (!gen_append_github_release_os_job(buf, proj, (os)osi, platform_groups[osi], platform_counts[osi], dist_root))
+      return false;
+  }
+
+  if (!project_textbuf_append(buf,
+                              "  publish:\n"
+                              "    name: publish\n"
+                              "    runs-on: ubuntu-latest\n"
+                              "    needs:\n"))
+    return false;
+
+  for (int osi = 0; osi < OS_MAX; ++osi) {
+    if (platform_counts[osi] <= 0)
+      continue;
+    if (!project_textbuf_appendf(buf, "      - %s\n", gen_github_job_name_for_os((os)osi)))
+      return false;
+  }
+
+  if (!project_textbuf_append(buf,
+                              "    permissions:\n"
+                              "      contents: write\n"
+                              "    env:\n"
+                              "      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}\n"
+                              "    steps:\n"
+                              "      - name: Download packaged artifacts\n"
+                              "        uses: actions/download-artifact@v4\n"
+                              "        with:\n"
+                              "          path: release-assets\n"
+                              "          merge-multiple: true\n\n"
+                              "      - name: Publish release\n"
+                              "        uses: softprops/action-gh-release@v2\n"
+                              "        with:\n"
+                              "          tag_name: ${{ env.RELEASE_TAG }}\n"
+                              "          generate_release_notes: true\n"
+                              "          files: release-assets/*\n"))
+    return false;
 
   return true;
 }
@@ -1637,17 +1854,31 @@ static int run_cmd_gen(cmd_ctx* cmdctx) {
     if (!gen_parse_github_platforms(github_platforms_csv, &github_platforms, &github_platform_c))
       return error_code(CMD_GEN, 21);
 
-    project_textbuf buf = {0};
-    if (!gen_build_github_workflow_text(&proj, &buf, github_platforms, github_platform_c)) {
-      if (buf.data)
-        free(buf.data);
+    project_textbuf ci_buf = {0};
+    if (!gen_build_github_workflow_text(&proj, &ci_buf, github_platforms, github_platform_c)) {
+      if (ci_buf.data)
+        free(ci_buf.data);
       error("Failed to build GitHub workflow content.");
       return error_code(CMD_GEN, 22);
     }
 
-    int rc = gen_write_text_file(get_path_cwd(".github/workflows/bbs.yml"), buf.data ? buf.data : "", opts[OVERRIDE].present, CMD_GEN, 23);
-    if (buf.data)
-      free(buf.data);
+    project_textbuf release_buf = {0};
+    if (!gen_build_github_release_workflow_text(&proj, &release_buf, github_platforms, github_platform_c)) {
+      if (ci_buf.data)
+        free(ci_buf.data);
+      if (release_buf.data)
+        free(release_buf.data);
+      error("Failed to build GitHub release workflow content.");
+      return error_code(CMD_GEN, 23);
+    }
+
+    int rc = gen_write_text_file(get_path_cwd(".github/workflows/ci.yml"), ci_buf.data ? ci_buf.data : "", opts[OVERRIDE].present, CMD_GEN, 24);
+    if (rc == 0)
+      rc = gen_write_text_file(get_path_cwd(".github/workflows/release.yml"), release_buf.data ? release_buf.data : "", opts[OVERRIDE].present, CMD_GEN, 25);
+    if (ci_buf.data)
+      free(ci_buf.data);
+    if (release_buf.data)
+      free(release_buf.data);
     return rc;
   }
 

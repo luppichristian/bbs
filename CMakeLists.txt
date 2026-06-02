@@ -17,6 +17,7 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 if(MSVC)
+  set_property(TARGET bbs PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
   target_compile_definitions(bbs PRIVATE _CRT_SECURE_NO_WARNINGS)
   target_compile_options(bbs PRIVATE /W4)
 else()

@@ -1,0 +1,46 @@
+configs(
+  debug
+)
+
+id(header_lib_example)
+name("Header Library Example")
+ver(0.1.0)
+
+targets(
+  header_lib(
+    id(strings)
+    output(strings)
+    include_dirs(
+      src
+    )
+    units(
+      src/strings.h
+    )
+  )
+
+  console(
+    output(header_lib_example)
+    include_dirs(
+      src
+    )
+    dependencies(
+      strings
+    )
+    units(
+      src/main.c
+    )
+  )
+
+  test(
+    output(header_lib_example_test)
+    include_dirs(
+      src
+    )
+    dependencies(
+      strings
+    )
+    units(
+      tests/test_main.c
+    )
+  )
+)
