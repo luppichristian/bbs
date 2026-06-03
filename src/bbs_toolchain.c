@@ -402,9 +402,8 @@ static void toolchain_fill_env_platform_support(toolchain_env* env, bool is_curr
 
   if (env->p_os == OS_WINDOWS) {
     if (has_msvc) {
-      toolchain_env_enable_support(env, OS_WINDOWS, ARCH_X86_64, "msvc");
-      toolchain_env_enable_support(env, OS_WINDOWS, ARCH_X86, "msvc");
-      toolchain_env_enable_support(env, OS_WINDOWS, ARCH_ARM64, "msvc");
+      for (int i = 0; i < (int)(sizeof(TOOLCHAIN_MSVC_SUPPORTED_ARCHES) / sizeof(TOOLCHAIN_MSVC_SUPPORTED_ARCHES[0])); ++i)
+        toolchain_env_enable_support(env, OS_WINDOWS, TOOLCHAIN_MSVC_SUPPORTED_ARCHES[i], "msvc");
     } else if (has_cmake) {
       toolchain_env_enable_support(env, OS_WINDOWS, env->p_arch, "host-toolchain");
     }
@@ -414,8 +413,8 @@ static void toolchain_fill_env_platform_support(toolchain_env* env, bool is_curr
     toolchain_env_enable_support(env, OS_LINUX, env->p_arch, "host-toolchain");
 
   if (env->p_os == OS_MACOS && has_xcode) {
-    toolchain_env_enable_support(env, OS_MACOS, ARCH_X86_64, "xcode");
-    toolchain_env_enable_support(env, OS_MACOS, ARCH_ARM64, "xcode");
+    for (int i = 0; i < (int)(sizeof(TOOLCHAIN_XCODE_SUPPORTED_ARCHES) / sizeof(TOOLCHAIN_XCODE_SUPPORTED_ARCHES[0])); ++i)
+      toolchain_env_enable_support(env, OS_MACOS, TOOLCHAIN_XCODE_SUPPORTED_ARCHES[i], "xcode");
   } else if (env->p_os == OS_MACOS && has_cmake) {
     toolchain_env_enable_support(env, OS_MACOS, env->p_arch, "host-toolchain");
   }
@@ -2061,6 +2060,29 @@ static bool toolchain_validate_named_string(node* value_n, const char* scope_lab
   return true;
 }
 
+static const toolchain_attr_info* toolchain_find_attr_info(const toolchain_attr_info* infos, int info_c, const char* name) {
+  if (!infos || info_c <= 0 || !name || !name[0])
+    return NULL;
+
+  for (int i = 0; i < info_c; ++i) {
+    if (_stricmp(infos[i].name, name) == 0)
+      return &infos[i];
+  }
+
+  return NULL;
+}
+
+static bool toolchain_validate_string_attrs(node* scope, const char* scope_label, const toolchain_attr_info* infos, int info_c) {
+  for (int i = 0; i < info_c; ++i) {
+    if (infos[i].kind != TOOLCHAIN_ATTR_KIND_STRING)
+      continue;
+    if (!toolchain_validate_named_string(node_get_child(scope, infos[i].name), scope_label, infos[i].name, infos[i].required))
+      return false;
+  }
+
+  return true;
+}
+
 static bool toolchain_validate_host_section(node* host_n, const char* scope_label) {
   if (!host_n)
     return true;
@@ -2075,7 +2097,15 @@ static bool toolchain_validate_host_section(node* host_n, const char* scope_labe
       return false;
     }
 
-    if (_stricmp(child->name, "arch") == 0) {
+    const toolchain_attr_info* attr = toolchain_find_attr_info(TOOLCHAIN_HOST_ATTR_INFOS,
+                                                                (int)(sizeof(TOOLCHAIN_HOST_ATTR_INFOS) / sizeof(TOOLCHAIN_HOST_ATTR_INFOS[0])),
+                                                                child->name);
+    if (!attr) {
+      error("Unknown host attribute '%s' in %s.", child->name, scope_label);
+      return false;
+    }
+
+    if (_stricmp(attr->name, "arch") == 0) {
       const char* arch_id = node_get_idf(child);
       if (!arch_id) {
         error("Attribute 'arch' in %s must be an identifier.", scope_label);
@@ -2092,7 +2122,7 @@ static bool toolchain_validate_host_section(node* host_n, const char* scope_labe
       continue;
     }
 
-    if (_stricmp(child->name, "os") == 0) {
+    if (_stricmp(attr->name, "os") == 0) {
       const char* os_id = node_get_idf(child);
       if (!os_id) {
         error("Attribute 'os' in %s must be an identifier.", scope_label);
@@ -2108,9 +2138,6 @@ static bool toolchain_validate_host_section(node* host_n, const char* scope_labe
       }
       continue;
     }
-
-    error("Unknown host attribute '%s' in %s.", child->name, scope_label);
-    return false;
   }
 
   return true;
@@ -2129,19 +2156,18 @@ static bool toolchain_validate_tool_item(node* tool_n, const char* scope_label) 
       error("Tool entries in %s must use named attributes.", scope_label);
       return false;
     }
-    if (_stricmp(child->name, "id") != 0 && _stricmp(child->name, "path") != 0 && _stricmp(child->name, "version") != 0) {
+    if (!toolchain_find_attr_info(TOOLCHAIN_TOOL_ATTR_INFOS,
+                                  (int)(sizeof(TOOLCHAIN_TOOL_ATTR_INFOS) / sizeof(TOOLCHAIN_TOOL_ATTR_INFOS[0])),
+                                  child->name)) {
       error("Unknown tool attribute '%s' in %s.", child->name, scope_label);
       return false;
     }
   }
 
-  if (!toolchain_validate_named_string(node_get_child(tool_n, "id"), scope_label, "id", false))
-    return false;
-  if (!toolchain_validate_named_string(node_get_child(tool_n, "path"), scope_label, "path", true))
-    return false;
-  if (!toolchain_validate_named_string(node_get_child(tool_n, "version"), scope_label, "version", false))
-    return false;
-  return true;
+  return toolchain_validate_string_attrs(tool_n,
+                                         scope_label,
+                                         TOOLCHAIN_TOOL_ATTR_INFOS,
+                                         (int)(sizeof(TOOLCHAIN_TOOL_ATTR_INFOS) / sizeof(TOOLCHAIN_TOOL_ATTR_INFOS[0])));
 }
 
 static bool toolchain_validate_sdk_item(node* sdk_n, const char* scope_label) {
@@ -2157,33 +2183,18 @@ static bool toolchain_validate_sdk_item(node* sdk_n, const char* scope_label) {
       error("SDK entries in %s must use named attributes.", scope_label);
       return false;
     }
-    if (_stricmp(child->name, "name") != 0 &&
-        _stricmp(child->name, "version") != 0 &&
-        _stricmp(child->name, "base_path") != 0 &&
-        _stricmp(child->name, "inc_path") != 0 &&
-        _stricmp(child->name, "src_path") != 0 &&
-        _stricmp(child->name, "lib_path") != 0 &&
-        _stricmp(child->name, "bin_path") != 0) {
+    if (!toolchain_find_attr_info(TOOLCHAIN_SDK_ATTR_INFOS,
+                                  (int)(sizeof(TOOLCHAIN_SDK_ATTR_INFOS) / sizeof(TOOLCHAIN_SDK_ATTR_INFOS[0])),
+                                  child->name)) {
       error("Unknown sdk attribute '%s' in %s.", child->name, scope_label);
       return false;
     }
   }
 
-  if (!toolchain_validate_named_string(node_get_child(sdk_n, "name"), scope_label, "name", false))
-    return false;
-  if (!toolchain_validate_named_string(node_get_child(sdk_n, "version"), scope_label, "version", false))
-    return false;
-  if (!toolchain_validate_named_string(node_get_child(sdk_n, "base_path"), scope_label, "base_path", false))
-    return false;
-  if (!toolchain_validate_named_string(node_get_child(sdk_n, "inc_path"), scope_label, "inc_path", false))
-    return false;
-  if (!toolchain_validate_named_string(node_get_child(sdk_n, "src_path"), scope_label, "src_path", false))
-    return false;
-  if (!toolchain_validate_named_string(node_get_child(sdk_n, "lib_path"), scope_label, "lib_path", false))
-    return false;
-  if (!toolchain_validate_named_string(node_get_child(sdk_n, "bin_path"), scope_label, "bin_path", false))
-    return false;
-  return true;
+  return toolchain_validate_string_attrs(sdk_n,
+                                         scope_label,
+                                         TOOLCHAIN_SDK_ATTR_INFOS,
+                                         (int)(sizeof(TOOLCHAIN_SDK_ATTR_INFOS) / sizeof(TOOLCHAIN_SDK_ATTR_INFOS[0])));
 }
 
 static bool toolchain_validate_probes_section(node* probes_n, const char* scope_label) {
@@ -2199,13 +2210,18 @@ static bool toolchain_validate_probes_section(node* probes_n, const char* scope_
       error("Attribute 'probes' in %s must use named attributes.", scope_label);
       return false;
     }
-    if (_stricmp(child->name, "docker_buildx_platforms") != 0) {
+    if (!toolchain_find_attr_info(TOOLCHAIN_PROBE_ATTR_INFOS,
+                                  (int)(sizeof(TOOLCHAIN_PROBE_ATTR_INFOS) / sizeof(TOOLCHAIN_PROBE_ATTR_INFOS[0])),
+                                  child->name)) {
       error("Unknown probe attribute '%s' in %s.", child->name, scope_label);
       return false;
     }
   }
 
-  return toolchain_validate_named_string(node_get_child(probes_n, "docker_buildx_platforms"), scope_label, "docker_buildx_platforms", false);
+  return toolchain_validate_string_attrs(probes_n,
+                                         scope_label,
+                                         TOOLCHAIN_PROBE_ATTR_INFOS,
+                                         (int)(sizeof(TOOLCHAIN_PROBE_ATTR_INFOS) / sizeof(TOOLCHAIN_PROBE_ATTR_INFOS[0])));
 }
 
 static bool toolchain_validate_env_item(node* env_n, const char* scope_label) {
@@ -2222,27 +2238,18 @@ static bool toolchain_validate_env_item(node* env_n, const char* scope_label) {
       return false;
     }
 
-    if (_stricmp(child->name, "id") == 0 ||
-        _stricmp(child->name, "provider") == 0 ||
-        _stricmp(child->name, "name") == 0) {
-      continue;
+    if (!toolchain_find_attr_info(TOOLCHAIN_ENV_ATTR_INFOS,
+                                  (int)(sizeof(TOOLCHAIN_ENV_ATTR_INFOS) / sizeof(TOOLCHAIN_ENV_ATTR_INFOS[0])),
+                                  child->name)) {
+      error("Unknown environment attribute '%s' in %s.", child->name, scope_label);
+      return false;
     }
-    if (_stricmp(child->name, "host") == 0 ||
-        _stricmp(child->name, "probes") == 0 ||
-        _stricmp(child->name, "tools") == 0 ||
-        _stricmp(child->name, "sdks") == 0) {
-      continue;
-    }
-
-    error("Unknown environment attribute '%s' in %s.", child->name, scope_label);
-    return false;
   }
 
-  if (!toolchain_validate_named_string(node_get_child(env_n, "id"), scope_label, "id", true))
-    return false;
-  if (!toolchain_validate_named_string(node_get_child(env_n, "provider"), scope_label, "provider", true))
-    return false;
-  if (!toolchain_validate_named_string(node_get_child(env_n, "name"), scope_label, "name", true))
+  if (!toolchain_validate_string_attrs(env_n,
+                                       scope_label,
+                                       TOOLCHAIN_ENV_ATTR_INFOS,
+                                       (int)(sizeof(TOOLCHAIN_ENV_ATTR_INFOS) / sizeof(TOOLCHAIN_ENV_ATTR_INFOS[0]))))
     return false;
   if (!toolchain_validate_host_section(node_get_child(env_n, "host"), scope_label))
     return false;
@@ -2299,6 +2306,13 @@ static bool toolchain_validate_tree(node* tree) {
   node_foreach(tree, child) {
     if (!child || !child->name) {
       error("Unexpected scalar item in toolchain config.");
+      return false;
+    }
+
+    if (!toolchain_find_attr_info(TOOLCHAIN_ROOT_ATTR_INFOS,
+                                  (int)(sizeof(TOOLCHAIN_ROOT_ATTR_INFOS) / sizeof(TOOLCHAIN_ROOT_ATTR_INFOS[0])),
+                                  child->name)) {
+      error("Unknown attribute '%s' in toolchain config.", child->name);
       return false;
     }
 
@@ -2367,9 +2381,6 @@ static bool toolchain_validate_tree(node* tree) {
       }
       continue;
     }
-
-    error("Unknown attribute '%s' in toolchain config.", child->name);
-    return false;
   }
 
   return true;

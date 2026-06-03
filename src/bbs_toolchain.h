@@ -7,6 +7,18 @@ typedef struct {
   const char* version;
 } tool;
 
+typedef enum {
+  TOOLCHAIN_ATTR_KIND_STRING,
+  TOOLCHAIN_ATTR_KIND_IDENTIFIER,
+  TOOLCHAIN_ATTR_KIND_SECTION,
+} toolchain_attr_kind;
+
+typedef struct {
+  const char* name;
+  toolchain_attr_kind kind;
+  bool required;
+} toolchain_attr_info;
+
 typedef struct {
   const char* name;     // "windows-sdk", "xcode", "esp-idf", ...
   const char* version;  // optional
@@ -126,6 +138,51 @@ typedef struct {
   int env_c;
   int env_cap;
 } toolchain;
+
+static const toolchain_attr_info TOOLCHAIN_HOST_ATTR_INFOS[] = {
+    {.name = "arch", .kind = TOOLCHAIN_ATTR_KIND_IDENTIFIER, .required = false},
+    {.name = "os", .kind = TOOLCHAIN_ATTR_KIND_IDENTIFIER, .required = false},
+};
+
+static const toolchain_attr_info TOOLCHAIN_TOOL_ATTR_INFOS[] = {
+    {.name = "id", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = false},
+    {.name = "path", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = true},
+    {.name = "version", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = false},
+};
+
+static const toolchain_attr_info TOOLCHAIN_SDK_ATTR_INFOS[] = {
+    {.name = "name", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = false},
+    {.name = "version", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = false},
+    {.name = "base_path", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = false},
+    {.name = "inc_path", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = false},
+    {.name = "src_path", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = false},
+    {.name = "lib_path", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = false},
+    {.name = "bin_path", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = false},
+};
+
+static const toolchain_attr_info TOOLCHAIN_PROBE_ATTR_INFOS[] = {
+    {.name = "docker_buildx_platforms", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = false},
+};
+
+static const toolchain_attr_info TOOLCHAIN_ENV_ATTR_INFOS[] = {
+    {.name = "id", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = true},
+    {.name = "provider", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = true},
+    {.name = "name", .kind = TOOLCHAIN_ATTR_KIND_STRING, .required = true},
+    {.name = "host", .kind = TOOLCHAIN_ATTR_KIND_SECTION, .required = false},
+    {.name = "probes", .kind = TOOLCHAIN_ATTR_KIND_SECTION, .required = false},
+    {.name = "tools", .kind = TOOLCHAIN_ATTR_KIND_SECTION, .required = false},
+    {.name = "sdks", .kind = TOOLCHAIN_ATTR_KIND_SECTION, .required = false},
+};
+
+static const toolchain_attr_info TOOLCHAIN_ROOT_ATTR_INFOS[] = {
+    {.name = "host", .kind = TOOLCHAIN_ATTR_KIND_SECTION, .required = false},
+    {.name = "tools", .kind = TOOLCHAIN_ATTR_KIND_SECTION, .required = false},
+    {.name = "sdks", .kind = TOOLCHAIN_ATTR_KIND_SECTION, .required = false},
+    {.name = "environments", .kind = TOOLCHAIN_ATTR_KIND_SECTION, .required = false},
+};
+
+static const arch TOOLCHAIN_MSVC_SUPPORTED_ARCHES[] = {ARCH_X86_64, ARCH_X86, ARCH_ARM64};
+static const arch TOOLCHAIN_XCODE_SUPPORTED_ARCHES[] = {ARCH_X86_64, ARCH_ARM64};
 
 static const tool_discover_strat TOOL_DISCOVER_STRATS[] = {
     // BUILD_SYSTEM

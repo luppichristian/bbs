@@ -1,6 +1,80 @@
 #pragma once
 #include "bbs_user.h"
 
+static const user_attr_info* user_find_attr_info(const char* name) {
+  if (!name || !name[0])
+    return NULL;
+
+  for (int i = 0; i < (int)(sizeof(USER_ATTR_INFOS) / sizeof(USER_ATTR_INFOS[0])); ++i) {
+    if (_stricmp(USER_ATTR_INFOS[i].name, name) == 0)
+      return &USER_ATTR_INFOS[i];
+  }
+
+  return NULL;
+}
+
+static const user_gen_attr_info* user_find_gen_attr_info(const char* name) {
+  if (!name || !name[0])
+    return NULL;
+
+  for (int i = 0; i < (int)(sizeof(USER_GEN_ATTR_INFOS) / sizeof(USER_GEN_ATTR_INFOS[0])); ++i) {
+    if (_stricmp(USER_GEN_ATTR_INFOS[i].name, name) == 0)
+      return &USER_GEN_ATTR_INFOS[i];
+  }
+
+  return NULL;
+}
+
+static bool user_try_text_attr(user_attr attr, user_text_attr* out) {
+  if (!out)
+    return false;
+
+  switch (attr) {
+    case USER_ATTR_BUILDDIR:
+      *out = USER_TEXT_BUILDDIR;
+      return true;
+    case USER_ATTR_DISTDIR:
+      *out = USER_TEXT_DISTDIR;
+      return true;
+    case USER_ATTR_DIST_ARCHIVE_FORMAT:
+      *out = USER_TEXT_DIST_ARCHIVE_FORMAT;
+      return true;
+    case USER_ATTR_DIST_ARCHIVE_NAME:
+      *out = USER_TEXT_DIST_ARCHIVE_NAME;
+      return true;
+    case USER_ATTR_CMAKE_ARGS:
+      *out = USER_TEXT_CMAKE_ARGS;
+      return true;
+    case USER_ATTR_CMAKE_BUILD_ARGS:
+      *out = USER_TEXT_CMAKE_BUILD_ARGS;
+      return true;
+    case USER_ATTR_CTEST_ARGS:
+      *out = USER_TEXT_CTEST_ARGS;
+      return true;
+    default:
+      return false;
+  }
+}
+
+static bool user_try_uint_attr(user_attr attr, user_uint_attr* out) {
+  if (!out)
+    return false;
+
+  switch (attr) {
+    case USER_ATTR_AUTO_DEBOUNCE_MS:
+      *out = USER_UINT_AUTO_DEBOUNCE_MS;
+      return true;
+    case USER_ATTR_AUTO_RETRY_COUNT:
+      *out = USER_UINT_AUTO_RETRY_COUNT;
+      return true;
+    case USER_ATTR_AUTO_RETRY_DELAY_MS:
+      *out = USER_UINT_AUTO_RETRY_DELAY_MS;
+      return true;
+    default:
+      return false;
+  }
+}
+
 static const char* user_scalar_text(node* n) {
   if (!n)
     return NULL;
@@ -312,16 +386,15 @@ static void user_apply_defaults(user* u) {
   if (!u)
     return;
 
-  u->builddir = DEF_BUILD_DIR;
-  u->distdir = DEF_DIST_DIR;
-  u->auto_debounce_ms = 500;
-  u->auto_retry_count = 3;
-  u->auto_retry_delay_ms = 250;
-  u->dist_archive_format = "zip";
-  u->dist_archive_name = "$CFG-$OS-$ARC--$VER";
-  u->cmake_args = NULL;
-  u->cmake_build_args = NULL;
-  u->ctest_args = NULL;
+  memset(u->text_values, 0, sizeof(u->text_values));
+  memset(u->uint_values, 0, sizeof(u->uint_values));
+  u->text_values[USER_TEXT_BUILDDIR] = DEF_BUILD_DIR;
+  u->text_values[USER_TEXT_DISTDIR] = DEF_DIST_DIR;
+  u->uint_values[USER_UINT_AUTO_DEBOUNCE_MS] = 500;
+  u->uint_values[USER_UINT_AUTO_RETRY_COUNT] = 3;
+  u->uint_values[USER_UINT_AUTO_RETRY_DELAY_MS] = 250;
+  u->text_values[USER_TEXT_DIST_ARCHIVE_FORMAT] = "zip";
+  u->text_values[USER_TEXT_DIST_ARCHIVE_NAME] = "$CFG-$OS-$ARC--$VER";
   u->gens = NULL;
   u->gen_c = 0;
 }
@@ -330,70 +403,48 @@ static bool user_apply_scope(node* scope, user* out) {
   if (!scope || !out)
     return false;
 
-  const char* text = NULL;
-  if (!user_read_text_child(scope, "builddir", &text))
-    return false;
-  if (text && text[0])
-    out->builddir = text;
+  for (int i = 0; i < (int)(sizeof(USER_ATTR_INFOS) / sizeof(USER_ATTR_INFOS[0])); ++i) {
+    const user_attr_info* attr = &USER_ATTR_INFOS[i];
+    const char* text = NULL;
+    unsigned int uint_value = 0;
 
-  text = NULL;
-  if (!user_read_text_child(scope, "distdir", &text))
-    return false;
-  if (text && text[0])
-    out->distdir = text;
+    switch (attr->kind) {
+      case USER_ATTR_KIND_TEXT:
+        if (!user_read_text_child(scope, attr->name, &text))
+          return false;
+        if (!text || !text[0])
+          continue;
+        user_text_attr text_attr = USER_TEXT_MAX;
+        if (user_try_text_attr(attr->id, &text_attr))
+          out->text_values[text_attr] = text;
+        break;
 
-  unsigned int uint_value = 0;
-  if (!user_read_uint_child(scope, "auto_debounce_ms", &uint_value))
-    return false;
-  if (node_get_child(scope, "auto_debounce_ms"))
-    out->auto_debounce_ms = uint_value;
+      case USER_ATTR_KIND_UINT:
+        if (!user_read_uint_child(scope, attr->name, &uint_value))
+          return false;
+        if (!node_get_child(scope, attr->name))
+          continue;
+        user_uint_attr uint_attr = USER_UINT_MAX;
+        if (user_try_uint_attr(attr->id, &uint_attr))
+          out->uint_values[uint_attr] = uint_value;
+        break;
 
-  uint_value = 0;
-  if (!user_read_uint_child(scope, "auto_retry_count", &uint_value))
-    return false;
-  if (node_get_child(scope, "auto_retry_count"))
-    out->auto_retry_count = uint_value;
+      case USER_ATTR_KIND_ARCHIVE_FORMAT:
+        if (!user_read_text_child(scope, attr->name, &text))
+          return false;
+        if (!text || !text[0])
+          continue;
+        if (!user_is_archive_format(text)) {
+          error("Unknown dist_archive_format '%s'.", text);
+          return false;
+        }
+        out->text_values[USER_TEXT_DIST_ARCHIVE_FORMAT] = text;
+        break;
 
-  uint_value = 0;
-  if (!user_read_uint_child(scope, "auto_retry_delay_ms", &uint_value))
-    return false;
-  if (node_get_child(scope, "auto_retry_delay_ms"))
-    out->auto_retry_delay_ms = uint_value;
-
-  text = NULL;
-  if (!user_read_text_child(scope, "dist_archive_format", &text))
-    return false;
-  if (text && text[0]) {
-    if (!user_is_archive_format(text)) {
-      error("Unknown dist_archive_format '%s'.", text);
-      return false;
+      case USER_ATTR_KIND_SECTION:
+        break;
     }
-    out->dist_archive_format = text;
   }
-
-  text = NULL;
-  if (!user_read_text_child(scope, "dist_archive_name", &text))
-    return false;
-  if (text && text[0])
-    out->dist_archive_name = text;
-
-  text = NULL;
-  if (!user_read_text_child(scope, "cmake_args", &text))
-    return false;
-  if (text && text[0])
-    out->cmake_args = text;
-
-  text = NULL;
-  if (!user_read_text_child(scope, "cmake_build_args", &text))
-    return false;
-  if (text && text[0])
-    out->cmake_build_args = text;
-
-  text = NULL;
-  if (!user_read_text_child(scope, "ctest_args", &text))
-    return false;
-  if (text && text[0])
-    out->ctest_args = text;
 
   return true;
 }
@@ -411,7 +462,7 @@ static bool user_validate_gen_shape(node* gen_n, const char* scope_label) {
       error("Generator entries in %s config must use named attributes.", scope_label);
       return false;
     }
-    if (_stricmp(child->name, "name") != 0 && _stricmp(child->name, "copyfile") != 0) {
+    if (!user_find_gen_attr_info(child->name)) {
       error("Unknown generator attribute '%s' in %s config.", child->name, scope_label);
       return false;
     }
@@ -436,27 +487,16 @@ static bool user_validate_scope(node* scope, const char* scope_label) {
       return false;
     }
 
-    if (_stricmp(child->name, "builddir") == 0 ||
-        _stricmp(child->name, "distdir") == 0 ||
-        _stricmp(child->name, "auto_debounce_ms") == 0 ||
-        _stricmp(child->name, "auto_retry_count") == 0 ||
-        _stricmp(child->name, "auto_retry_delay_ms") == 0 ||
-        _stricmp(child->name, "dist_archive_format") == 0 ||
-        _stricmp(child->name, "dist_archive_name") == 0 ||
-        _stricmp(child->name, "cmake_args") == 0 ||
-        _stricmp(child->name, "cmake_build_args") == 0 ||
-        _stricmp(child->name, "ctest_args") == 0) {
-      continue;
+    const user_attr_info* attr = user_find_attr_info(child->name);
+    if (!attr) {
+      error("Unknown attribute '%s' in %s config.", child->name, scope_label);
+      return false;
     }
 
-    if (_stricmp(child->name, "gen") == 0) {
+    if (attr->id == USER_ATTR_GEN) {
       if (!user_validate_gen_shape(child, scope_label))
         return false;
-      continue;
     }
-
-    error("Unknown attribute '%s' in %s config.", child->name, scope_label);
-    return false;
   }
 
   return true;

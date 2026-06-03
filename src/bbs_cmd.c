@@ -522,16 +522,16 @@ static int run_cmd_auto(cmd_ctx* cmdctx) {
   const char* ignored_dirs[2] = {0};
   int ignored_dir_c = 0;
   if (project_load_config(args.config, &proj)) {
-    ignored_dirs[ignored_dir_c++] = get_path_cwd(proj.user_cfg.builddir ? proj.user_cfg.builddir : DEF_BUILD_DIR);
-    ignored_dirs[ignored_dir_c++] = get_path_cwd(proj.user_cfg.distdir ? proj.user_cfg.distdir : DEF_DIST_DIR);
+    ignored_dirs[ignored_dir_c++] = get_path_cwd(user_text(&proj.user_cfg, USER_TEXT_BUILDDIR));
+    ignored_dirs[ignored_dir_c++] = get_path_cwd(user_text(&proj.user_cfg, USER_TEXT_DISTDIR));
   } else {
     ignored_dirs[ignored_dir_c++] = get_path_cwd(DEF_BUILD_DIR);
     ignored_dirs[ignored_dir_c++] = get_path_cwd(DEF_DIST_DIR);
   }
 
-  unsigned int debounce_ms = proj.user_cfg.auto_debounce_ms ? proj.user_cfg.auto_debounce_ms : AUTO_DEBOUNCE_MS;
-  unsigned int retry_count = proj.user_cfg.auto_retry_count;
-  unsigned int retry_delay_ms = proj.user_cfg.auto_retry_delay_ms;
+  unsigned int debounce_ms = user_uint(&proj.user_cfg, USER_UINT_AUTO_DEBOUNCE_MS) ? user_uint(&proj.user_cfg, USER_UINT_AUTO_DEBOUNCE_MS) : AUTO_DEBOUNCE_MS;
+  unsigned int retry_count = user_uint(&proj.user_cfg, USER_UINT_AUTO_RETRY_COUNT);
+  unsigned int retry_delay_ms = user_uint(&proj.user_cfg, USER_UINT_AUTO_RETRY_DELAY_MS);
   if (debounce_value && !cmd_parse_uint_option(debounce_value, "debounce", &debounce_ms))
     return error_code(CMD_AUTO, 3);
 
@@ -817,7 +817,7 @@ static bool cmd_run_test_matrix(const char* test_name, const char* target, const
           ++matched;
           ++runs;
           project_print_action_header("Test", &proj, p);
-          project_print_field("Directory", project_resolved_dir(proj.user_cfg.builddir, proj.active_config, p));
+          project_print_field("Directory", project_resolved_dir(user_text(&proj.user_cfg, USER_TEXT_BUILDDIR), proj.active_config, p));
           if (test_name && test_name[0])
             project_print_field("Test", test_name);
           project_print_target_line("Test", &proj.targets[ti]);
@@ -1622,7 +1622,7 @@ static bool gen_build_github_workflow_text(const project* proj, project_textbuf*
 
   bool has_tests = project_count_test_targets(proj) > 0;
   bool has_runnables = project_count_runnable_targets(proj) > 0;
-  const char* dist_root = (proj->user_cfg.distdir && proj->user_cfg.distdir[0]) ? proj->user_cfg.distdir : DEF_DIST_DIR;
+  const char* dist_root = user_text(&proj->user_cfg, USER_TEXT_DISTDIR);
 
   const char* default_platforms[] = {
       "windows-x86_64",
@@ -1738,7 +1738,7 @@ static bool gen_build_github_release_workflow_text(const project* proj, project_
   if (!proj || !buf)
     return false;
 
-  const char* dist_root = (proj->user_cfg.distdir && proj->user_cfg.distdir[0]) ? proj->user_cfg.distdir : DEF_DIST_DIR;
+  const char* dist_root = user_text(&proj->user_cfg, USER_TEXT_DISTDIR);
 
   const char* default_platforms[] = {
       "windows-x86_64",

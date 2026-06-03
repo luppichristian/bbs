@@ -6,6 +6,7 @@
 static bool project_parse_string_list(node* list_n, const char*** out_items, int* out_count);
 static const char* project_join_scalar_list(node* list_n, int* out_count);
 static bool project_apply_unity_node(node* unity_n, target* out, const char* target_label);
+static bool project_apply_target_attr_node_with_mode(node* attr_n, target* out, const char* target_label, bool reset_package_sources);
 static bool project_load_user_config(const char* local_cfg_path, user* out);
 static const char* project_target_executable_abs(const project* proj, const target* tgt, const char* platform);
 static bool project_apply_dist_node(node* dist_n, target* out, const char* target_label);
@@ -68,6 +69,106 @@ static node** project_children_in_source_order(node* n, int* out_count) {
   return items;
 }
 
+static const project_attr_info* project_find_attr_info(const project_attr_info* infos, int info_c, const char* name) {
+  if (!infos || info_c <= 0 || !name || !name[0])
+    return NULL;
+
+  for (int i = 0; i < info_c; ++i) {
+    if (_stricmp(infos[i].name, name) == 0)
+      return &infos[i];
+  }
+
+  return NULL;
+}
+
+static const project_target_type_alias* project_find_target_type_alias(const char* name) {
+  if (!name || !name[0])
+    return NULL;
+
+  for (int i = 0; i < (int)(sizeof(PROJECT_TARGET_TYPE_ALIASES) / sizeof(PROJECT_TARGET_TYPE_ALIASES[0])); ++i) {
+    if (_stricmp(PROJECT_TARGET_TYPE_ALIASES[i].name, name) == 0)
+      return &PROJECT_TARGET_TYPE_ALIASES[i];
+  }
+
+  return NULL;
+}
+
+static const project_lang_alias* project_find_lang_alias(const char* name) {
+  if (!name || !name[0])
+    return NULL;
+
+  for (int i = 0; i < (int)(sizeof(PROJECT_LANG_ALIASES) / sizeof(PROJECT_LANG_ALIASES[0])); ++i) {
+    if (_stricmp(PROJECT_LANG_ALIASES[i].name, name) == 0)
+      return &PROJECT_LANG_ALIASES[i];
+  }
+
+  return NULL;
+}
+
+static const project_stdlib_alias* project_find_stdlib_alias(const char* name) {
+  if (!name || !name[0])
+    return NULL;
+
+  for (int i = 0; i < (int)(sizeof(PROJECT_STDLIB_ALIASES) / sizeof(PROJECT_STDLIB_ALIASES[0])); ++i) {
+    if (_stricmp(PROJECT_STDLIB_ALIASES[i].name, name) == 0)
+      return &PROJECT_STDLIB_ALIASES[i];
+  }
+
+  return NULL;
+}
+
+static bool project_find_warning_level_alias(const char* name, warning_level* out) {
+  if (!out)
+    return false;
+
+  for (int i = 0; name && i < (int)(sizeof(PROJECT_WARNING_LEVEL_ALIASES) / sizeof(PROJECT_WARNING_LEVEL_ALIASES[0])); ++i) {
+    if (_stricmp(PROJECT_WARNING_LEVEL_ALIASES[i].name, name) == 0) {
+      *out = PROJECT_WARNING_LEVEL_ALIASES[i].value;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool project_find_opt_level_alias(const char* name, opt_level* out) {
+  if (!out)
+    return false;
+
+  for (int i = 0; name && i < (int)(sizeof(PROJECT_OPT_LEVEL_ALIASES) / sizeof(PROJECT_OPT_LEVEL_ALIASES[0])); ++i) {
+    if (_stricmp(PROJECT_OPT_LEVEL_ALIASES[i].name, name) == 0) {
+      *out = PROJECT_OPT_LEVEL_ALIASES[i].value;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static const project_cmake_config_alias* project_find_cmake_config_alias(const char* name) {
+  if (!name || !name[0])
+    return NULL;
+
+  for (int i = 0; i < (int)(sizeof(PROJECT_CMAKE_CONFIG_ALIASES) / sizeof(PROJECT_CMAKE_CONFIG_ALIASES[0])); ++i) {
+    if (_stricmp(PROJECT_CMAKE_CONFIG_ALIASES[i].name, name) == 0)
+      return &PROJECT_CMAKE_CONFIG_ALIASES[i];
+  }
+
+  return NULL;
+}
+
+static const target_hook_info* project_find_target_hook_info(const char* attr_name) {
+  if (!attr_name || !attr_name[0])
+    return NULL;
+
+  for (int i = 0; i < (int)(sizeof(TARGET_HOOK_INFOS) / sizeof(TARGET_HOOK_INFOS[0])); ++i) {
+    if (_stricmp(TARGET_HOOK_INFOS[i].attr_name, attr_name) == 0)
+      return &TARGET_HOOK_INFOS[i];
+  }
+
+  return NULL;
+}
+
 static const char* project_target_type_name(target_type type) {
   switch (type) {
     case TARGET_TYPE_CONSOLE:
@@ -126,133 +227,57 @@ static bool project_is_known_target_type_name(const char* text) {
   if (!text || !text[0])
     return false;
 
-  return _stricmp(text, "console") == 0 ||
-         _stricmp(text, "consoleless") == 0 ||
-         _stricmp(text, "gui") == 0 ||
-         _stricmp(text, "header_lib") == 0 ||
-         _stricmp(text, "header-lib") == 0 ||
-         _stricmp(text, "headerlib") == 0 ||
-         _stricmp(text, "static_lib") == 0 ||
-         _stricmp(text, "static-lib") == 0 ||
-         _stricmp(text, "staticlib") == 0 ||
-         _stricmp(text, "dyn_lib") == 0 ||
-         _stricmp(text, "dyn-lib") == 0 ||
-         _stricmp(text, "shared_lib") == 0 ||
-         _stricmp(text, "shared-lib") == 0 ||
-         _stricmp(text, "obj_lib") == 0 ||
-         _stricmp(text, "obj-lib") == 0 ||
-         _stricmp(text, "object_lib") == 0 ||
-         _stricmp(text, "object-lib") == 0 ||
-         _stricmp(text, "test") == 0 ||
-         _stricmp(text, "driver") == 0;
+  return project_find_target_type_alias(text) != NULL;
 }
 
 static target_type project_target_type_from_text(const char* text) {
   if (!text || !text[0])
     return TARGET_TYPE_CONSOLE;
-  if (_stricmp(text, "console") == 0)
-    return TARGET_TYPE_CONSOLE;
-  if (_stricmp(text, "consoleless") == 0 || _stricmp(text, "gui") == 0)
-    return TARGET_TYPE_CONSOLELESS;
-  if (_stricmp(text, "header_lib") == 0 || _stricmp(text, "header-lib") == 0 || _stricmp(text, "headerlib") == 0)
-    return TARGET_TYPE_HEADER_LIB;
-  if (_stricmp(text, "static_lib") == 0 || _stricmp(text, "static-lib") == 0 || _stricmp(text, "staticlib") == 0)
-    return TARGET_TYPE_STATIC_LIB;
-  if (_stricmp(text, "dyn_lib") == 0 || _stricmp(text, "dyn-lib") == 0 || _stricmp(text, "shared_lib") == 0 || _stricmp(text, "shared-lib") == 0)
-    return TARGET_TYPE_DYN_LIB;
-  if (_stricmp(text, "obj_lib") == 0 || _stricmp(text, "obj-lib") == 0 || _stricmp(text, "object_lib") == 0 || _stricmp(text, "object-lib") == 0)
-    return TARGET_TYPE_OBJ_LIB;
-  if (_stricmp(text, "test") == 0)
-    return TARGET_TYPE_TEST;
-  if (_stricmp(text, "driver") == 0)
-    return TARGET_TYPE_DRIVER;
+
+  const project_target_type_alias* alias = project_find_target_type_alias(text);
+  if (alias)
+    return alias->type;
   return TARGET_TYPE_CONSOLE;
 }
 
 static lang project_lang_from_text(const char* text) {
   if (!text || !text[0])
     return LANG_C;
-  if (_stricmp(text, "cpp") == 0 || _stricmp(text, "c++") == 0)
-    return LANG_CPP;
+
+  const project_lang_alias* alias = project_find_lang_alias(text);
+  if (alias)
+    return alias->value;
   return LANG_C;
 }
 
 static stdlib project_stdlib_from_text(const char* text) {
   if (!text || !text[0])
     return STDLIB_DYNAMIC;
-  if (_stricmp(text, "none") == 0)
-    return STDLIB_NONE;
-  if (_stricmp(text, "static") == 0)
-    return STDLIB_STATIC;
+
+  const project_stdlib_alias* alias = project_find_stdlib_alias(text);
+  if (alias)
+    return alias->value;
   return STDLIB_DYNAMIC;
 }
 
 static bool project_warning_level_from_text(const char* text, warning_level* out) {
   if (!out)
     return false;
-  if (!text || !text[0] || _stricmp(text, "default") == 0) {
+  if (!text || !text[0]) {
     *out = WARNING_LEVEL_DEFAULT;
     return true;
   }
-  if (_stricmp(text, "none") == 0 || _stricmp(text, "off") == 0) {
-    *out = WARNING_LEVEL_NONE;
-    return true;
-  }
-  if (_stricmp(text, "low") == 0 || _stricmp(text, "minimal") == 0) {
-    *out = WARNING_LEVEL_LOW;
-    return true;
-  }
-  if (_stricmp(text, "medium") == 0 || _stricmp(text, "med") == 0 || _stricmp(text, "normal") == 0) {
-    *out = WARNING_LEVEL_MEDIUM;
-    return true;
-  }
-  if (_stricmp(text, "high") == 0 || _stricmp(text, "all") == 0) {
-    *out = WARNING_LEVEL_HIGH;
-    return true;
-  }
-  if (_stricmp(text, "pedantic") == 0 || _stricmp(text, "extra") == 0) {
-    *out = WARNING_LEVEL_PEDANTIC;
-    return true;
-  }
-  return false;
+  return project_find_warning_level_alias(text, out);
 }
 
 static bool project_opt_level_from_text(const char* text, opt_level* out) {
   if (!out)
     return false;
-  if (!text || !text[0] || _stricmp(text, "default") == 0) {
+  if (!text || !text[0]) {
     *out = OPT_LEVEL_DEFAULT;
     return true;
   }
-  if (_stricmp(text, "none") == 0 || _stricmp(text, "off") == 0 || _stricmp(text, "o0") == 0) {
-    *out = OPT_LEVEL_NONE;
-    return true;
-  }
-  if (_stricmp(text, "debug") == 0 || _stricmp(text, "og") == 0) {
-    *out = OPT_LEVEL_DEBUG;
-    return true;
-  }
-  if (_stricmp(text, "size") == 0 || _stricmp(text, "os") == 0 || _stricmp(text, "oz") == 0) {
-    *out = OPT_LEVEL_SIZE;
-    return true;
-  }
-  if (_stricmp(text, "speed_1") == 0 || _stricmp(text, "speed-1") == 0 || _stricmp(text, "o1") == 0) {
-    *out = OPT_LEVEL_SPEED_1;
-    return true;
-  }
-  if (_stricmp(text, "speed_2") == 0 || _stricmp(text, "speed-2") == 0 || _stricmp(text, "o2") == 0) {
-    *out = OPT_LEVEL_SPEED_2;
-    return true;
-  }
-  if (_stricmp(text, "speed_3") == 0 || _stricmp(text, "speed-3") == 0 || _stricmp(text, "o3") == 0) {
-    *out = OPT_LEVEL_SPEED_3;
-    return true;
-  }
-  if (_stricmp(text, "aggressive") == 0 || _stricmp(text, "fast") == 0 || _stricmp(text, "ofast") == 0) {
-    *out = OPT_LEVEL_AGGRESSIVE;
-    return true;
-  }
-  return false;
+  return project_find_opt_level_alias(text, out);
 }
 
 static bool project_is_valid_config_name(const char* text) {
@@ -630,6 +655,13 @@ static bool project_apply_unity_node(node* unity_n, target* out, const char* tar
     if (!child || !child->name)
       continue;
 
+    if (!project_find_attr_info(PROJECT_UNITY_ATTR_INFOS,
+                                (int)(sizeof(PROJECT_UNITY_ATTR_INFOS) / sizeof(PROJECT_UNITY_ATTR_INFOS[0])),
+                                child->name)) {
+      error("Unsupported unity attribute '%s' for target '%s'.", child->name, target_label ? target_label : "");
+      return false;
+    }
+
     if (_stricmp(child->name, "enabled") == 0) {
       if (child->type != NODE_TYPE_BOL) {
         error("Attribute 'unity.enabled' must be a boolean for target '%s'.", target_label ? target_label : "");
@@ -654,9 +686,6 @@ static bool project_apply_unity_node(node* unity_n, target* out, const char* tar
     }
     if (_stricmp(child->name, "batch") == 0)
       continue;
-
-    error("Unsupported unity attribute '%s' for target '%s'.", child->name, target_label ? target_label : "");
-    return false;
   }
 
   return project_parse_unity_batches(unity_n, &out->unity_batches, &out->unity_batch_c);
@@ -670,16 +699,16 @@ static bool project_apply_dist_node(node* dist_n, target* out, const char* targe
     return false;
   }
 
-  if (!project_parse_named_scalar_children(dist_n, "precommand", &out->pre_dist_cmds, &out->pre_dist_cmd_c))
+  if (!project_parse_named_scalar_children(dist_n, "precommand", &out->hook_cmds[TARGET_HOOK_PRE_DIST], &out->hook_cmd_counts[TARGET_HOOK_PRE_DIST]))
     return false;
-  if (!project_parse_named_scalar_children(dist_n, "postcommand", &out->post_dist_cmds, &out->post_dist_cmd_c))
+  if (!project_parse_named_scalar_children(dist_n, "postcommand", &out->hook_cmds[TARGET_HOOK_POST_DIST], &out->hook_cmd_counts[TARGET_HOOK_POST_DIST]))
     return false;
 
   const char* text = NULL;
   if (!project_read_text_child(dist_n, "name", &text))
     return false;
   if (text && text[0])
-    out->dist_archive_name = text;
+    out->dist.archive_name = text;
 
   node* archive_n = node_get_child(dist_n, "archive");
   if (archive_n) {
@@ -687,7 +716,7 @@ static bool project_apply_dist_node(node* dist_n, target* out, const char* targe
       error("Attribute 'archive' must be a boolean.");
       return false;
     }
-    out->dist_archive = node_get_bool(archive_n);
+    out->dist.archive = node_get_bool(archive_n);
   }
   return true;
 }
@@ -787,10 +816,16 @@ static bool project_parse_meta_fields(node* scope, meta* out) {
   }
 
   if (lic_n) {
-    if (!project_read_text_child(lic_n, "type", &out->license.type))
-      return false;
-    if (!project_read_text_child(lic_n, "file", &out->license.file))
-      return false;
+    for (int i = 0; i < (int)(sizeof(PROJECT_LICENSE_ATTR_INFOS) / sizeof(PROJECT_LICENSE_ATTR_INFOS[0])); ++i) {
+      const char* text = NULL;
+      const char* name = PROJECT_LICENSE_ATTR_INFOS[i].name;
+      if (!project_read_text_child(lic_n, name, &text))
+        return false;
+      if (_stricmp(name, "type") == 0)
+        out->license.type = text;
+      else if (_stricmp(name, "file") == 0)
+        out->license.file = text;
+    }
   }
 
   return true;
@@ -800,170 +835,18 @@ static bool project_apply_target_attrs(node* scope, target* out, const char* tar
   if (!scope || !out)
     return false;
 
-  const char* text = NULL;
-  if (!project_read_text_child(scope, "lang", &text))
-    return false;
-  if (text) {
-    if (_stricmp(text, "c") != 0 && _stricmp(text, "cpp") != 0 && _stricmp(text, "c++") != 0) {
-      error("Unknown lang '%s' for target '%s'.", text, target_label ? target_label : "");
-      return false;
-    }
-    out->lang = project_lang_from_text(text);
-  }
-
-  if (!project_read_text_child(scope, "output", &text))
-    return false;
-  if (text)
-    out->output = text;
-
-  if (!project_read_text_child(scope, "path", &text))
-    return false;
-  if (text)
-    out->package_path = text;
-
-  if (!project_read_text_child(scope, "subdir", &text))
-    return false;
-  if (text)
-    out->package_subdir = text;
-
-  if (!project_read_text_child(scope, "cmake_target", &text))
-    return false;
-  if (text)
-    out->package_cmake_target = text;
-
-  node* repo_n = node_get_child(scope, "repo");
-  if (repo_n) {
-    if (repo_n->type != NODE_TYPE_DEF) {
-      error("Attribute 'repo' must be a section for target '%s'.", target_label ? target_label : "");
-      return false;
-    }
-    if (!project_read_text_child(repo_n, "link", &out->package_repo_link))
-      return false;
-    if (!project_read_text_child(repo_n, "tag", &out->package_repo_tag))
-      return false;
-    if (!project_read_text_child(repo_n, "commit", &out->package_repo_commit))
+  for (int i = 0; i < (int)(sizeof(PROJECT_TARGET_ATTR_INFOS) / sizeof(PROJECT_TARGET_ATTR_INFOS[0])); ++i) {
+    node* child = node_get_child(scope, PROJECT_TARGET_ATTR_INFOS[i].name);
+    if (!child)
+      continue;
+    if (!project_apply_target_attr_node_with_mode(child, out, target_label, false))
       return false;
   }
-
-  node* archive_n = node_get_child(scope, "archive");
-  if (archive_n) {
-    if (archive_n->type != NODE_TYPE_DEF) {
-      error("Attribute 'archive' must be a section for target '%s'.", target_label ? target_label : "");
-      return false;
-    }
-    if (!project_read_text_child(archive_n, "link", &out->package_archive_link))
-      return false;
-    if (!project_read_text_child(archive_n, "strip_prefix", &out->package_archive_strip_prefix))
-      return false;
-  }
-
-  node* value_n = node_get_child(scope, "units");
-  if (value_n && !project_parse_string_list(value_n, &out->units, &out->unit_c))
-    return false;
-  value_n = node_get_child(scope, "include_dirs");
-  if (value_n && !project_parse_string_list(value_n, &out->include_dirs, &out->include_dir_c))
-    return false;
-  value_n = node_get_child(scope, "link_dirs");
-  if (value_n && !project_parse_string_list(value_n, &out->link_dirs, &out->link_dir_c))
-    return false;
-  value_n = node_get_child(scope, "dependencies");
-  if (value_n && !project_parse_string_list(value_n, &out->dependencies, &out->dependency_c))
-    return false;
-  value_n = node_get_child(scope, "link_libs");
-  if (value_n && !project_parse_string_list(value_n, &out->link_libs, &out->link_libs_count))
-    return false;
-
-  value_n = node_get_child(scope, "defines");
-  if (value_n) {
-    out->defines = project_join_scalar_list(value_n, &out->define_c);
-    if (out->define_c < 0)
-      return false;
-  }
-
-  if (!project_read_text_child(scope, "additional_compile_args", &text))
-    return false;
-  if (text)
-    out->additional_compile_args = text;
-  if (!project_read_text_child(scope, "additional_link_args", &text))
-    return false;
-  if (text)
-    out->additional_link_args = text;
-
-  if (!project_read_text_child(scope, "warning_level", &text))
-    return false;
-  if (text && !project_warning_level_from_text(text, &out->warning_level)) {
-    error("Unknown warning_level '%s' for target '%s'.", text, target_label ? target_label : "");
-    return false;
-  }
-
-  if (!project_read_text_child(scope, "opt_level", &text))
-    return false;
-  if (text && !project_opt_level_from_text(text, &out->opt_level)) {
-    error("Unknown opt_level '%s' for target '%s'.", text, target_label ? target_label : "");
-    return false;
-  }
-
-  if (!project_read_size_child(scope, "stack_size", &out->stack_size))
-    return false;
-  if (!project_read_bool_child(scope, "warnings_as_errors", &out->warnings_as_errors))
-    return false;
-
-  if (!project_read_text_child(scope, "runtime", &text))
-    return false;
-  if (text) {
-    if (_stricmp(text, "none") != 0 && _stricmp(text, "dynamic") != 0 && _stricmp(text, "static") != 0) {
-      error("Unknown runtime '%s' for target '%s'.", text, target_label ? target_label : "");
-      return false;
-    }
-    out->runtime = project_stdlib_from_text(text);
-  }
-  if (!project_read_text_child(scope, "stdver", &text))
-    return false;
-  if (text)
-    out->stdver = text;
-
-  value_n = node_get_child(scope, "test_args");
-  if (value_n && !project_parse_string_list(value_n, &out->test_args, &out->test_arg_c))
-    return false;
-
-  value_n = node_get_child(scope, "testing");
-  if (value_n) {
-    if (value_n->type != NODE_TYPE_BOL) {
-      error("Attribute 'testing' must be a boolean.");
-      return false;
-    }
-    out->testing = node_get_bool(value_n);
-  }
-
-  value_n = node_get_child(scope, "post_build_cmds");
-  if (value_n && !project_parse_string_list(value_n, &out->post_build_cmds, &out->post_build_cmd_c))
-    return false;
-  value_n = node_get_child(scope, "pre_build_cmds");
-  if (value_n && !project_parse_string_list(value_n, &out->pre_build_cmds, &out->pre_build_cmd_c))
-    return false;
-  value_n = node_get_child(scope, "pre_run_cmds");
-  if (value_n && !project_parse_string_list(value_n, &out->pre_run_cmds, &out->pre_run_cmd_c))
-    return false;
-  value_n = node_get_child(scope, "post_run_cmds");
-  if (value_n && !project_parse_string_list(value_n, &out->post_run_cmds, &out->post_run_cmd_c))
-    return false;
-  value_n = node_get_child(scope, "pre_dist_cmds");
-  if (value_n && !project_parse_string_list(value_n, &out->pre_dist_cmds, &out->pre_dist_cmd_c))
-    return false;
-  value_n = node_get_child(scope, "post_dist_cmds");
-  if (value_n && !project_parse_string_list(value_n, &out->post_dist_cmds, &out->post_dist_cmd_c))
-    return false;
-  value_n = node_get_child(scope, "dist");
-  if (value_n && !project_apply_dist_node(value_n, out, target_label))
-    return false;
-  value_n = node_get_child(scope, "unity");
-  if (value_n && !project_apply_unity_node(value_n, out, target_label))
-    return false;
 
   return true;
 }
 
-static bool project_apply_target_attr_node(node* attr_n, target* out, const char* target_label) {
+static bool project_apply_target_attr_node_with_mode(node* attr_n, target* out, const char* target_label, bool reset_package_sources) {
   if (!attr_n || !attr_n->name || !out)
     return true;
 
@@ -997,11 +880,13 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
       return false;
     }
     out->package_path = text;
-    out->package_repo_link = NULL;
-    out->package_repo_tag = NULL;
-    out->package_repo_commit = NULL;
-    out->package_archive_link = NULL;
-    out->package_archive_strip_prefix = NULL;
+    if (reset_package_sources) {
+      out->package_repo_link = NULL;
+      out->package_repo_tag = NULL;
+      out->package_repo_commit = NULL;
+      out->package_archive_link = NULL;
+      out->package_archive_strip_prefix = NULL;
+    }
     return true;
   }
   if (_stricmp(attr_n->name, "subdir") == 0) {
@@ -1033,9 +918,11 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
       return false;
     if (!project_read_text_child(attr_n, "commit", &out->package_repo_commit))
       return false;
-    out->package_path = NULL;
-    out->package_archive_link = NULL;
-    out->package_archive_strip_prefix = NULL;
+    if (reset_package_sources) {
+      out->package_path = NULL;
+      out->package_archive_link = NULL;
+      out->package_archive_strip_prefix = NULL;
+    }
     return true;
   }
   if (_stricmp(attr_n->name, "archive") == 0) {
@@ -1047,10 +934,12 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
       return false;
     if (!project_read_text_child(attr_n, "strip_prefix", &out->package_archive_strip_prefix))
       return false;
-    out->package_path = NULL;
-    out->package_repo_link = NULL;
-    out->package_repo_tag = NULL;
-    out->package_repo_commit = NULL;
+    if (reset_package_sources) {
+      out->package_path = NULL;
+      out->package_repo_link = NULL;
+      out->package_repo_tag = NULL;
+      out->package_repo_commit = NULL;
+    }
     return true;
   }
   if (_stricmp(attr_n->name, "units") == 0)
@@ -1162,18 +1051,9 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
   }
   if (_stricmp(attr_n->name, "test_args") == 0)
     return project_parse_string_list(attr_n, &out->test_args, &out->test_arg_c);
-  if (_stricmp(attr_n->name, "post_build_cmds") == 0)
-    return project_parse_string_list(attr_n, &out->post_build_cmds, &out->post_build_cmd_c);
-  if (_stricmp(attr_n->name, "pre_build_cmds") == 0)
-    return project_parse_string_list(attr_n, &out->pre_build_cmds, &out->pre_build_cmd_c);
-  if (_stricmp(attr_n->name, "pre_run_cmds") == 0)
-    return project_parse_string_list(attr_n, &out->pre_run_cmds, &out->pre_run_cmd_c);
-  if (_stricmp(attr_n->name, "post_run_cmds") == 0)
-    return project_parse_string_list(attr_n, &out->post_run_cmds, &out->post_run_cmd_c);
-  if (_stricmp(attr_n->name, "pre_dist_cmds") == 0)
-    return project_parse_string_list(attr_n, &out->pre_dist_cmds, &out->pre_dist_cmd_c);
-  if (_stricmp(attr_n->name, "post_dist_cmds") == 0)
-    return project_parse_string_list(attr_n, &out->post_dist_cmds, &out->post_dist_cmd_c);
+  const target_hook_info* hook_info = project_find_target_hook_info(attr_n->name);
+  if (hook_info)
+    return project_parse_string_list(attr_n, &out->hook_cmds[hook_info->kind], &out->hook_cmd_counts[hook_info->kind]);
   if (_stricmp(attr_n->name, "dist") == 0)
     return project_apply_dist_node(attr_n, out, target_label);
   if (_stricmp(attr_n->name, "unity") == 0)
@@ -1181,6 +1061,10 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
 
   error("Unsupported filter attribute '%s'.", attr_n->name);
   return false;
+}
+
+static bool project_apply_target_attr_node(node* attr_n, target* out, const char* target_label) {
+  return project_apply_target_attr_node_with_mode(attr_n, out, target_label, true);
 }
 
 static const char* project_filter_config_name(node* filter_n) {
@@ -1501,7 +1385,9 @@ static bool project_validate_license_shape(node* lic_n, const char* scope_label)
       error("Attribute 'license' in %s must use named attributes.", scope_label ? scope_label : "project config");
       return false;
     }
-    if (_stricmp(child->name, "type") != 0 && _stricmp(child->name, "file") != 0) {
+    if (!project_find_attr_info(PROJECT_LICENSE_ATTR_INFOS,
+                                (int)(sizeof(PROJECT_LICENSE_ATTR_INFOS) / sizeof(PROJECT_LICENSE_ATTR_INFOS[0])),
+                                child->name)) {
       error("Unknown license attribute '%s' in %s.", child->name, scope_label ? scope_label : "project config");
       return false;
     }
@@ -1565,42 +1451,12 @@ static bool project_validate_target_shape(node* target_n) {
       return false;
     }
 
-    if (_stricmp(child->name, "id") == 0 ||
-        _stricmp(child->name, "name") == 0 ||
-        _stricmp(child->name, "authors") == 0 ||
-        _stricmp(child->name, "ver") == 0 ||
-        _stricmp(child->name, "license") == 0 ||
-        _stricmp(child->name, "lang") == 0 ||
-        _stricmp(child->name, "output") == 0 ||
-        _stricmp(child->name, "path") == 0 ||
-        _stricmp(child->name, "subdir") == 0 ||
-        _stricmp(child->name, "cmake_target") == 0 ||
-        _stricmp(child->name, "repo") == 0 ||
-        _stricmp(child->name, "archive") == 0 ||
-        _stricmp(child->name, "units") == 0 ||
-        _stricmp(child->name, "include_dirs") == 0 ||
-        _stricmp(child->name, "link_dirs") == 0 ||
-        _stricmp(child->name, "dependencies") == 0 ||
-        _stricmp(child->name, "link_libs") == 0 ||
-        _stricmp(child->name, "defines") == 0 ||
-        _stricmp(child->name, "additional_compile_args") == 0 ||
-        _stricmp(child->name, "additional_link_args") == 0 ||
-        _stricmp(child->name, "warning_level") == 0 ||
-        _stricmp(child->name, "opt_level") == 0 ||
-        _stricmp(child->name, "stack_size") == 0 ||
-        _stricmp(child->name, "warnings_as_errors") == 0 ||
-        _stricmp(child->name, "runtime") == 0 ||
-        _stricmp(child->name, "stdver") == 0 ||
-        _stricmp(child->name, "testing") == 0 ||
-        _stricmp(child->name, "test_args") == 0 ||
-        _stricmp(child->name, "post_build_cmds") == 0 ||
-        _stricmp(child->name, "pre_build_cmds") == 0 ||
-        _stricmp(child->name, "pre_run_cmds") == 0 ||
-        _stricmp(child->name, "post_run_cmds") == 0 ||
-        _stricmp(child->name, "pre_dist_cmds") == 0 ||
-        _stricmp(child->name, "post_dist_cmds") == 0 ||
-        _stricmp(child->name, "unity") == 0 ||
-        _stricmp(child->name, "dist") == 0) {
+    if (project_find_attr_info(PROJECT_TARGET_META_ATTR_INFOS,
+                               (int)(sizeof(PROJECT_TARGET_META_ATTR_INFOS) / sizeof(PROJECT_TARGET_META_ATTR_INFOS[0])),
+                               child->name) ||
+        project_find_attr_info(PROJECT_TARGET_ATTR_INFOS,
+                               (int)(sizeof(PROJECT_TARGET_ATTR_INFOS) / sizeof(PROJECT_TARGET_ATTR_INFOS[0])),
+                               child->name)) {
       continue;
     }
 
@@ -1644,23 +1500,21 @@ static bool project_validate_project_shape(node* project_n) {
       return false;
     }
 
-    if (_stricmp(child->name, "id") == 0 ||
-        _stricmp(child->name, "name") == 0 ||
-        _stricmp(child->name, "authors") == 0 ||
-        _stricmp(child->name, "repo") == 0 ||
-        _stricmp(child->name, "ver") == 0 ||
-        _stricmp(child->name, "license") == 0 ||
-        _stricmp(child->name, "configs") == 0) {
-      continue;
+    const project_attr_info* attr = project_find_attr_info(PROJECT_PROJECT_ATTR_INFOS,
+                                                           (int)(sizeof(PROJECT_PROJECT_ATTR_INFOS) / sizeof(PROJECT_PROJECT_ATTR_INFOS[0])),
+                                                           child->name);
+    if (!attr) {
+      error("Unknown attribute '%s' in project config.", child->name);
+      return false;
     }
 
-    if (_stricmp(child->name, "filter") == 0) {
+    if (_stricmp(attr->name, "filter") == 0) {
       if (!project_validate_filter_shape(child, "project filter"))
         return false;
       continue;
     }
 
-    if (_stricmp(child->name, "targets") == 0) {
+    if (_stricmp(attr->name, "targets") == 0) {
       if (child->type != NODE_TYPE_DEF) {
         error("Attribute 'targets' must be a section.");
         return false;
@@ -1675,9 +1529,6 @@ static bool project_validate_project_shape(node* project_n) {
       }
       continue;
     }
-
-    error("Unknown attribute '%s' in project config.", child->name);
-    return false;
   }
 
   return true;
@@ -1876,16 +1727,16 @@ static void project_print(const project* proj) {
     project_print_list("Link Dirs", tgt->link_dirs, tgt->link_dir_c);
     project_print_list("Dependencies", tgt->dependencies, tgt->dependency_c);
     project_print_list("Link Libs", tgt->link_libs, tgt->link_libs_count);
-    project_print_list("Pre Build Cmds", tgt->pre_build_cmds, tgt->pre_build_cmd_c);
-    project_print_list("Post Build Cmds", tgt->post_build_cmds, tgt->post_build_cmd_c);
-    project_print_list("Pre Run Cmds", tgt->pre_run_cmds, tgt->pre_run_cmd_c);
-    project_print_list("Post Run Cmds", tgt->post_run_cmds, tgt->post_run_cmd_c);
+    project_print_list(TARGET_HOOK_INFOS[TARGET_HOOK_PRE_BUILD].label, target_hook_cmds(tgt, TARGET_HOOK_PRE_BUILD), target_hook_cmd_count(tgt, TARGET_HOOK_PRE_BUILD));
+    project_print_list(TARGET_HOOK_INFOS[TARGET_HOOK_POST_BUILD].label, target_hook_cmds(tgt, TARGET_HOOK_POST_BUILD), target_hook_cmd_count(tgt, TARGET_HOOK_POST_BUILD));
+    project_print_list(TARGET_HOOK_INFOS[TARGET_HOOK_PRE_RUN].label, target_hook_cmds(tgt, TARGET_HOOK_PRE_RUN), target_hook_cmd_count(tgt, TARGET_HOOK_PRE_RUN));
+    project_print_list(TARGET_HOOK_INFOS[TARGET_HOOK_POST_RUN].label, target_hook_cmds(tgt, TARGET_HOOK_POST_RUN), target_hook_cmd_count(tgt, TARGET_HOOK_POST_RUN));
     project_print_list("Test Args", tgt->test_args, tgt->test_arg_c);
-    project_print_list("Pre Dist Cmds", tgt->pre_dist_cmds, tgt->pre_dist_cmd_c);
-    project_print_list("Post Dist Cmds", tgt->post_dist_cmds, tgt->post_dist_cmd_c);
-    print("Dist Archive: %s", tgt->dist_archive ? "true" : "false");
-    if (tgt->dist_archive_name)
-      print("Dist Archive Name: %s", tgt->dist_archive_name);
+    project_print_list(TARGET_HOOK_INFOS[TARGET_HOOK_PRE_DIST].label, target_hook_cmds(tgt, TARGET_HOOK_PRE_DIST), target_hook_cmd_count(tgt, TARGET_HOOK_PRE_DIST));
+    project_print_list(TARGET_HOOK_INFOS[TARGET_HOOK_POST_DIST].label, target_hook_cmds(tgt, TARGET_HOOK_POST_DIST), target_hook_cmd_count(tgt, TARGET_HOOK_POST_DIST));
+    print("Dist Archive: %s", tgt->dist.archive ? "true" : "false");
+    if (tgt->dist.archive_name)
+      print("Dist Archive Name: %s", tgt->dist.archive_name);
   }
 }
 
@@ -2331,12 +2182,10 @@ static const char* project_resolve_platform_id(const char* platform, toolchain* 
 static const char* project_cmake_config_name(const char* config) {
   if (!config || !config[0])
     return "Debug";
-  if (_stricmp(config, "release") == 0 || _stricmp(config, "dist") == 0 || _stricmp(config, "shipping") == 0)
-    return "Release";
-  if (_stricmp(config, "minsizerel") == 0 || _stricmp(config, "minsize") == 0)
-    return "MinSizeRel";
-  if (_stricmp(config, "relwithdebinfo") == 0 || _stricmp(config, "profile") == 0)
-    return "RelWithDebInfo";
+
+  const project_cmake_config_alias* alias = project_find_cmake_config_alias(config);
+  if (alias)
+    return alias->cmake_name;
   return "Debug";
 }
 
@@ -2473,7 +2322,7 @@ static bool project_append_cmake_opt_level(project_textbuf* buf, const char* tar
 }
 
 static const char* project_build_root_abs(const project* proj) {
-  return project_resolve_path_from_root(project_root_dir(proj), proj && proj->user_cfg.builddir ? proj->user_cfg.builddir : DEF_BUILD_DIR);
+  return project_resolve_path_from_root(project_root_dir(proj), user_text(proj ? &proj->user_cfg : NULL, USER_TEXT_BUILDDIR));
 }
 
 static const char* project_build_file_abs(const project* proj, const char* filename) {
@@ -2481,7 +2330,7 @@ static const char* project_build_file_abs(const project* proj, const char* filen
 }
 
 static const char* project_build_binary_dir_abs(const project* proj, const char* config, const char* platform) {
-  return project_resolve_path_from_root(project_root_dir(proj), project_resolved_dir(proj && proj->user_cfg.builddir ? proj->user_cfg.builddir : DEF_BUILD_DIR, config, platform));
+  return project_resolve_path_from_root(project_root_dir(proj), project_resolved_dir(user_text(proj ? &proj->user_cfg : NULL, USER_TEXT_BUILDDIR), config, platform));
 }
 
 static bool project_ensure_dir_tree(const char* path, const char* label) {
@@ -3136,11 +2985,11 @@ static bool project_prepare_packages(project* proj, toolchain* tc, const char* p
 }
 
 static const char* project_dist_root_abs(const project* proj) {
-  return project_resolve_path_from_root(project_root_dir(proj), proj && proj->user_cfg.distdir ? proj->user_cfg.distdir : DEF_DIST_DIR);
+  return project_resolve_path_from_root(project_root_dir(proj), user_text(proj ? &proj->user_cfg : NULL, USER_TEXT_DISTDIR));
 }
 
 static const char* project_dist_config_dir_abs(const project* proj, const char* config, const char* platform) {
-  return project_resolve_path_from_root(project_root_dir(proj), project_resolved_dir(proj && proj->user_cfg.distdir ? proj->user_cfg.distdir : DEF_DIST_DIR, config, platform));
+  return project_resolve_path_from_root(project_root_dir(proj), project_resolved_dir(user_text(proj ? &proj->user_cfg : NULL, USER_TEXT_DISTDIR), config, platform));
 }
 
 static const char* project_dist_gen_dir_abs(const project* proj, const char* config, const char* platform) {
@@ -3509,8 +3358,8 @@ static const char* project_expand_config_string(const char* text, const project*
 }
 
 static const char* project_dist_archive_name(const project* proj, const target* tgt, const char* platform, toolchain* tc) {
-  const char* fmt = proj->user_cfg.dist_archive_format ? proj->user_cfg.dist_archive_format : "zip";
-  const char* pattern = tgt && tgt->dist_archive_name ? tgt->dist_archive_name : proj->user_cfg.dist_archive_name;
+  const char* fmt = user_text(&proj->user_cfg, USER_TEXT_DIST_ARCHIVE_FORMAT);
+  const char* pattern = tgt && tgt->dist.archive_name ? tgt->dist.archive_name : user_text(&proj->user_cfg, USER_TEXT_DIST_ARCHIVE_NAME);
   if (!pattern || !pattern[0])
     pattern = "$CFG-$OS-$ARC--$VER";
 
@@ -3533,7 +3382,7 @@ static bool project_create_dist_archive(const project* proj, const target* tgt, 
 
   const char* workdir = project_dist_config_dir_abs(proj, proj->active_config, platform);
   const char* archive_name = project_dist_archive_name(proj, tgt, platform, tc);
-  const char* format = proj->user_cfg.dist_archive_format ? proj->user_cfg.dist_archive_format : "zip";
+  const char* format = user_text(&proj->user_cfg, USER_TEXT_DIST_ARCHIVE_FORMAT);
   char script[2048] = {0};
 
   if (_stricmp(format, "zip") == 0) {
@@ -4195,9 +4044,10 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
       return false;
   }
 
-  if (tgt->pre_build_cmd_c > 0 && tgt->type != TARGET_TYPE_HEADER_LIB) {
-    for (int i = 0; i < tgt->pre_build_cmd_c; ++i) {
-      const char* expanded_cmd = project_expand_config_string(tgt->pre_build_cmds[i] ? tgt->pre_build_cmds[i] : "", proj, tgt, platform_id, tc, project_build_binary_dir_abs(proj, proj->active_config, platform_id));
+  if (target_hook_cmd_count(tgt, TARGET_HOOK_PRE_BUILD) > 0 && tgt->type != TARGET_TYPE_HEADER_LIB) {
+    const char** cmds = target_hook_cmds(tgt, TARGET_HOOK_PRE_BUILD);
+    for (int i = 0; i < target_hook_cmd_count(tgt, TARGET_HOOK_PRE_BUILD); ++i) {
+      const char* expanded_cmd = project_expand_config_string(cmds[i] ? cmds[i] : "", proj, tgt, platform_id, tc, project_build_binary_dir_abs(proj, proj->active_config, platform_id));
       const char* cmd = project_escape_cmake_string(expanded_cmd ? expanded_cmd : "");
       const char* bash = project_cmake_path_text(bash_path);
       if (!cmd || !bash)
@@ -4210,9 +4060,10 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
         return false;
     }
   }
-  if (tgt->post_build_cmd_c > 0 && tgt->type != TARGET_TYPE_HEADER_LIB) {
-    for (int i = 0; i < tgt->post_build_cmd_c; ++i) {
-      const char* expanded_cmd = project_expand_config_string(tgt->post_build_cmds[i] ? tgt->post_build_cmds[i] : "", proj, tgt, platform_id, tc, project_build_binary_dir_abs(proj, proj->active_config, platform_id));
+  if (target_hook_cmd_count(tgt, TARGET_HOOK_POST_BUILD) > 0 && tgt->type != TARGET_TYPE_HEADER_LIB) {
+    const char** cmds = target_hook_cmds(tgt, TARGET_HOOK_POST_BUILD);
+    for (int i = 0; i < target_hook_cmd_count(tgt, TARGET_HOOK_POST_BUILD); ++i) {
+      const char* expanded_cmd = project_expand_config_string(cmds[i] ? cmds[i] : "", proj, tgt, platform_id, tc, project_build_binary_dir_abs(proj, proj->active_config, platform_id));
       const char* cmd = project_escape_cmake_string(expanded_cmd ? expanded_cmd : "");
       const char* bash = project_cmake_path_text(bash_path);
       if (!cmd || !bash)
@@ -4591,7 +4442,7 @@ static bool project_needs_configure(const project* proj, const char* platform, b
 static bool project_run_cmake_preset(toolchain* tc, const project* proj, const char* preset, const char* platform) {
   const char* cmake = toolchain_get_host_tool_path(tc, "cmake");
   const char* build_root = project_build_root_abs(proj);
-  const char* extra_args = proj && proj->user_cfg.cmake_args ? project_expand_config_string(proj->user_cfg.cmake_args, proj, NULL, platform, tc, build_root) : NULL;
+  const char* extra_args = proj && user_text(&proj->user_cfg, USER_TEXT_CMAKE_ARGS) ? project_expand_config_string(user_text(&proj->user_cfg, USER_TEXT_CMAKE_ARGS), proj, NULL, platform, tc, build_root) : NULL;
   char script[4096] = {0};
   if (!cmake || !cmake[0]) {
     error("cmake was not found in the current toolchain.");
@@ -4610,7 +4461,7 @@ static bool project_run_cmake_preset(toolchain* tc, const project* proj, const c
 static bool project_run_cmake_build(toolchain* tc, const project* proj, const char* preset, const char* target_name, const char* platform) {
   const char* cmake = toolchain_get_host_tool_path(tc, "cmake");
   const char* build_root = project_build_root_abs(proj);
-  const char* extra_args = proj && proj->user_cfg.cmake_build_args ? project_expand_config_string(proj->user_cfg.cmake_build_args, proj, NULL, platform, tc, build_root) : NULL;
+  const char* extra_args = proj && user_text(&proj->user_cfg, USER_TEXT_CMAKE_BUILD_ARGS) ? project_expand_config_string(user_text(&proj->user_cfg, USER_TEXT_CMAKE_BUILD_ARGS), proj, NULL, platform, tc, build_root) : NULL;
   char script[4096] = {0};
   if (!cmake || !cmake[0]) {
     error("cmake was not found in the current toolchain.");
@@ -4639,7 +4490,7 @@ static bool project_run_cmake_build(toolchain* tc, const project* proj, const ch
 static bool project_run_ctest_preset(toolchain* tc, const project* proj, const char* preset, const char* test_name, const char* platform) {
   const char* ctest = toolchain_get_host_tool_path(tc, "ctest");
   const char* build_root = project_build_root_abs(proj);
-  const char* extra_args = proj && proj->user_cfg.ctest_args ? project_expand_config_string(proj->user_cfg.ctest_args, proj, NULL, platform, tc, build_root) : NULL;
+  const char* extra_args = proj && user_text(&proj->user_cfg, USER_TEXT_CTEST_ARGS) ? project_expand_config_string(user_text(&proj->user_cfg, USER_TEXT_CTEST_ARGS), proj, NULL, platform, tc, build_root) : NULL;
   char script[4096] = {0};
   if (!ctest || !ctest[0]) {
     error("ctest was not found in the current toolchain.");
@@ -4669,8 +4520,9 @@ static bool project_run_execute(const project* proj, const target* tgt, const ch
   if (!proj || !tgt || !tc)
     return false;
 
-  for (int i = 0; i < tgt->pre_run_cmd_c; ++i)
-    if (toolchain_run_bash(tc, NULL, project_expand_config_string(tgt->pre_run_cmds[i], proj, tgt, platform, tc, NULL)) != 0)
+  const char** pre_run_cmds = target_hook_cmds(tgt, TARGET_HOOK_PRE_RUN);
+  for (int i = 0; i < target_hook_cmd_count(tgt, TARGET_HOOK_PRE_RUN); ++i)
+    if (toolchain_run_bash(tc, NULL, project_expand_config_string(pre_run_cmds[i], proj, tgt, platform, tc, NULL)) != 0)
       return false;
 
   const char* exe_path = project_target_executable_abs(proj, tgt, platform);
@@ -4684,8 +4536,9 @@ static bool project_run_execute(const project* proj, const target* tgt, const ch
   if (toolchain_run_bash(tc, NULL, script) != 0)
     return false;
 
-  for (int i = 0; i < tgt->post_run_cmd_c; ++i)
-    if (toolchain_run_bash(tc, NULL, project_expand_config_string(tgt->post_run_cmds[i], proj, tgt, platform, tc, NULL)) != 0)
+  const char** post_run_cmds = target_hook_cmds(tgt, TARGET_HOOK_POST_RUN);
+  for (int i = 0; i < target_hook_cmd_count(tgt, TARGET_HOOK_POST_RUN); ++i)
+    if (toolchain_run_bash(tc, NULL, project_expand_config_string(post_run_cmds[i], proj, tgt, platform, tc, NULL)) != 0)
       return false;
 
   return true;
@@ -4959,7 +4812,7 @@ static bool project_build(const char* target_name, const char* platform, const c
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
 
   project_print_action_header("Build", &proj, platform_id);
-  project_print_field("Directory", project_resolved_dir(proj.user_cfg.builddir, proj.active_config, platform_id));
+  project_print_field("Directory", project_resolved_dir(user_text(&proj.user_cfg, USER_TEXT_BUILDDIR), proj.active_config, platform_id));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
@@ -5060,7 +4913,7 @@ static bool project_test(const char* test_name, const char* target_name, const c
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
 
   project_print_action_header("Test", &proj, platform_id);
-  const char* build_dir = project_resolved_dir(proj.user_cfg.builddir, proj.active_config, platform_id);
+  const char* build_dir = project_resolved_dir(user_text(&proj.user_cfg, USER_TEXT_BUILDDIR), proj.active_config, platform_id);
   project_print_field("Directory", build_dir);
   if (test_name && test_name[0])
     project_print_field("Test", test_name);
@@ -5122,7 +4975,7 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     return false;
 
   project_print_action_header("Dist", &proj, platform_id);
-  project_print_field("Directory", project_resolved_dir(proj.user_cfg.distdir, proj.active_config, platform_id));
+  project_print_field("Directory", project_resolved_dir(user_text(&proj.user_cfg, USER_TEXT_DISTDIR), proj.active_config, platform_id));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
@@ -5158,8 +5011,9 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     if (!project_ensure_dir_exists(gen_dir, "dist staging directory"))
       return false;
 
-    for (int i = 0; i < tgt->pre_dist_cmd_c; ++i)
-      if (toolchain_run_bash(tc, gen_dir, project_expand_config_string(tgt->pre_dist_cmds[i], &proj, tgt, platform_id, tc, gen_dir)) != 0)
+    const char** pre_dist_cmds = target_hook_cmds(tgt, TARGET_HOOK_PRE_DIST);
+    for (int i = 0; i < target_hook_cmd_count(tgt, TARGET_HOOK_PRE_DIST); ++i)
+      if (toolchain_run_bash(tc, gen_dir, project_expand_config_string(pre_dist_cmds[i], &proj, tgt, platform_id, tc, gen_dir)) != 0)
         return false;
 
     const char* exe_path = project_target_executable_abs(&proj, tgt, platform_id);
@@ -5183,11 +5037,12 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     if (!project_copy_runtime_files(runtime_dir, gen_dir, target_os))
       return false;
 
-    for (int i = 0; i < tgt->post_dist_cmd_c; ++i)
-      if (toolchain_run_bash(tc, gen_dir, project_expand_config_string(tgt->post_dist_cmds[i], &proj, tgt, platform_id, tc, gen_dir)) != 0)
+    const char** post_dist_cmds = target_hook_cmds(tgt, TARGET_HOOK_POST_DIST);
+    for (int i = 0; i < target_hook_cmd_count(tgt, TARGET_HOOK_POST_DIST); ++i)
+      if (toolchain_run_bash(tc, gen_dir, project_expand_config_string(post_dist_cmds[i], &proj, tgt, platform_id, tc, gen_dir)) != 0)
         return false;
 
-    if (tgt->dist_archive && !project_create_dist_archive(&proj, tgt, platform_id, tc))
+    if (tgt->dist.archive && !project_create_dist_archive(&proj, tgt, platform_id, tc))
       return false;
 
     return true;
@@ -5227,7 +5082,7 @@ static bool project_cleanup(void) {
   if (!project_load_user_config(get_path_cwd(CFG_INFOS[CFG_LOCAL].filename), &cfg))
     return false;
 
-  const char* build_dir = get_path_cwd(cfg.builddir);
+  const char* build_dir = get_path_cwd(user_text(&cfg, USER_TEXT_BUILDDIR));
   if (dir_exists(build_dir)) {
     if (!dir_delete(build_dir)) {
       error("Failed to delete build directory: %s", build_dir);
@@ -5237,7 +5092,7 @@ static bool project_cleanup(void) {
     }
   }
 
-  const char* dist_dir = get_path_cwd(cfg.distdir);
+  const char* dist_dir = get_path_cwd(user_text(&cfg, USER_TEXT_DISTDIR));
   if (dir_exists(dist_dir)) {
     if (!dir_delete(dist_dir)) {
       error("Failed to delete dist directory: %s", dist_dir);
