@@ -153,6 +153,17 @@ Many list-valued fields also accept a single scalar form:
 units(src/main.c)
 ```
 
+Some config files also allow custom top-level sections such as discovery hooks.
+
+Example:
+
+```txt
+find_tool(
+  id(ninja)
+  exe_name(ninja)
+)
+```
+
 ## Repeated Entries
 
 Some sections intentionally use repeated named items.

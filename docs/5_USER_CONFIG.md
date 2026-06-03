@@ -44,6 +44,70 @@ So `local.bbs` always wins over `user.bbs` for the same field.
 
 For custom generators, a same-name `gen(...)` in `local.bbs` replaces the one from `user.bbs`.
 
+## Custom Discovery Hooks
+
+`user.bbs` and `local.bbs` can declare additional toolchain discovery strategies with top-level:
+
+- `find_tool(...)`
+- `find_sdk(...)`
+
+These do not return values into other fields.
+They extend toolchain initialization so `bbs` can discover tools and SDKs that are not covered by the built-in strategy list.
+
+If a declared tool or SDK is missing from the current cache, `bbs` refreshes that part of `toolchain.bbs` automatically.
+
+`find_tool(...)` fields:
+
+- `id` required
+- `exe_name` required
+- `target_os` optional: `windows`, `linux`, `macos`, or `any`
+- `dir_hints` optional
+- `deep_roots` optional
+- `version_arg` optional
+- `version_regex` optional
+- `version_arg_fallback` optional
+- `version_regex_fallback` optional
+
+Example:
+
+```txt
+find_tool(
+  id(ninja)
+  exe_name(ninja)
+  dir_hints("C:/tools/ninja;{program_files}/ninja")
+  version_arg("--version")
+  version_regex("([0-9]+\.[0-9]+(\.[0-9]+)?)")
+)
+```
+
+`find_sdk(...)` fields:
+
+- `id` required
+- `target_os` optional: `windows`, `linux`, `macos`, or `any`
+- `env_vars` optional
+- `root_hints` optional
+- `include_rel` optional
+- `source_rel` optional
+- `lib_rel` optional
+- `bin_rel` optional
+- `version_file_rel` optional
+- `version_regex` optional
+
+At least one of `env_vars` or `root_hints` is required.
+
+Example:
+
+```txt
+find_sdk(
+  id(my_sdk)
+  env_vars(MY_SDK_ROOT)
+  root_hints("C:/sdk/my_sdk;{home}/sdk/my_sdk")
+  include_rel(include)
+  lib_rel(lib)
+  bin_rel(bin)
+)
+```
+
 ## Supported Options
 
 ## `builddir`
@@ -189,6 +253,8 @@ Example:
 ```txt
 cmake_args("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
 ```
+
+Custom discovery hooks are top-level config entries, not inline value expressions.
 
 ## `cmake_build_args`
 

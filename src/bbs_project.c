@@ -1504,6 +1504,11 @@ static bool project_validate_project_shape(node* project_n) {
                                                            (int)(sizeof(PROJECT_PROJECT_ATTR_INFOS) / sizeof(PROJECT_PROJECT_ATTR_INFOS[0])),
                                                            child->name);
     if (!attr) {
+      if (_stricmp(child->name, "find_tool") == 0 || _stricmp(child->name, "find_sdk") == 0) {
+        if (!toolchain_validate_custom_discovery_node(child, "project config"))
+          return false;
+        continue;
+      }
       error("Unknown attribute '%s' in project config.", child->name);
       return false;
     }

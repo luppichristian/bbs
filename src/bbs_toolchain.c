@@ -35,9 +35,14 @@ static void toolchain_snapshot_current_host_env(toolchain* tc);
 static void toolchain_discover_extra_envs(toolchain* tc);
 static void toolchain_refresh_runtime_support(toolchain* tc);
 static void toolchain_discover_tool(toolchain* tc, const tool_discover_strat* s);
+static void toolchain_discover_sdk(toolchain* tc, const sdk_discover_strat* s);
 static const tool_discover_strat* toolchain_find_discover_strat(const char* id);
 static const char* toolchain_ensure_host_tool_path(toolchain* tc, const char* id);
 static bool toolchain_is_usable_host_bash_path(const char* path);
+static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx);
+static bool toolchain_parse_custom_tool_node(node* n, tool_discover_strat* out, const char* scope_label);
+static bool toolchain_parse_custom_sdk_node(node* n, sdk_discover_strat* out, const char* scope_label);
+static bool toolchain_validate_custom_discovery_node(node* n, const char* scope_label);
 
 static arch toolchain_detect_host_arch(void) {
   const char* name = platform_host_arch_name();
@@ -806,6 +811,229 @@ static int toolchain_find_tool_by_id(toolchain* tc, const char* id) {
   }
 
   return -1;
+}
+
+static int toolchain_find_sdk_by_name(toolchain* tc, const char* name) {
+  if (!tc || !name || !name[0])
+    return -1;
+
+  toolchain_env* env = toolchain_host_env(tc, false);
+  if (!env)
+    return -1;
+
+  for (int i = 0; i < env->sdk_c; ++i) {
+    if (env->sdks[i].name && _stricmp(env->sdks[i].name, name) == 0)
+      return i;
+  }
+
+  return -1;
+}
+
+static const char* toolchain_config_scalar_text(node* n) {
+  if (!n)
+    return NULL;
+
+  switch (n->type) {
+    case NODE_TYPE_STR:
+      return node_get_str(n);
+    case NODE_TYPE_IDF:
+      return node_get_idf(n);
+    default:
+      return NULL;
+  }
+}
+
+static bool toolchain_read_config_text_child(node* scope, const char* name, const char** out, const char* scope_label) {
+  if (out)
+    *out = NULL;
+  if (!scope || !name || !name[0])
+    return false;
+
+  node* child = node_get_child(scope, name);
+  if (!child)
+    return true;
+
+  const char* text = toolchain_config_scalar_text(child);
+  if (!text) {
+    error("Attribute '%s' in %s must be a string or identifier.", name, scope_label ? scope_label : "toolchain config");
+    return false;
+  }
+
+  if (out)
+    *out = text;
+  return true;
+}
+
+static bool toolchain_parse_custom_target_os(const char* text, os* out, const char* scope_label) {
+  if (out)
+    *out = OS_MAX;
+  if (!text || !text[0])
+    return true;
+  if (_stricmp(text, "any") == 0)
+    return true;
+
+  for (int i = 0; i < OS_MAX; ++i) {
+    if (_stricmp(text, OS_NAMES[i]) == 0) {
+      if (out)
+        *out = (os)i;
+      return true;
+    }
+  }
+
+  error("Unknown target_os '%s' in %s.", text, scope_label ? scope_label : "toolchain config");
+  return false;
+}
+
+static bool toolchain_validate_custom_discovery_field(node* child, const char* scope_label) {
+  if (!child || !child->name)
+    return false;
+
+  if (_stricmp(child->name, "target_os") == 0) {
+    const char* text = toolchain_config_scalar_text(child);
+    return toolchain_parse_custom_target_os(text, NULL, scope_label);
+  }
+
+  if (!toolchain_config_scalar_text(child)) {
+    error("Attribute '%s' in %s must be a string or identifier.", child->name, scope_label ? scope_label : "toolchain config");
+    return false;
+  }
+
+  return true;
+}
+
+static bool toolchain_parse_custom_tool_node(node* n, tool_discover_strat* out, const char* scope_label) {
+  if (!n || !out)
+    return false;
+  if (n->type != NODE_TYPE_DEF) {
+    error("Attribute 'find_tool' in %s must be a section.", scope_label ? scope_label : "toolchain config");
+    return false;
+  }
+
+  memset(out, 0, sizeof(*out));
+  out->target_os = OS_MAX;
+
+  node_foreach(n, child) {
+    if (!child || !child->name) {
+      error("find_tool entries in %s must use named attributes.", scope_label ? scope_label : "toolchain config");
+      return false;
+    }
+
+    if (_stricmp(child->name, "id") == 0)
+      out->id = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "target_os") == 0) {
+      const char* text = toolchain_config_scalar_text(child);
+      if (!toolchain_parse_custom_target_os(text, &out->target_os, scope_label))
+        return false;
+    } else if (_stricmp(child->name, "exe_name") == 0)
+      out->exe_name = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "dir_hints") == 0)
+      out->dir_hints = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "deep_roots") == 0)
+      out->deep_roots = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "version_arg") == 0)
+      out->version_arg = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "version_regex") == 0)
+      out->version_regex = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "version_arg_fallback") == 0)
+      out->version_arg_fallback = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "version_regex_fallback") == 0)
+      out->version_regex_fallback = toolchain_config_scalar_text(child);
+    else {
+      error("Unknown find_tool attribute '%s' in %s.", child->name, scope_label ? scope_label : "toolchain config");
+      return false;
+    }
+
+    if (!toolchain_validate_custom_discovery_field(child, scope_label))
+      return false;
+  }
+
+  if (!out->id || !out->id[0]) {
+    error("find_tool in %s is missing required attribute 'id'.", scope_label ? scope_label : "toolchain config");
+    return false;
+  }
+  if (!out->exe_name || !out->exe_name[0]) {
+    error("find_tool '%s' in %s is missing required attribute 'exe_name'.", out->id, scope_label ? scope_label : "toolchain config");
+    return false;
+  }
+
+  return true;
+}
+
+static bool toolchain_parse_custom_sdk_node(node* n, sdk_discover_strat* out, const char* scope_label) {
+  if (!n || !out)
+    return false;
+  if (n->type != NODE_TYPE_DEF) {
+    error("Attribute 'find_sdk' in %s must be a section.", scope_label ? scope_label : "toolchain config");
+    return false;
+  }
+
+  memset(out, 0, sizeof(*out));
+  out->target_os = OS_MAX;
+
+  node_foreach(n, child) {
+    if (!child || !child->name) {
+      error("find_sdk entries in %s must use named attributes.", scope_label ? scope_label : "toolchain config");
+      return false;
+    }
+
+    if (_stricmp(child->name, "id") == 0)
+      out->id = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "target_os") == 0) {
+      const char* text = toolchain_config_scalar_text(child);
+      if (!toolchain_parse_custom_target_os(text, &out->target_os, scope_label))
+        return false;
+    } else if (_stricmp(child->name, "env_vars") == 0)
+      out->env_vars = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "root_hints") == 0)
+      out->root_hints = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "include_rel") == 0)
+      out->include_rel = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "source_rel") == 0)
+      out->source_rel = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "lib_rel") == 0)
+      out->lib_rel = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "bin_rel") == 0)
+      out->bin_rel = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "version_file_rel") == 0)
+      out->version_file_rel = toolchain_config_scalar_text(child);
+    else if (_stricmp(child->name, "version_regex") == 0)
+      out->version_regex = toolchain_config_scalar_text(child);
+    else {
+      error("Unknown find_sdk attribute '%s' in %s.", child->name, scope_label ? scope_label : "toolchain config");
+      return false;
+    }
+
+    if (!toolchain_validate_custom_discovery_field(child, scope_label))
+      return false;
+  }
+
+  if (!out->id || !out->id[0]) {
+    error("find_sdk in %s is missing required attribute 'id'.", scope_label ? scope_label : "toolchain config");
+    return false;
+  }
+  if ((!out->env_vars || !out->env_vars[0]) && (!out->root_hints || !out->root_hints[0])) {
+    error("find_sdk '%s' in %s must define at least one of 'env_vars' or 'root_hints'.", out->id, scope_label ? scope_label : "toolchain config");
+    return false;
+  }
+
+  return true;
+}
+
+static bool toolchain_validate_custom_discovery_node(node* n, const char* scope_label) {
+  if (!n || !n->name)
+    return false;
+
+  if (_stricmp(n->name, "find_tool") == 0) {
+    tool_discover_strat scratch = {0};
+    return toolchain_parse_custom_tool_node(n, &scratch, scope_label);
+  }
+
+  if (_stricmp(n->name, "find_sdk") == 0) {
+    sdk_discover_strat scratch = {0};
+    return toolchain_parse_custom_sdk_node(n, &scratch, scope_label);
+  }
+
+  return false;
 }
 
 static const char* toolchain_path_version_fallback(const char* path) {
@@ -1883,6 +2111,112 @@ static bool toolchain_sdk_matches_filter(const sdk* s, const toolchain_print_opt
   return true;
 }
 
+static node* toolchain_scope_from_tree(node* tree, const char* wrapper_name, const char* path) {
+  if (!tree || !wrapper_name || !wrapper_name[0])
+    return tree;
+
+  node* scope = NULL;
+  int count = 0;
+  node_foreach(tree, child) {
+    if (!child || !child->name || _stricmp(child->name, wrapper_name) != 0)
+      continue;
+    scope = child;
+    ++count;
+  }
+
+  if (count > 1) {
+    error("Multiple top-level %s nodes found in %s.", wrapper_name, path ? path : "config");
+    return NULL;
+  }
+
+  return count == 1 ? scope : tree;
+}
+
+static node* toolchain_parse_custom_scope_file(const char* path, const char* wrapper_name, const char* scope_label) {
+  if (!path || !path[0] || !file_exists(path))
+    return NULL;
+
+  const char* text = read_entire_file(path);
+  if (!text) {
+    error("Failed to read %s config: %s", scope_label ? scope_label : "toolchain", path);
+    return NULL;
+  }
+
+  node* tree = node_parse(text);
+  if (!tree) {
+    error("Failed to parse %s config: %s", scope_label ? scope_label : "toolchain", path);
+    return NULL;
+  }
+
+  return toolchain_scope_from_tree(tree, wrapper_name, path);
+}
+
+static bool toolchain_apply_custom_scope(toolchain* tc, node* scope, const char* scope_label, bool only_missing, bool include_tools, bool include_sdks, bool* changed) {
+  if (!tc || !scope)
+    return true;
+
+  node_foreach(scope, child) {
+    if (!child || !child->name)
+      continue;
+
+    if (include_tools && _stricmp(child->name, "find_tool") == 0) {
+      tool_discover_strat strat = {0};
+      if (!toolchain_parse_custom_tool_node(child, &strat, scope_label))
+        return false;
+
+      const char* before = toolchain_get_tool_path(tc, strat.id);
+      if (!only_missing || !before || !before[0])
+        toolchain_discover_tool(tc, &strat);
+      const char* after = toolchain_get_tool_path(tc, strat.id);
+      if (changed && (!before || !before[0]) && after && after[0])
+        *changed = true;
+      continue;
+    }
+
+    if (include_sdks && _stricmp(child->name, "find_sdk") == 0) {
+      sdk_discover_strat strat = {0};
+      if (!toolchain_parse_custom_sdk_node(child, &strat, scope_label))
+        return false;
+
+      int before = toolchain_find_sdk_by_name(tc, strat.id);
+      if (!only_missing || before < 0)
+        toolchain_discover_sdk(tc, &strat);
+      int after = toolchain_find_sdk_by_name(tc, strat.id);
+      if (changed && before < 0 && after >= 0)
+        *changed = true;
+    }
+  }
+
+  return true;
+}
+
+static bool toolchain_apply_custom_discovery(toolchain* tc, bool only_missing, bool include_tools, bool include_sdks, bool* changed) {
+  if (changed)
+    *changed = false;
+  if (!tc)
+    return false;
+
+  node* user_scope = toolchain_parse_custom_scope_file(tc->user_cfg_path, "user", "user");
+  if (tc->user_cfg_path && tc->user_cfg_path[0] && file_exists(tc->user_cfg_path) && !user_scope)
+    return false;
+  if (!toolchain_apply_custom_scope(tc, user_scope, "user config", only_missing, include_tools, include_sdks, changed))
+    return false;
+
+  node* local_scope = toolchain_parse_custom_scope_file(tc->local_cfg_path, "user", "local");
+  if (tc->local_cfg_path && tc->local_cfg_path[0] && file_exists(tc->local_cfg_path) && !local_scope)
+    return false;
+  if (!toolchain_apply_custom_scope(tc, local_scope, "local config", only_missing, include_tools, include_sdks, changed))
+    return false;
+
+  node* project_scope = toolchain_parse_custom_scope_file(tc->project_cfg_path, "project", "project");
+  if (tc->project_cfg_path && tc->project_cfg_path[0] && file_exists(tc->project_cfg_path) && !project_scope)
+    return false;
+  if (!toolchain_apply_custom_scope(tc, project_scope, "project config", only_missing, include_tools, include_sdks, changed))
+    return false;
+
+  return true;
+}
+
 static void toolchain_print_env_support(toolchain_env* env, bool minimal) {
   if (!env)
     return;
@@ -1973,9 +2307,9 @@ static void toolchain_print_env_with_opts(toolchain_env* env, const toolchain_pr
     toolchain_print_env_support(env, opts->minimal);
 }
 
-static void toolchain_fill(toolchain* tc) {
+static bool toolchain_fill(toolchain* tc) {
   if (!tc)
-    return;
+    return false;
 
   tc->p_arch = toolchain_detect_host_arch();
   tc->p_os = toolchain_detect_host_os();
@@ -1985,13 +2319,16 @@ static void toolchain_fill(toolchain* tc) {
   for (size_t i = 0; i < sizeof(TOOL_DISCOVER_STRATS) / sizeof(TOOL_DISCOVER_STRATS[0]); ++i)
     toolchain_discover_tool(tc, &TOOL_DISCOVER_STRATS[i]);
 
+  if (!toolchain_apply_custom_discovery(tc, false, true, false, NULL))
+    return false;
+
   toolchain_sort_tools(tc);
 
   const char* cmake = toolchain_get_tool_path(tc, "cmake");
   if (!cmake || !cmake[0]) {
     error("Unable to find 'cmake' in the current toolchain. Install CMake and regenerate the toolchain.");
     print("If a tool is present on your system but was not detected, you can edit the toolchain file directly.");
-    return;
+    return false;
   }
 
   const char* bash = toolchain_get_tool_path(tc, "bash");
@@ -2005,6 +2342,9 @@ static void toolchain_fill(toolchain* tc) {
   for (size_t i = 0; i < sizeof(SDK_DISCOVER_STRATS) / sizeof(SDK_DISCOVER_STRATS[0]); ++i)
     toolchain_discover_sdk(tc, &SDK_DISCOVER_STRATS[i]);
 
+  if (!toolchain_apply_custom_discovery(tc, false, false, true, NULL))
+    return false;
+
   toolchain_sort_sdks(tc);
 
   toolchain_snapshot_current_host_env(tc);
@@ -2014,6 +2354,7 @@ static void toolchain_fill(toolchain* tc) {
 
   toolchain_env* host = toolchain_host_env(tc, false);
   print("Discovery complete: %d tools, %d SDKs, %d environments.", host ? host->tool_c : 0, host ? host->sdk_c : 0, tc->env_c);
+  return true;
 }
 
 static void toolchain_print_with_opts(toolchain* tc, const toolchain_print_opts* opts) {
@@ -2669,6 +3010,20 @@ static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx)
       tc->local_cfg_path = cmdctx->cfg_paths[CFG_LOCAL];
       tc->toolchain_cfg_path = cmdctx->cfg_paths[CFG_TOOLCHAIN];
     }
+    if (tc) {
+      bool changed = false;
+      if (!toolchain_apply_custom_discovery(tc, true, true, true, &changed))
+        return NULL;
+      if (changed) {
+        toolchain_sort_tools(tc);
+        toolchain_sort_sdks(tc);
+        toolchain_snapshot_current_host_env(tc);
+        toolchain_refresh_runtime_support(tc);
+        node* updated = toolchain_write(tc);
+        tc->config_tree = updated;
+        write_entire_file(path, node_write(updated));
+      }
+    }
     return tc;
   }
 
@@ -2692,7 +3047,8 @@ static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx)
     tc->local_cfg_path = cmdctx->cfg_paths[CFG_LOCAL];
     tc->toolchain_cfg_path = cmdctx->cfg_paths[CFG_TOOLCHAIN];
   }
-  toolchain_fill(tc);
+  if (!toolchain_fill(tc))
+    return NULL;
   if (!toolchain_get_tool_path(tc, "cmake"))
     return NULL;
   if (previous) {

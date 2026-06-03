@@ -31,6 +31,31 @@ targets(
 )
 ```
 
+## Custom Discovery Hooks
+
+`project.bbs` can also declare extra discovery strategies with top-level `find_tool(...)` and `find_sdk(...)` sections.
+
+This is useful when a single project depends on a tool or SDK that should be discovered differently from the global defaults.
+
+Example:
+
+```txt
+find_tool(
+  id(ninja)
+  exe_name(ninja)
+  dir_hints("C:/tools/ninja;{home}/tools/ninja")
+)
+
+find_sdk(
+  id(proprietary_sdk)
+  root_hints("C:/vendor/sdk;{home}/vendor/sdk")
+  include_rel(include)
+  lib_rel(lib)
+)
+```
+
+These sections are top-level discovery declarations only. They are not valid inside target sections and they are not inline expressions.
+
 ## Top-Level Options
 
 ## `id`

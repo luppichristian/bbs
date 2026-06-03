@@ -4,3 +4,13 @@ dist_archive_format(zip)
 dist_archive_name("$PROJECT(id)-$CFG-$PLT-$VER")
 cmake_args("-DCMAKE_VERBOSE_MAKEFILE=ON")
 ctest_args("--output-on-failure")
+
+# Machine-local SDK discovery.
+find_sdk(
+  id(vendor_sdk)
+  env_vars(VENDOR_SDK_ROOT)
+  root_hints("C:/vendor/sdk;{home}/vendor/sdk")
+  include_rel(include)
+  lib_rel(lib)
+  bin_rel(bin)
+)

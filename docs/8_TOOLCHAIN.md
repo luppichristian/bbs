@@ -28,6 +28,7 @@ Instead of doing a full discovery every time, `bbs` writes the results into `too
 - you run `bbs update --init-toolchain`
 
 Normal build and run commands can also trigger initialization when the cache is missing.
+Custom discovery declarations from `project.bbs`, `user.bbs`, and `local.bbs` can also trigger targeted refreshes when a declared tool or SDK is not present in the current cache.
 
 ## Generation Flow
 
@@ -74,6 +75,53 @@ Important:
 
 - discovery means “found on your machine”
 - `bbs` does not install these tools for you
+
+## Custom Discovery Declarations
+
+`project.bbs`, `user.bbs`, and `local.bbs` can add custom discovery strategies with:
+
+- `find_tool(...)`
+- `find_sdk(...)`
+
+These declarations are read during toolchain initialization.
+They use the same discovery pipeline as the built-in strategies:
+
+- system lookup
+- hint directories
+- deep root scans
+- version probing
+
+Behavior:
+
+1. load `toolchain.bbs`
+2. scan config files for custom `find_tool(...)` and `find_sdk(...)` declarations
+3. if a declared tool or SDK is missing from the cache, run the matching discovery strategy
+4. update `toolchain.bbs` with the discovered result
+
+Example custom tool declaration:
+
+```txt
+find_tool(
+  id(ninja)
+  exe_name(ninja)
+  dir_hints("C:/tools/ninja")
+  version_arg("--version")
+  version_regex("([0-9]+\.[0-9]+(\.[0-9]+)?)")
+)
+```
+
+Example custom SDK declaration:
+
+```txt
+find_sdk(
+  id(my_sdk)
+  env_vars(MY_SDK_ROOT)
+  root_hints("C:/sdk/my_sdk")
+  include_rel(include)
+  lib_rel(lib)
+  bin_rel(bin)
+)
+```
 
 ## How Discovery Works
 

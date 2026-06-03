@@ -489,6 +489,11 @@ static bool user_validate_scope(node* scope, const char* scope_label) {
 
     const user_attr_info* attr = user_find_attr_info(child->name);
     if (!attr) {
+      if (_stricmp(child->name, "find_tool") == 0 || _stricmp(child->name, "find_sdk") == 0) {
+        if (!toolchain_validate_custom_discovery_node(child, scope_label))
+          return false;
+        continue;
+      }
       error("Unknown attribute '%s' in %s config.", child->name, scope_label);
       return false;
     }
