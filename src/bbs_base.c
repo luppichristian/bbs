@@ -361,6 +361,123 @@ static void node_push_child(node* a, node* child) {
   a->children = child;
 }
 
+static node* node_child_at(node* parent, int index) {
+  if (!parent || index < 0)
+    return NULL;
+
+  int count = 0;
+  node_foreach(parent, child) {
+    ++count;
+  }
+  if (index >= count)
+    return NULL;
+
+  int current = count - 1;
+  node_foreach(parent, child) {
+    if (current == index)
+      return child;
+    --current;
+  }
+
+  return NULL;
+}
+
+static bool node_path_segment(const char* path, size_t* io_offset, const char** out_start, size_t* out_len) {
+  if (out_start)
+    *out_start = NULL;
+  if (out_len)
+    *out_len = 0;
+  if (!path || !io_offset || !out_start || !out_len)
+    return false;
+
+  size_t start = *io_offset;
+  if (!path[start])
+    return false;
+
+  size_t end = start;
+  while (path[end] && path[end] != '.')
+    ++end;
+
+  *out_start = path + start;
+  *out_len = end - start;
+  *io_offset = path[end] == '.' ? end + 1 : end;
+  return true;
+}
+
+static node* node_lookup_path(node* root, const char* path) {
+  if (!root || !path || !path[0])
+    return NULL;
+
+  node* current = root;
+  size_t offset = 0;
+  const char* segment = NULL;
+  size_t segment_len = 0;
+  while (node_path_segment(path, &offset, &segment, &segment_len)) {
+    if (segment_len == 0)
+      return NULL;
+
+    bool numeric = true;
+    for (size_t i = 0; i < segment_len; ++i) {
+      if (!isdigit((unsigned char)segment[i])) {
+        numeric = false;
+        break;
+      }
+    }
+
+    if (numeric) {
+      int index = 0;
+      for (size_t i = 0; i < segment_len; ++i)
+        index = (index * 10) + (segment[i] - '0');
+      current = node_child_at(current, index);
+    } else {
+      char name[128] = {0};
+      if (segment_len >= sizeof(name))
+        return NULL;
+      memcpy(name, segment, segment_len);
+      name[segment_len] = '\0';
+      current = node_get_child(current, name);
+    }
+
+    if (!current)
+      return NULL;
+    if (!path[offset])
+      break;
+  }
+
+  return current;
+}
+
+static const char* node_scalar_text_canonical(const node* n) {
+  char buf[128] = {0};
+  if (!n)
+    return NULL;
+
+  switch (n->type) {
+    case NODE_TYPE_STR:
+      return node_get_str((node*)n);
+    case NODE_TYPE_IDF:
+      return node_get_idf((node*)n);
+    case NODE_TYPE_INT:
+      snprintf(buf, sizeof(buf), "%lld", (long long)node_get_int((node*)n));
+      return arena_text(buf, strlen(buf));
+    case NODE_TYPE_FLT:
+      snprintf(buf, sizeof(buf), "%g", node_get_flt((node*)n));
+      return arena_text(buf, strlen(buf));
+    case NODE_TYPE_VER: {
+      ver value = node_get_ver((node*)n);
+      if (n->ver_parts >= 4)
+        snprintf(buf, sizeof(buf), "%u.%u.%u.%u", value.major, value.minor, value.patch, value.user);
+      else
+        snprintf(buf, sizeof(buf), "%u.%u.%u", value.major, value.minor, value.patch);
+      return arena_text(buf, strlen(buf));
+    }
+    case NODE_TYPE_BOL:
+      return node_get_bool((node*)n) ? "true" : "false";
+    default:
+      return NULL;
+  }
+}
+
 typedef enum {
   TOK_EOF = 0,
   TOK_NAME,

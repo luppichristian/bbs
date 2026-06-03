@@ -21,6 +21,7 @@ typedef struct {
   const char* cmake_args;
   const char* cmake_build_args;
   const char* ctest_args;
+  node* merged_scope;
   user_gen* gens;
   int gen_c;
 } user;

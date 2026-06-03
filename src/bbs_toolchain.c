@@ -2378,6 +2378,7 @@ static bool toolchain_validate_tree(node* tree) {
 static toolchain* toolchain_read(node* tree) {
   toolchain* tc = push(sizeof(toolchain));
   memset(tc, 0, sizeof(toolchain));
+  tc->config_tree = tree;
 
   tc->p_arch = toolchain_detect_host_arch();
   tc->p_os = toolchain_detect_host_os();
@@ -2690,6 +2691,7 @@ static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx)
     toolchain_rebuild_aggregate_support(tc);
   }
   node* tree = toolchain_write(tc);
+  tc->config_tree = tree;
   const char* str = node_write(tree);
   write_entire_file(path, str);
   return tc;

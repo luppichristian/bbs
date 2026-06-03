@@ -317,7 +317,7 @@ See [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md) for the full token list.
 
 ```txt
 dist_archive_format(zip)
-dist_archive_name("$PRJ-$CFG-$OS-$ARC-$VER")
+dist_archive_name("$PROJECT(id)-$CFG-$OS-$ARC-$VER")
 ```
 
 `project.bbs`

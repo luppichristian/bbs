@@ -1976,6 +1976,7 @@ static bool project_load_file_config(const char* path, const char* config, proje
   if (!project_parse_project_node(project_n, config, out))
     return false;
 
+  out->config_tree = project_n;
   out->config_path = toolchain_norm_path(path);
   out->root_dir = project_path_parent(out->config_path);
   out->local_cfg_path = toolchain_join2(out->root_dir ? out->root_dir : project_current_workdir(), CFG_INFOS[CFG_LOCAL].filename);
@@ -3305,6 +3306,26 @@ static const char* project_version_text(ver value) {
   return arena_text(buf, strlen(buf));
 }
 
+static const char* project_lookup_config_path(node* root, const char* path) {
+  node* value = node_lookup_path(root, path);
+  if (!value || value->children)
+    return NULL;
+  return node_scalar_text_canonical(value);
+}
+
+static const char* project_scoped_token_value(const char* name, const char* path, const project* proj, toolchain* tc) {
+  if (!name || !name[0] || !path || !path[0])
+    return NULL;
+
+  if (strcmp(name, "PROJECT") == 0)
+    return project_lookup_config_path(proj ? proj->config_tree : NULL, path);
+  if (strcmp(name, "USER") == 0)
+    return project_lookup_config_path(proj ? proj->user_cfg.merged_scope : NULL, path);
+  if (strcmp(name, "TOOLCHAIN") == 0)
+    return project_lookup_config_path(tc ? tc->config_tree : NULL, path);
+  return NULL;
+}
+
 static const char* project_token_value(const char* name,
                                        const project* proj,
                                        const target* tgt,
@@ -3325,15 +3346,21 @@ static const char* project_token_value(const char* name,
     return target_os < OS_MAX ? OS_NAMES[target_os] : project_host_os_name();
   if (strcmp(name, "ARC") == 0)
     return target_arch < ARCH_MAX ? ARCH_NAMES[target_arch] : project_host_arch_name();
-  if (strcmp(name, "PRJ") == 0)
-    return proj && proj->meta.id ? proj->meta.id : "";
   if (strcmp(name, "PROJECT") == 0)
+    return tc && tc->project_cfg_path ? tc->project_cfg_path : get_path_cwd("project.bbs");
+  if (strcmp(name, "PROJECT_FILE") == 0)
     return tc && tc->project_cfg_path ? tc->project_cfg_path : get_path_cwd("project.bbs");
   if (strcmp(name, "TOOLCHAIN") == 0)
     return tc && tc->toolchain_cfg_path ? tc->toolchain_cfg_path : NULL;
+  if (strcmp(name, "TOOLCHAIN_FILE") == 0)
+    return tc && tc->toolchain_cfg_path ? tc->toolchain_cfg_path : NULL;
   if (strcmp(name, "USER") == 0)
     return tc && tc->user_cfg_path ? tc->user_cfg_path : NULL;
+  if (strcmp(name, "USER_FILE") == 0)
+    return tc && tc->user_cfg_path ? tc->user_cfg_path : NULL;
   if (strcmp(name, "LOCAL") == 0)
+    return tc && tc->local_cfg_path ? tc->local_cfg_path : get_path_cwd("local.bbs");
+  if (strcmp(name, "LOCAL_FILE") == 0)
     return tc && tc->local_cfg_path ? tc->local_cfg_path : get_path_cwd("local.bbs");
   if (strcmp(name, "DBUILD") == 0)
     return project_build_binary_dir_abs(proj, proj ? proj->active_config : NULL, platform);
@@ -3434,9 +3461,30 @@ static const char* project_expand_config_string(const char* text, const project*
     memcpy(token, text + start, len);
     token[len] = '\0';
 
-    const char* value = project_token_value(token, proj, tgt, resolved_platform, tc, workdir, target_os, target_arch);
+    const char* value = NULL;
+    size_t consumed = end - i;
+    if (text[end] == '(') {
+      size_t arg_start = end + 1;
+      size_t arg_end = arg_start;
+      while (text[arg_end] && text[arg_end] != ')')
+        ++arg_end;
+      if (text[arg_end] == ')') {
+        char arg[256] = {0};
+        size_t arg_len = arg_end - arg_start;
+        if (arg_len < sizeof(arg)) {
+          memcpy(arg, text + arg_start, arg_len);
+          arg[arg_len] = '\0';
+          value = project_scoped_token_value(token, arg, proj, tc);
+        }
+        consumed = (arg_end + 1) - i;
+      } else {
+        consumed = strlen(text + i);
+      }
+    } else {
+      value = project_token_value(token, proj, tgt, resolved_platform, tc, workdir, target_os, target_arch);
+    }
     if (!value)
-      value = arena_text(text + i, end - i);
+      value = arena_text(text + i, consumed);
 
     size_t value_len = strlen(value);
     while (wi + value_len + 1 > cap) {
@@ -3451,7 +3499,7 @@ static const char* project_expand_config_string(const char* text, const project*
     }
     memcpy(out + wi, value, value_len);
     wi += value_len;
-    i = end;
+    i += consumed;
   }
 
   out[wi] = '\0';
@@ -4540,10 +4588,10 @@ static bool project_needs_configure(const project* proj, const char* platform, b
   return false;
 }
 
-static bool project_run_cmake_preset(toolchain* tc, const project* proj, const char* preset) {
+static bool project_run_cmake_preset(toolchain* tc, const project* proj, const char* preset, const char* platform) {
   const char* cmake = toolchain_get_host_tool_path(tc, "cmake");
   const char* build_root = project_build_root_abs(proj);
-  const char* extra_args = proj && proj->user_cfg.cmake_args ? proj->user_cfg.cmake_args : NULL;
+  const char* extra_args = proj && proj->user_cfg.cmake_args ? project_expand_config_string(proj->user_cfg.cmake_args, proj, NULL, platform, tc, build_root) : NULL;
   char script[4096] = {0};
   if (!cmake || !cmake[0]) {
     error("cmake was not found in the current toolchain.");
@@ -4559,10 +4607,10 @@ static bool project_run_cmake_preset(toolchain* tc, const project* proj, const c
   return toolchain_run_bash(tc, build_root, script) == 0;
 }
 
-static bool project_run_cmake_build(toolchain* tc, const project* proj, const char* preset, const char* target_name) {
+static bool project_run_cmake_build(toolchain* tc, const project* proj, const char* preset, const char* target_name, const char* platform) {
   const char* cmake = toolchain_get_host_tool_path(tc, "cmake");
   const char* build_root = project_build_root_abs(proj);
-  const char* extra_args = proj && proj->user_cfg.cmake_build_args ? proj->user_cfg.cmake_build_args : NULL;
+  const char* extra_args = proj && proj->user_cfg.cmake_build_args ? project_expand_config_string(proj->user_cfg.cmake_build_args, proj, NULL, platform, tc, build_root) : NULL;
   char script[4096] = {0};
   if (!cmake || !cmake[0]) {
     error("cmake was not found in the current toolchain.");
@@ -4588,10 +4636,10 @@ static bool project_run_cmake_build(toolchain* tc, const project* proj, const ch
   return toolchain_run_bash(tc, build_root, script) == 0;
 }
 
-static bool project_run_ctest_preset(toolchain* tc, const project* proj, const char* preset, const char* test_name) {
+static bool project_run_ctest_preset(toolchain* tc, const project* proj, const char* preset, const char* test_name, const char* platform) {
   const char* ctest = toolchain_get_host_tool_path(tc, "ctest");
   const char* build_root = project_build_root_abs(proj);
-  const char* extra_args = proj && proj->user_cfg.ctest_args ? proj->user_cfg.ctest_args : NULL;
+  const char* extra_args = proj && proj->user_cfg.ctest_args ? project_expand_config_string(proj->user_cfg.ctest_args, proj, NULL, platform, tc, build_root) : NULL;
   char script[4096] = {0};
   if (!ctest || !ctest[0]) {
     error("ctest was not found in the current toolchain.");
@@ -4647,7 +4695,7 @@ static bool project_test_execute(const project* proj, const target* tgt, const c
   if (!proj || !tgt || !tc)
     return false;
   const char* preset = project_build_dir_name(proj->active_config, platform);
-  return project_run_ctest_preset(tc, proj, preset, test_name);
+  return project_run_ctest_preset(tc, proj, preset, test_name, platform);
 }
 
 static const char* project_target_executable_abs(const project* proj, const target* tgt, const char* platform) {
@@ -4917,9 +4965,9 @@ static bool project_build(const char* target_name, const char* platform, const c
     if (idx < 0)
       return false;
     project_print_target_line("Build", &proj.targets[idx]);
-    if (!project_run_cmake_preset(tc, &proj, preset))
+    if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
       return false;
-    return project_run_cmake_build(tc, &proj, preset, project_target_build_target_name(&proj.targets[idx]));
+    return project_run_cmake_build(tc, &proj, preset, project_target_build_target_name(&proj.targets[idx]), platform_id);
   }
 
   if (proj.target_c == 1)
@@ -4930,9 +4978,9 @@ static bool project_build(const char* target_name, const char* platform, const c
       print("  - %s (%s)", proj.targets[i].meta.id ? proj.targets[i].meta.id : "", project_target_type_name(proj.targets[i].type));
   }
 
-  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset))
+  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
     return false;
-  return project_run_cmake_build(tc, &proj, preset, NULL);
+  return project_run_cmake_build(tc, &proj, preset, NULL, platform_id);
 }
 
 static bool project_run(const char* target_name, const char* platform, const char* config, toolchain* tc) {
@@ -4985,9 +5033,9 @@ static bool project_run(const char* target_name, const char* platform, const cha
   }
 
   project_print_target_line("Run", &proj.targets[idx]);
-  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset))
+  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
     return false;
-  if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id))
+  if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
     return false;
   return project_run_execute(&proj, &proj.targets[idx], platform_id, tc);
 }
@@ -5030,9 +5078,9 @@ static bool project_test(const char* test_name, const char* target_name, const c
       return false;
     }
     project_print_target_line("Test", &proj.targets[idx]);
-    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset))
+    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
       return false;
-    if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id))
+    if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
       return false;
     return project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
   }
@@ -5048,9 +5096,9 @@ static bool project_test(const char* test_name, const char* target_name, const c
   }
 
   project_print_target_line("Test", &proj.targets[idx]);
-  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset))
+  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
     return false;
-  if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id))
+  if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
     return false;
   return project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
 }
@@ -5090,9 +5138,9 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     }
 
     const char* preset = project_build_dir_name(proj.active_config, platform_id);
-    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset))
+    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
       return false;
-    if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id))
+    if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
       return false;
 
     target* tgt = &proj.targets[idx];

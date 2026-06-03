@@ -158,6 +158,7 @@ typedef struct {
 typedef struct {
   meta meta;
   user user_cfg;
+  node* config_tree;
   const char* root_dir;
   const char* config_path;
   const char* local_cfg_path;

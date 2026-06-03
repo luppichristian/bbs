@@ -169,12 +169,14 @@ This supports the expansion tokens documented in [9_EXPANSION_TOKENS.md](./9_EXP
 Example:
 
 ```txt
-dist_archive_name("$PRJ-$CFG-$OS-$ARC-$VER")
+dist_archive_name("$PROJECT(id)-$CFG-$OS-$ARC-$VER")
 ```
 
 ## `cmake_args`
 
 Extra arguments appended to the CMake configure step.
+
+This supports the expansion tokens documented in [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md).
 
 Typical use cases:
 
@@ -192,6 +194,8 @@ cmake_args("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
 
 Extra arguments appended to the CMake build step.
 
+This supports the expansion tokens documented in [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md).
+
 Example:
 
 ```txt
@@ -201,6 +205,8 @@ cmake_build_args("--parallel")
 ## `ctest_args`
 
 Extra arguments appended to the CTest step.
+
+This supports the expansion tokens documented in [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md).
 
 Example:
 

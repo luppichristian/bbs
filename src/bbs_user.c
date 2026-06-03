@@ -484,6 +484,7 @@ static bool user_load_paths(const char* user_path, const char* local_path, user*
   if (!merged)
     return false;
 
+  out->merged_scope = merged;
   if (!user_apply_scope(merged, out))
     return false;
   if (!user_collect_scope_gens(user_scope, out, false))

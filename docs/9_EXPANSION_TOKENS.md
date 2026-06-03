@@ -6,6 +6,7 @@ This is mainly relevant for:
 
 - Bash hook commands
 - distribution archive naming
+- CMake and CTest extra argument strings
 
 ## Where Tokens Are Used
 
@@ -21,11 +22,15 @@ In practice, the most important token-aware places are:
 - `dist(...)` `postcommand(...)`
 - `dist_archive_name`
 - target `dist(...)` `name(...)`
+- `cmake_args`
+- `cmake_build_args`
+- `ctest_args`
 
 ## Basic Rules
 
 - tokens start with `$`
 - token names use uppercase letters and `_`
+- scoped lookups use `$SCOPE(path.to.value)`
 - unknown tokens are left unchanged
 - `$$` becomes a literal `$`
 
@@ -64,23 +69,43 @@ Platform OS part, for example `windows`.
 
 Platform architecture part, for example `x86_64`.
 
-## `$PRJ`
-
-Project id.
-
 ## `$PROJECT`
 
-Absolute path to `project.bbs`.
+Scoped lookup into the parsed `project.bbs` tree.
+
+Examples:
+
+```txt
+$PROJECT(id)
+$PROJECT(license.type)
+```
 
 ## `$TOOLCHAIN`
 
-Absolute path to `toolchain.bbs`.
+Scoped lookup into the parsed `toolchain.bbs` tree.
 
 ## `$USER`
 
-Absolute path to `user.bbs`.
+Scoped lookup into the effective merged user config tree.
+This reflects `user.bbs` with `local.bbs` overrides applied.
 
 ## `$LOCAL`
+
+Absolute path to `local.bbs`.
+
+## `$PROJECT_FILE`
+
+Absolute path to `project.bbs`.
+
+## `$TOOLCHAIN_FILE`
+
+Absolute path to `toolchain.bbs`.
+
+## `$USER_FILE`
+
+Absolute path to `user.bbs`.
+
+## `$LOCAL_FILE`
 
 Absolute path to `local.bbs`.
 
@@ -123,12 +148,21 @@ Absolute path to the target executable output when available.
 
 Working directory used for the script being executed.
 
+## Scoped Path Rules
+
+- use `.` for nested fields, for example `$PROJECT(license.type)`
+- path segments are matched case-insensitively
+- scalar values are expanded as text
+- non-scalar nodes are left unchanged
+- numeric path segments can index repeated children in source order, for example `$PROJECT(targets.0.output)`
+- bare `$PROJECT`, `$USER`, and `$TOOLCHAIN` were previously file-path tokens; prefer `$PROJECT_FILE`, `$USER_FILE`, and `$TOOLCHAIN_FILE` for that use
+
 ## Practical Examples
 
 ## Archive naming
 
 ```txt
-dist_archive_name("$PRJ-$CFG-$OS-$ARC-$VER")
+dist_archive_name("$PROJECT(id)-$CFG-$OS-$ARC-$VER")
 ```
 
 Example result:
@@ -162,11 +196,28 @@ post_build_cmds(
 )
 ```
 
+## Query config values in command args
+
+```txt
+cmake_args("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DPROJECT_ID=$PROJECT(id)")
+ctest_args("--output-on-failure --label-regex $PROJECT(id)")
+```
+
+## Refer to config file paths explicitly
+
+```txt
+post_build_cmds(
+  "echo project file: $PROJECT_FILE"
+  "echo toolchain file: $TOOLCHAIN_FILE"
+)
+```
+
 ## Good Usage Advice
 
 - use quotes around path-like expansions in shell commands
 - prefer `$DDIST` and `$DGEN` instead of hardcoding dist paths
 - prefer `$CFG`, `$OS`, `$ARC`, and `$VER` for archive names instead of repeating fixed strings
+- prefer `$PROJECT_FILE`, `$USER_FILE`, and `$TOOLCHAIN_FILE` over the deprecated bare file-path forms
 
 ## Related Reads
 

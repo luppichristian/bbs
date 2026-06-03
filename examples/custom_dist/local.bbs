@@ -1,2 +1,2 @@
 distdir(releases)
-dist_archive_name("$PRJ-$TARGET-$CFG-$PLT")
+dist_archive_name("$PROJECT(id)-$TARGET-$CFG-$PLT")

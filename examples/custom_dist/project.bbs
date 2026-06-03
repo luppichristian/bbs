@@ -14,9 +14,9 @@ targets(
     )
     dist(
       archive(true)
-      name("$PRJ-$TARGET-$VER-$CFG-$OS-$ARC")
+      name("$PROJECT(id)-$TARGET-$VER-$CFG-$OS-$ARC")
       precommand("cp \"$CWD/assets/README.txt\" \"$WORKDIR/README.txt\"")
-      postcommand("printf 'project=%s\\nplatform=%s\\nversion=%s\\n' '$PRJ' '$PLT' '$VER' > \"$WORKDIR/manifest.txt\"")
+      postcommand("printf 'project=%s\\nplatform=%s\\nversion=%s\\n' '$PROJECT(id)' '$PLT' '$VER' > \"$WORKDIR/manifest.txt\"")
     )
     units(
       src/main.c
