@@ -4,6 +4,20 @@
 
 It uses a small `.bbs` configuration format, discovers your local toolchain, generates the CMake backend files for you, and gives you one CLI for build, run, test, packaging, and distribution.
 
+## Why Add Another Layer On Top Of CMake
+
+CMake is widely used, but it still leaves a lot of multi-platform build setup in the hands of the project author.
+You still need to model targets, platform differences, toolchain choices, and common workflows in a way that stays manageable across environments.
+
+`bbs` exists to provide a smaller, more direct project layer above CMake so that the same project definition can drive builds more consistently across platforms.
+
+## Why Build On Top Of CMake Instead Of Replacing It
+
+Most third-party C and C++ libraries already support CMake.
+Building on top of it means `bbs` can stay compatible with the tooling and dependency ecosystem people already use.
+
+If `bbs` replaced CMake entirely, it would be much less practical because it would lose easy access to that existing ecosystem.
+
 ## What This Repository Is
 
 This repository contains:
