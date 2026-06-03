@@ -224,6 +224,53 @@ units(
 )
 ```
 
+## `unity(...)`
+
+Optional unity-build configuration for compiled targets.
+
+Example:
+
+```txt
+unity(
+  enabled(true)
+  batch_size(8)
+
+  batch(
+    src/core
+    src/platform
+  )
+
+  batch(
+    src/feature/*.c
+  )
+)
+```
+
+Supported children:
+
+- `enabled(true|false)` turns unity builds on or off for the target. When a `unity(...)` section is present, the default is `true` unless you explicitly set `enabled(false)`.
+- `batch_size(<positive-int>)` forwards the fallback unity batch size into CMake.
+- `batch(...)` declares an explicit unity batch. You can repeat `batch(...)` multiple times.
+
+Batch matching rules:
+
+- batch items are matched against the resolved unit paths relative to the project root
+- plain paths match either that exact file or any file under that directory prefix
+- wildcard entries such as `src/feature/*.c` or `src/**/win_*.c` are also supported
+- every explicit batch must match at least one unit
+- one source file may belong to only one explicit batch
+
+Execution model:
+
+- explicit `batch(...)` groups are emitted as generated unity wrapper source files in the build directory
+- remaining units still stay in the target source list
+- if unity is enabled, CMake native unity mode still applies to the remaining non-explicit units
+
+Notes:
+
+- `unity(...)` is only valid on compiled local targets
+- header libraries cannot use unity builds
+
 ## `include_dirs(...)`
 
 Include directories added to the target.

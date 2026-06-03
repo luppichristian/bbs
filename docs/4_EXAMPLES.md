@@ -412,3 +412,40 @@ bbs run
 ```
 
 After that, you usually add configs, tests, hooks, or distribution rules as the project grows.
+
+## 13. Unity Batches By Directory
+
+This follows `examples/unity_batches/project.bbs`.
+
+```txt
+id(unity_batches)
+
+targets(
+  console(
+    output(unity_batches)
+    units(
+      src/main.c
+      src/common/*.c
+      src/feature/*.c
+    )
+    unity(
+      enabled(true)
+      batch_size(4)
+
+      batch(
+        src/common
+      )
+
+      batch(
+        src/feature
+      )
+    )
+  )
+)
+```
+
+What this demonstrates:
+
+- `units(...)` still defines the full source set
+- `unity.batch(...)` groups files by directory without changing the source list
+- `batch_size(...)` still controls fallback batching for any units left outside explicit batches

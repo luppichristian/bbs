@@ -5,6 +5,7 @@
 
 static bool project_parse_string_list(node* list_n, const char*** out_items, int* out_count);
 static const char* project_join_scalar_list(node* list_n, int* out_count);
+static bool project_apply_unity_node(node* unity_n, target* out, const char* target_label);
 static bool project_load_user_config(const char* local_cfg_path, user* out);
 static const char* project_target_executable_abs(const project* proj, const target* tgt, const char* platform);
 static bool project_apply_dist_node(node* dist_n, target* out, const char* target_label);
@@ -560,6 +561,107 @@ static bool project_parse_named_scalar_children(node* scope, const char* child_n
   return true;
 }
 
+static bool project_parse_unity_batches(node* unity_n, target_unity_batch** out_batches, int* out_count) {
+  if (out_batches)
+    *out_batches = NULL;
+  if (out_count)
+    *out_count = 0;
+  if (!unity_n)
+    return true;
+
+  int batch_count = 0;
+  int child_count = 0;
+  node** children = project_children_in_source_order(unity_n, &child_count);
+  for (int i = 0; i < child_count; ++i) {
+    node* child = children[i];
+    if (child && child->name && _stricmp(child->name, "batch") == 0)
+      ++batch_count;
+  }
+
+  if (batch_count <= 0)
+    return true;
+
+  target_unity_batch* batches = push(sizeof(*batches) * (size_t)batch_count);
+  if (!batches)
+    return false;
+  memset(batches, 0, sizeof(*batches) * (size_t)batch_count);
+
+  int wi = 0;
+  for (int i = 0; i < child_count; ++i) {
+    node* child = children[i];
+    if (!child || !child->name || _stricmp(child->name, "batch") != 0)
+      continue;
+
+    if (!project_parse_string_list(child, &batches[wi].selectors, &batches[wi].selector_c))
+      return false;
+    if (batches[wi].selector_c <= 0) {
+      error("unity.batch(...) must contain at least one directory, file, or pattern.");
+      return false;
+    }
+    ++wi;
+  }
+
+  if (out_batches)
+    *out_batches = batches;
+  if (out_count)
+    *out_count = wi;
+  return true;
+}
+
+static bool project_apply_unity_node(node* unity_n, target* out, const char* target_label) {
+  if (!unity_n || !out)
+    return false;
+  if (unity_n->type != NODE_TYPE_DEF) {
+    error("Attribute 'unity' must be a section for target '%s'.", target_label ? target_label : "");
+    return false;
+  }
+
+  out->unity_configured = true;
+  out->unity_enabled = true;
+  out->unity_batch_size_set = false;
+  out->unity_batch_size = 0;
+  out->unity_batches = NULL;
+  out->unity_batch_c = 0;
+
+  int child_count = 0;
+  node** children = project_children_in_source_order(unity_n, &child_count);
+  for (int i = 0; i < child_count; ++i) {
+    node* child = children[i];
+    if (!child || !child->name)
+      continue;
+
+    if (_stricmp(child->name, "enabled") == 0) {
+      if (child->type != NODE_TYPE_BOL) {
+        error("Attribute 'unity.enabled' must be a boolean for target '%s'.", target_label ? target_label : "");
+        return false;
+      }
+      out->unity_enabled = node_get_bool(child);
+      continue;
+    }
+    if (_stricmp(child->name, "batch_size") == 0) {
+      if (child->type != NODE_TYPE_INT) {
+        error("Attribute 'unity.batch_size' must be an integer for target '%s'.", target_label ? target_label : "");
+        return false;
+      }
+      int64_t value = node_get_int(child);
+      if (value <= 0) {
+        error("Attribute 'unity.batch_size' must be greater than zero for target '%s'.", target_label ? target_label : "");
+        return false;
+      }
+      out->unity_batch_size = (size_t)value;
+      out->unity_batch_size_set = true;
+      continue;
+    }
+    if (_stricmp(child->name, "batch") == 0)
+      continue;
+
+    error("Unsupported unity attribute '%s' for target '%s'.", child->name, target_label ? target_label : "");
+    return false;
+  }
+
+  return project_parse_unity_batches(unity_n, &out->unity_batches, &out->unity_batch_c);
+}
+
 static bool project_apply_dist_node(node* dist_n, target* out, const char* target_label) {
   if (!dist_n || !out)
     return false;
@@ -854,6 +956,9 @@ static bool project_apply_target_attrs(node* scope, target* out, const char* tar
   value_n = node_get_child(scope, "dist");
   if (value_n && !project_apply_dist_node(value_n, out, target_label))
     return false;
+  value_n = node_get_child(scope, "unity");
+  if (value_n && !project_apply_unity_node(value_n, out, target_label))
+    return false;
 
   return true;
 }
@@ -1071,6 +1176,8 @@ static bool project_apply_target_attr_node(node* attr_n, target* out, const char
     return project_parse_string_list(attr_n, &out->post_dist_cmds, &out->post_dist_cmd_c);
   if (_stricmp(attr_n->name, "dist") == 0)
     return project_apply_dist_node(attr_n, out, target_label);
+  if (_stricmp(attr_n->name, "unity") == 0)
+    return project_apply_unity_node(attr_n, out, target_label);
 
   error("Unsupported filter attribute '%s'.", attr_n->name);
   return false;
@@ -1281,6 +1388,10 @@ static bool project_validate(const project* proj) {
         error("Package target '%s' cannot also define source units.", tgt->meta.id);
         return false;
       }
+      if (tgt->unity_configured) {
+        error("Package target '%s' cannot use unity builds.", tgt->meta.id);
+        return false;
+      }
       if (package_sources == 0) {
         error("Package target '%s' is missing its package source.", tgt->meta.id);
         return false;
@@ -1288,6 +1399,17 @@ static bool project_validate(const project* proj) {
     } else if (tgt->unit_c <= 0) {
       error("Target '%s' must define at least one source unit.", tgt->meta.id);
       return false;
+    }
+
+    if (tgt->unity_configured) {
+      if (tgt->type == TARGET_TYPE_HEADER_LIB) {
+        error("Target '%s' cannot use unity builds because header libraries are not compiled.", tgt->meta.id);
+        return false;
+      }
+      if (!tgt->unity_enabled && tgt->unity_batch_c > 0) {
+        error("Target '%s' cannot define unity batches while unity is disabled.", tgt->meta.id);
+        return false;
+      }
     }
 
     for (int j = i + 1; j < proj->target_c; ++j) {
@@ -1477,6 +1599,7 @@ static bool project_validate_target_shape(node* target_n) {
         _stricmp(child->name, "post_run_cmds") == 0 ||
         _stricmp(child->name, "pre_dist_cmds") == 0 ||
         _stricmp(child->name, "post_dist_cmds") == 0 ||
+        _stricmp(child->name, "unity") == 0 ||
         _stricmp(child->name, "dist") == 0) {
       continue;
     }
@@ -1741,6 +1864,13 @@ static void project_print(const project* proj) {
       print("Additional Compile Args: %s", tgt->additional_compile_args);
     if (tgt->additional_link_args)
       print("Additional Link Args: %s", tgt->additional_link_args);
+    if (tgt->unity_configured) {
+      print("Unity Build: %s", tgt->unity_enabled ? "true" : "false");
+      if (tgt->unity_batch_size_set)
+        print("Unity Batch Size: %zu", tgt->unity_batch_size);
+      for (int ui = 0; ui < tgt->unity_batch_c; ++ui)
+        project_print_list("Unity Batch", tgt->unity_batches[ui].selectors, tgt->unity_batches[ui].selector_c);
+    }
     project_print_list("Units", tgt->units, tgt->unit_c);
     project_print_list("Include Dirs", tgt->include_dirs, tgt->include_dir_c);
     project_print_list("Link Dirs", tgt->link_dirs, tgt->link_dir_c);
@@ -3441,6 +3571,230 @@ static bool project_append_cmake_toolchain_kv(project_textbuf* buf, const char* 
   return project_textbuf_appendf(buf, "set(%s \"%s\" CACHE STRING \"Generated by bbs\")\n", key, esc);
 }
 
+static const char* project_escape_regex_text(const char* text) {
+  const char* norm = project_normalize_slashes(text ? text : "");
+  if (!norm)
+    return NULL;
+
+  size_t len = 0;
+  for (size_t i = 0; norm[i]; ++i) {
+    char ch = norm[i];
+    if (ch == '.' || ch == '^' || ch == '$' || ch == '+' || ch == '(' || ch == ')' || ch == '[' || ch == ']' || ch == '{' || ch == '}' || ch == '|')
+      len += 2;
+    else
+      len += 1;
+  }
+
+  char* out = push(len + 1);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  for (size_t i = 0; norm[i]; ++i) {
+    char ch = norm[i];
+    if (ch == '.' || ch == '^' || ch == '$' || ch == '+' || ch == '(' || ch == ')' || ch == '[' || ch == ']' || ch == '{' || ch == '}' || ch == '|')
+      out[wi++] = '\\';
+    out[wi++] = ch;
+  }
+  out[wi] = '\0';
+  return out;
+}
+
+static const char* project_glob_to_regex(const char* pattern) {
+  const char* norm = project_normalize_slashes(pattern ? pattern : "");
+  if (!norm)
+    return NULL;
+
+  size_t len = 2;
+  for (size_t i = 0; norm[i]; ++i) {
+    char ch = norm[i];
+    if (ch == '*') {
+      if (norm[i + 1] == '*') {
+        len += 2;
+        ++i;
+      } else {
+        len += 6;
+      }
+    } else if (ch == '?') {
+      len += 5;
+    } else if (ch == '.' || ch == '^' || ch == '$' || ch == '+' || ch == '(' || ch == ')' || ch == '[' || ch == ']' || ch == '{' || ch == '}' || ch == '|') {
+      len += 2;
+    } else {
+      len += 1;
+    }
+  }
+  len += 2;
+
+  char* out = push(len + 1);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  out[wi++] = '^';
+  for (size_t i = 0; norm[i]; ++i) {
+    char ch = norm[i];
+    if (ch == '*') {
+      if (norm[i + 1] == '*') {
+        out[wi++] = '.';
+        out[wi++] = '*';
+        ++i;
+      } else {
+        memcpy(out + wi, "[^/]*", 5);
+        wi += 5;
+      }
+      continue;
+    }
+    if (ch == '?') {
+      memcpy(out + wi, "[^/]", 4);
+      wi += 4;
+      continue;
+    }
+    if (ch == '.' || ch == '^' || ch == '$' || ch == '+' || ch == '(' || ch == ')' || ch == '[' || ch == ']' || ch == '{' || ch == '}' || ch == '|')
+      out[wi++] = '\\';
+    out[wi++] = ch;
+  }
+  out[wi++] = '$';
+  out[wi] = '\0';
+  return out;
+}
+
+static bool project_append_cmake_unity_selector_match(project_textbuf* buf, const char* selector, bool first) {
+  const char* norm = project_normalize_slashes(selector ? selector : "");
+  if (!norm)
+    return false;
+
+  if (project_text_has_wildcards(norm)) {
+    const char* regex = project_glob_to_regex(norm);
+    const char* esc = project_escape_cmake_string(regex ? regex : "");
+    if (!esc)
+      return false;
+    return project_textbuf_appendf(buf, "%sif(bbs_rel MATCHES \"%s\")\n", first ? "" : "else", esc);
+  }
+
+  const char* prefix = norm;
+  size_t prefix_len = strlen(prefix);
+  while (prefix_len > 0 && prefix[prefix_len - 1] == '/')
+    --prefix_len;
+  const char* prefix_text = arena_text(prefix, prefix_len);
+  const char* prefix_regex = project_escape_regex_text(prefix_text ? prefix_text : "");
+  const char* esc = project_escape_cmake_string(prefix_text ? prefix_text : "");
+  const char* regex_esc = project_escape_cmake_string(prefix_regex ? prefix_regex : "");
+  if (!esc || !regex_esc)
+    return false;
+  return project_textbuf_appendf(buf,
+                                 "%sif(bbs_rel STREQUAL \"%s\" OR bbs_rel MATCHES \"^%s/.+\")\n",
+                                 first ? "" : "else",
+                                 esc,
+                                 regex_esc);
+}
+
+static bool project_append_cmake_manual_unity(project_textbuf* buf, const target* tgt, const char* var_name) {
+  if (!buf || !tgt || !var_name || tgt->unity_batch_c <= 0)
+    return false;
+
+  const char* unity_ext = tgt->lang == LANG_CPP ? "cpp" : "c";
+  const char* unity_file_prefix = project_cmake_var_name(tgt->meta.id);
+  const char* target_id = project_escape_cmake_string(tgt->meta.id ? tgt->meta.id : "target");
+  if (!unity_ext || !unity_file_prefix || !target_id)
+    return false;
+
+  if (!project_textbuf_appendf(buf,
+                               "set(BBS_%s_ALL_SOURCES ${BBS_%s_SOURCES})\n"
+                               "set(BBS_%s_UNITY_WRAPPERS)\n"
+                               "set(BBS_%s_UNITY_ASSIGNED)\n"
+                               "file(MAKE_DIRECTORY \"${CMAKE_CURRENT_LIST_DIR}/unity\")\n",
+                               var_name,
+                               var_name,
+                               var_name,
+                               var_name))
+    return false;
+
+  for (int bi = 0; bi < tgt->unity_batch_c; ++bi) {
+    if (!project_textbuf_appendf(buf,
+                                 "set(BBS_%s_BATCH_%d_SOURCES)\n"
+                                 "foreach(bbs_source IN LISTS BBS_%s_ALL_SOURCES)\n"
+                                 "  file(RELATIVE_PATH bbs_rel \"${BBS_PROJECT_ROOT}\" \"${bbs_source}\")\n"
+                                 "  string(REPLACE \\\"\\\\\\\" \"/\" bbs_rel \"${bbs_rel}\")\n"
+                                 "  set(bbs_match FALSE)\n",
+                                 var_name,
+                                 bi,
+                                 var_name))
+      return false;
+
+    for (int si = 0; si < tgt->unity_batches[bi].selector_c; ++si)
+      if (!project_append_cmake_unity_selector_match(buf, tgt->unity_batches[bi].selectors[si], si == 0))
+        return false;
+
+    if (!project_textbuf_appendf(buf,
+                                 "    set(bbs_match TRUE)\n"
+                                 "  endif()\n"
+                                 "  if(bbs_match)\n"
+                                 "    if(bbs_source IN_LIST BBS_%s_UNITY_ASSIGNED)\n"
+                                 "      message(FATAL_ERROR \"Target '%s' unity batch %d overlaps another batch at ${bbs_rel}.\")\n"
+                                 "    endif()\n"
+                                 "    list(APPEND BBS_%s_BATCH_%d_SOURCES \"${bbs_source}\")\n"
+                                 "    list(APPEND BBS_%s_UNITY_ASSIGNED \"${bbs_source}\")\n"
+                                 "  endif()\n"
+                                 "endforeach()\n"
+                                 "list(LENGTH BBS_%s_BATCH_%d_SOURCES BBS_%s_BATCH_%d_COUNT)\n"
+                                 "if(BBS_%s_BATCH_%d_COUNT EQUAL 0)\n"
+                                 "  message(FATAL_ERROR \"Target '%s' unity batch %d did not match any units.\")\n"
+                                 "endif()\n"
+                                 "set(BBS_%s_BATCH_%d_FILE \"${CMAKE_CURRENT_LIST_DIR}/unity/%s_batch_%d.%s\")\n"
+                                 "file(WRITE \"${BBS_%s_BATCH_%d_FILE}\" \"/* Generated by bbs. */\\n\")\n"
+                                 "foreach(bbs_batch_source IN LISTS BBS_%s_BATCH_%d_SOURCES)\n"
+                                 "  string(REPLACE \\\"\\\\\\\" \"/\" bbs_batch_source_norm \"${bbs_batch_source}\")\n"
+                                 "  file(APPEND \"${BBS_%s_BATCH_%d_FILE}\" \"#include \\\"${bbs_batch_source_norm}\\\"\\n\")\n"
+                                 "endforeach()\n"
+                                 "list(APPEND BBS_%s_UNITY_WRAPPERS \"${BBS_%s_BATCH_%d_FILE}\")\n",
+                                 var_name,
+                                 target_id,
+                                 bi + 1,
+                                 var_name,
+                                 bi,
+                                 var_name,
+                                 var_name,
+                                 bi,
+                                 var_name,
+                                 bi,
+                                 var_name,
+                                 bi,
+                                 target_id,
+                                 bi + 1,
+                                 var_name,
+                                 bi,
+                                 unity_file_prefix,
+                                 bi,
+                                 unity_ext,
+                                 var_name,
+                                 bi,
+                                 var_name,
+                                 bi,
+                                 var_name,
+                                 bi,
+                                 var_name,
+                                 var_name,
+                                 bi))
+      return false;
+  }
+
+  if (!project_textbuf_appendf(buf,
+                               "set(BBS_%s_SOURCES ${BBS_%s_UNITY_WRAPPERS})\n"
+                               "foreach(bbs_source IN LISTS BBS_%s_ALL_SOURCES)\n"
+                               "  if(NOT bbs_source IN_LIST BBS_%s_UNITY_ASSIGNED)\n"
+                               "    list(APPEND BBS_%s_SOURCES \"${bbs_source}\")\n"
+                               "  endif()\n"
+                               "endforeach()\n\n",
+                               var_name,
+                               var_name,
+                               var_name,
+                               var_name,
+                               var_name))
+    return false;
+
+  return true;
+}
+
 static bool project_append_cmake_target(project_textbuf* buf, const project* proj, const target* tgt, const char* platform_id, toolchain* tc, const char* bash_path) {
   if (!buf || !tgt || !tgt->meta.id)
     return false;
@@ -3538,8 +3892,12 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
         return false;
     }
   }
-  if (!project_textbuf_append(buf, "\n"))
+  if (tgt->unity_batch_c > 0) {
+    if (!project_append_cmake_manual_unity(buf, tgt, var_name))
+      return false;
+  } else if (!project_textbuf_append(buf, "\n")) {
     return false;
+  }
 
   switch (tgt->type) {
     case TARGET_TYPE_CONSOLE:
@@ -3590,6 +3948,19 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
     return false;
   if (!project_textbuf_appendf(buf, "target_link_libraries(%s %s %s)\n", target_name, own_usage_scope, usage_target_name))
     return false;
+
+  if (tgt->unity_configured && tgt->unity_enabled) {
+    if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES UNITY_BUILD ON)\n", target_name))
+      return false;
+    if (tgt->unity_batch_size_set)
+      if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES UNITY_BUILD_BATCH_SIZE %zu)\n", target_name, tgt->unity_batch_size))
+        return false;
+    if (tgt->unity_batch_c > 0)
+      if (!project_textbuf_appendf(buf,
+                                   "set_source_files_properties(${BBS_%s_UNITY_WRAPPERS} PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)\n",
+                                   var_name))
+        return false;
+  }
 
   if (tgt->type != TARGET_TYPE_HEADER_LIB) {
     if (!project_textbuf_appendf(buf,

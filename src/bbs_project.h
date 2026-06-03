@@ -71,6 +71,11 @@ typedef enum {
 } package_backend;
 
 typedef struct {
+  const char** selectors;
+  int selector_c;
+} target_unity_batch;
+
+typedef struct {
   meta meta;
   lang lang;
   target_type type;
@@ -94,6 +99,12 @@ typedef struct {
   // Translation units, should support wildcards
   const char** units;
   int unit_c;
+  bool unity_configured;
+  bool unity_enabled;
+  bool unity_batch_size_set;
+  size_t unity_batch_size;
+  target_unity_batch* unity_batches;
+  int unity_batch_c;
 
   // Include and link dirs
   const char** include_dirs;

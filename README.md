@@ -25,6 +25,7 @@ What `bbs` gives you:
 
 - a smaller project format for common C/C++ layouts
 - target definitions focused on source files, dependencies, flags, and package sources
+- optional unity build batching, including explicit directory-based batches
 - automatic generation of the CMake backend files needed to build
 - automatic toolchain discovery and caching in `toolchain.bbs`
 - simple platform selection with ids like `windows-x86_64` and `linux-arm64`

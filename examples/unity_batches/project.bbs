@@ -1,0 +1,27 @@
+id(unity_batches)
+name("Unity Batches Example")
+ver(0.1.0)
+
+targets(
+  console(
+    output(unity_batches)
+    include_dirs(src)
+    units(
+      src/main.c
+      src/common/*.c
+      src/feature/*.c
+    )
+    unity(
+      enabled(true)
+      batch_size(4)
+
+      batch(
+        src/common
+      )
+
+      batch(
+        src/feature
+      )
+    )
+  )
+)
