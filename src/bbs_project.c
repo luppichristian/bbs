@@ -4175,19 +4175,35 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
   }
 
   if (tgt->additional_compile_args && tgt->additional_compile_args[0]) {
+    const char* msvc_args_src = compiler_args_translate_msvc(tgt->additional_compile_args, tgt->lang == LANG_CPP, NULL);
     const char* args = project_escape_cmake_string(tgt->additional_compile_args);
-    if (!args)
+    const char* msvc_args = project_escape_cmake_string(msvc_args_src ? msvc_args_src : "");
+    if (!args || !msvc_args)
       return false;
     if (!project_textbuf_appendf(buf,
-                                 "set(BBS_%s_COMPILE_ARGS \"%s\")\n"
-                                 "separate_arguments(BBS_%s_COMPILE_ARGS NATIVE_COMMAND \"${BBS_%s_COMPILE_ARGS}\")\n"
-                                 "target_compile_options(%s %s ${BBS_%s_COMPILE_ARGS})\n",
-                                 var_name,
+                                  "set(BBS_%s_COMPILE_ARGS \"%s\")\n"
+                                  "set(BBS_%s_COMPILE_ARGS_MSVC \"%s\")\n"
+                                  "separate_arguments(BBS_%s_COMPILE_ARGS NATIVE_COMMAND \"${BBS_%s_COMPILE_ARGS}\")\n"
+                                  "separate_arguments(BBS_%s_COMPILE_ARGS_MSVC NATIVE_COMMAND \"${BBS_%s_COMPILE_ARGS_MSVC}\")\n"
+                                  "if(MSVC)\n"
+                                  "  target_compile_options(%s %s ${BBS_%s_COMPILE_ARGS_MSVC})\n"
+                                  "else()\n"
+                                  "  target_compile_options(%s %s ${BBS_%s_COMPILE_ARGS})\n"
+                                  "endif()\n",
+                                  var_name,
                                   args,
+                                  var_name,
+                                  msvc_args,
+                                  var_name,
+                                  var_name,
                                   var_name,
                                   var_name,
                                   target_name,
                                   tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE",
+                                  var_name,
+                                  target_name,
+                                  tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE",
+                                  var_name,
                                   var_name))
       return false;
   }

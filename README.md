@@ -6,6 +6,12 @@ It uses a small `.bbs` configuration format, discovers your local toolchain, gen
 
 It also supports project-local metacompilation through `builders`: small dynamically loaded modules that can modify targets, flags, and command behavior before and after build phases.
 
+Current compiler support: `MSVC`, `Clang`, and `GCC`.
+Current supported target platforms: `windows`, `linux`, `macos`
+Current supported target architectures: `x86_64`, `x86`, `arm64`
+
+For escape-hatch flags, `bbs` treats `additional_compile_args` as Clang/GCC-style input and translates supported subsets to MSVC when generating the backend.
+
 ## Why Add Another Layer On Top Of CMake
 
 CMake is widely used, but it still leaves a lot of multi-platform build setup in the hands of the project author.
@@ -133,7 +139,7 @@ bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
     if (!bbs_target_has_dependency(current, "preprocessor"))
       continue;
 
-    if (!bbs_target_append_text(current, BBS_TARGET_TEXT_ADDITIONAL_COMPILE_ARGS, "-DPREPROCESSOR_ACTIVE", " "))
+    if (!bbs_target_set_text(current, BBS_TARGET_TEXT_DEFINES, "PREPROCESSOR_ACTIVE"))
       return false;
   }
 
@@ -250,6 +256,7 @@ The numbered docs are meant to be read in roughly this order:
 - [`examples/raylib_example/`](./examples/raylib_example/)
 - [`examples/bbs_package_consumer/`](./examples/bbs_package_consumer/) consuming [`examples/bbs_package_dep/`](./examples/bbs_package_dep/) as a nested `project.bbs` package
 - [`examples/builders/`](./examples/builders/) showing dynamic metacompilation through a builder dependency
+- [`examples/builder_target_properties/`](./examples/builder_target_properties/) showing how a builder can rewrite target properties before compilation
 
 ## Repository Layout
 

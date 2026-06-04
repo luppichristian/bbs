@@ -1,5 +1,6 @@
 #define BBS_INTERNAL
 #include "bbs_base.c"
+#include "bbs_compiler_args.c"
 #include "bbs_toolchain.c"
 #include "bbs_user.c"
 #include "bbs_project.c"

@@ -1,0 +1,22 @@
+id(builder_target_properties)
+name("Builder Target Properties")
+ver(0.1.0)
+
+targets(
+  console(
+    id(demo_app)
+    units(
+      src/main.c
+    )
+    dependencies(
+      target_tuner
+    )
+  )
+)
+
+builders(
+  id(target_tuner)
+  units(
+    src/builder.c
+  )
+)

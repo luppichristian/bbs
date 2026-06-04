@@ -213,7 +213,7 @@ bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
     if (!bbs_target_has_dependency(current, "preprocessor"))
       continue;
 
-    if (!bbs_target_append_text(current, BBS_TARGET_TEXT_ADDITIONAL_COMPILE_ARGS, "-DPREPROCESSOR_ACTIVE", " "))
+    if (!bbs_target_set_text(current, BBS_TARGET_TEXT_DEFINES, "PREPROCESSOR_ACTIVE"))
       return false;
   }
 

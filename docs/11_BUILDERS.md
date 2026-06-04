@@ -153,6 +153,19 @@ Typical dynamic changes include:
 - adding generated include paths
 - switching config-local values for one command
 
+Prefer dedicated properties over raw compiler flags when possible.
+
+Examples:
+
+- use `BBS_TARGET_TEXT_DEFINES` for preprocessor macros
+- use `BBS_TARGET_TEXT_STDVER` for language standard changes
+- use `BBS_TARGET_TEXT_OUTPUT` for output naming
+
+Use `additional_compile_args` only as an escape hatch for flags that do not already have a dedicated property.
+
+Current compiler support is centered on MSVC, Clang, and GCC.
+When extra compile args are emitted into the backend, `bbs` treats them as Clang/GCC-style input and translates supported subsets for MSVC.
+
 By default these mutations are temporary.
 
 If a builder wants the mutated state to survive future commands, it can call:
@@ -219,7 +232,7 @@ bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
     if (!bbs_target_has_dependency(current, "preprocessor"))
       continue;
 
-    if (!bbs_target_append_text(current, BBS_TARGET_TEXT_ADDITIONAL_COMPILE_ARGS, "-DMY_DEFINE", " "))
+    if (!bbs_target_set_text(current, BBS_TARGET_TEXT_DEFINES, "MY_DEFINE"))
       return false;
   }
 
@@ -244,7 +257,7 @@ bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
     if (!bbs_target_has_dependency(current, "preprocessor"))
       continue;
 
-    if (!bbs_target_append_text(current, BBS_TARGET_TEXT_ADDITIONAL_COMPILE_ARGS, "-DPREPROCESSOR_ACTIVE", " "))
+    if (!bbs_target_set_text(current, BBS_TARGET_TEXT_DEFINES, "PREPROCESSOR_ACTIVE"))
       return false;
   }
 
@@ -262,7 +275,7 @@ That example:
 
 - defines a `preprocessor` builder
 - declares `dependencies(preprocessor)` on the app target
-- injects `-DPREPROCESSOR_ACTIVE` during the build phase
+- injects `PREPROCESSOR_ACTIVE` through the target `defines` property during the build phase
 - proves it worked by requiring that define in `src/main.c`
 
 You can try it with:
