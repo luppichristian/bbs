@@ -1,8 +1,10 @@
-# bbs (Better Build System)
+# bbs (my Better Build System)
 
 `bbs` is a build frontend for C and C++ projects.
 
 It uses a small `.bbs` configuration format, discovers your local toolchain, generates the CMake backend files for you, and gives you one CLI for build, run, test, packaging, and distribution.
+
+It also supports project-local metacompilation through `builders`: small dynamically loaded modules that can modify targets, flags, and command behavior before and after build phases.
 
 ## Why Add Another Layer On Top Of CMake
 
@@ -25,6 +27,7 @@ This repository contains:
 - the `bbs` executable itself
 - the `.bbs` file parser and project model
 - toolchain discovery logic
+- the public builder/reference API in `pub/`
 - example projects
 - end-user documentation
 
@@ -47,6 +50,7 @@ What `bbs` gives you:
 - a distribution flow with staging and optional archive creation
 - shared user defaults in `user.bbs` and local per-project overrides in `local.bbs`
 - helper generators such as `.gitignore` and GitHub workflows
+- metacompilation through `builders(...)`, so projects can inject dynamic prebuild/post-command logic without forking `bbs`
 
 In short:
 
@@ -82,6 +86,62 @@ Build and run:
 ```bat
 bbs run
 ```
+
+With builders:
+
+```txt
+id(my_app)
+name("My App")
+ver(0.1.0)
+
+targets(
+  console(
+    id(my_app)
+    units(
+      src/main.c
+    )
+    dependencies(
+      preprocessor
+    )
+  )
+)
+
+builders(
+  id(preprocessor)
+  units(
+    src/builder.c
+  )
+)
+```
+
+This lets a project compile and load a small builder module that can, for example, inject compile flags dynamically before a target is built.
+
+Minimal builder source:
+
+```c
+#include <bbs/build.h>
+
+bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
+  (void)ctx;
+  (void)tgt;
+
+  if (signal != BBS_SIG_PRE_BUILD || !prj)
+    return true;
+
+  for (int i = 0; i < prj->target_c; ++i) {
+    bbs_tgt* current = &prj->targets[i];
+    if (!bbs_target_has_dependency(current, "preprocessor"))
+      continue;
+
+    if (!bbs_target_append_text(current, BBS_TARGET_TEXT_ADDITIONAL_COMPILE_ARGS, "-DPREPROCESSOR_ACTIVE", " "))
+      return false;
+  }
+
+  return true;
+}
+```
+
+See [docs/11_BUILDERS.md](./docs/11_BUILDERS.md) for the full builders guide.
 
 `bbs` initializes the backend automatically when needed.
 Use `bbs update --init-toolchain` when you explicitly want to regenerate the cached toolchain state.
@@ -143,6 +203,7 @@ bbs dist
 - `toolchain.bbs`: generated cache of discovered tools, SDKs, and environments
 - `build/`: generated backend files and build outputs by default
 - `dist/`: staged distribution outputs by default
+- `builders(...)`: optional project-local metacompilation modules compiled and loaded by `bbs`
 
 For shared default-style settings, precedence is:
 
@@ -180,6 +241,7 @@ The numbered docs are meant to be read in roughly this order:
 - [docs/8_TOOLCHAIN.md](./docs/8_TOOLCHAIN.md)
 - [docs/9_EXPANSION_TOKENS.md](./docs/9_EXPANSION_TOKENS.md)
 - [docs/10_PACKAGES.md](./docs/10_PACKAGES.md)
+- [docs/11_BUILDERS.md](./docs/11_BUILDERS.md)
 
 ## Examples
 
@@ -187,10 +249,12 @@ The numbered docs are meant to be read in roughly this order:
 - [`examples/static_lib/`](./examples/static_lib/)
 - [`examples/raylib_example/`](./examples/raylib_example/)
 - [`examples/bbs_package_consumer/`](./examples/bbs_package_consumer/) consuming [`examples/bbs_package_dep/`](./examples/bbs_package_dep/) as a nested `project.bbs` package
+- [`examples/builders/`](./examples/builders/) showing dynamic metacompilation through a builder dependency
 
 ## Repository Layout
 
 - `src/`: implementation
+- `pub/`: public headers for builders and external consumers
 - `docs/`: end-user documentation
 - `examples/`: sample `bbs` projects
 - `build_clang.bat`: Windows Clang build
@@ -204,7 +268,7 @@ The numbered docs are meant to be read in roughly this order:
 
 - shader compilation
 - custom asset compilation and pipeline support
-- metaprogramming features built around the Clang AST
+- deeper metaprogramming features built around the Clang AST
 
 ## License
 

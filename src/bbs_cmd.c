@@ -1,5 +1,6 @@
 #pragma once
 #include "bbs_cmd.h"
+#include "bbs_builders.h"
 #include "bbs_project.c"
 
 static void print_section(const char* title) {
@@ -457,6 +458,7 @@ static bool cmd_exec_build_args(const build_cmd_args* args, toolchain* tc) {
   const char* target = args ? args->target : NULL;
   const char* platform = args ? args->platform : NULL;
   const char* config = args ? args->config : NULL;
+  builders_set_selection(target, platform, config);
   if (cmdopt_is_star(target) || cmdopt_is_star(platform) || cmdopt_is_star(config))
     return cmd_run_build_matrix(target, platform, config, tc);
   return project_build(target, platform, config, tc);
@@ -514,8 +516,9 @@ static int run_cmd_auto(cmd_ctx* cmdctx) {
   cmd_parse_build_args(cmdctx, &args, NULL, 0);
 
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  builders_begin(CMD_AUTO, cmdctx, tc, true);
   if (!cmd_exec_build_args(&args, tc))
-    return error_code(CMD_AUTO, 0);
+    return builders_end(error_code(CMD_AUTO, 0));
 
   project proj = {0};
   const char* watch_root = project_current_workdir();
@@ -533,12 +536,12 @@ static int run_cmd_auto(cmd_ctx* cmdctx) {
   unsigned int retry_count = user_uint(&proj.user_cfg, USER_UINT_AUTO_RETRY_COUNT);
   unsigned int retry_delay_ms = user_uint(&proj.user_cfg, USER_UINT_AUTO_RETRY_DELAY_MS);
   if (debounce_value && !cmd_parse_uint_option(debounce_value, "debounce", &debounce_ms))
-    return error_code(CMD_AUTO, 3);
+    return builders_end(error_code(CMD_AUTO, 3));
 
   watch_snapshot prev = {0};
   if (!watch_collect_snapshot(watch_root, ignored_dirs, ignored_dir_c, &prev)) {
     error("Failed to initialize file watcher snapshot.");
-    return error_code(CMD_AUTO, 1);
+    return builders_end(error_code(CMD_AUTO, 1));
   }
 
   print("Auto");
@@ -566,7 +569,7 @@ static int run_cmd_auto(cmd_ctx* cmdctx) {
     if (cmd_exec_build_args_retry(&args, tc, retry_count, retry_delay_ms)) {
       if (!watch_collect_snapshot(watch_root, ignored_dirs, ignored_dir_c, &prev)) {
         error("Failed to refresh file watcher snapshot after rebuild.");
-        return error_code(CMD_AUTO, 2);
+        return builders_end(error_code(CMD_AUTO, 2));
       }
     } else {
       error("Rebuild failed after retries. Watching for more changes.");
@@ -651,10 +654,12 @@ static bool cmd_run_build_matrix(const char* target, const char* platform, const
       const char* p = cmdopt_is_star(platform) ? platforms[pi] : (platform ? platform : project_platform_id(tc->p_os, tc->p_arch));
       if (cmdopt_is_star(target)) {
         ++runs;
+        builders_set_selection(NULL, p, cfg);
         if (!project_build(NULL, p, cfg, tc))
           ++failures;
       } else {
         ++runs;
+        builders_set_selection(target, p, cfg);
         if (!project_build(target, p, cfg, tc))
           ++failures;
       }
@@ -693,24 +698,13 @@ static bool cmd_run_run_matrix(const char* target, const char* platform, const c
       const char* p = cmdopt_is_star(platform) ? platforms[pi] : (platform ? platform : project_platform_id(tc->p_os, tc->p_arch));
       if (cmdopt_is_star(target)) {
         int matched = 0;
-        bool built = false;
         for (int ti = 0; ti < proj.target_c; ++ti) {
           if (!project_target_is_runnable(&proj.targets[ti]))
             continue;
-          if (!built) {
-            ++runs;
-            if (!project_build(NULL, p, cfg, tc)) {
-              ++failures;
-              built = true;
-              break;
-            }
-            built = true;
-          }
           ++matched;
           ++runs;
-          project_print_action_header("Run", &proj, p);
-          project_print_target_line("Run", &proj.targets[ti]);
-          if (!project_run_execute(&proj, &proj.targets[ti], p, tc))
+          builders_set_selection(proj.targets[ti].meta.id, p, cfg);
+          if (!project_run(proj.targets[ti].meta.id, p, cfg, tc))
             ++failures;
         }
         if (matched == 0) {
@@ -719,6 +713,7 @@ static bool cmd_run_run_matrix(const char* target, const char* platform, const c
         }
       } else {
         ++runs;
+        builders_set_selection(target, p, cfg);
         if (!project_run(target, p, cfg, tc))
           ++failures;
       }
@@ -758,11 +753,13 @@ static bool cmd_run_dist_matrix(const char* target, const char* platform, const 
       if (cmdopt_is_star(target)) {
         for (int ti = 0; ti < proj.target_c; ++ti) {
           ++runs;
+          builders_set_selection(proj.targets[ti].meta.id, p, cfg);
           if (!project_dist(proj.targets[ti].meta.id, p, cfg, tc))
             ++failures;
         }
       } else {
         ++runs;
+        builders_set_selection(target, p, cfg);
         if (!project_dist(target, p, cfg, tc))
           ++failures;
       }
@@ -801,27 +798,13 @@ static bool cmd_run_test_matrix(const char* test_name, const char* target, const
       const char* p = cmdopt_is_star(platform) ? platforms[pi] : (platform ? platform : project_platform_id(tc->p_os, tc->p_arch));
       if (cmdopt_is_star(target)) {
         int matched = 0;
-        bool built = false;
         for (int ti = 0; ti < proj.target_c; ++ti) {
           if (!project_target_is_test(&proj.targets[ti]))
             continue;
-          if (!built) {
-            ++runs;
-            if (!project_build(NULL, p, cfg, tc)) {
-              ++failures;
-              built = true;
-              break;
-            }
-            built = true;
-          }
           ++matched;
           ++runs;
-          project_print_action_header("Test", &proj, p);
-          project_print_field("Directory", project_resolved_dir(user_text(&proj.user_cfg, USER_TEXT_BUILDDIR), proj.active_config, p));
-          if (test_name && test_name[0])
-            project_print_field("Test", test_name);
-          project_print_target_line("Test", &proj.targets[ti]);
-          if (!project_test_execute(&proj, &proj.targets[ti], test_name, p, tc))
+          builders_set_selection(proj.targets[ti].meta.id, p, cfg);
+          if (!project_test(test_name, proj.targets[ti].meta.id, p, cfg, tc))
             ++failures;
         }
         if (matched == 0) {
@@ -830,6 +813,7 @@ static bool cmd_run_test_matrix(const char* test_name, const char* target, const
         }
       } else {
         ++runs;
+        builders_set_selection(target, p, cfg);
         if (!project_test(test_name, target, p, cfg, tc))
           ++failures;
       }
@@ -999,10 +983,12 @@ static int run_cmd_update(cmd_ctx* cmdctx) {
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), opts[INIT_TOOLCHAIN].present, cmdctx);
   if (!tc)
     return error_code(CMD_UPDATE, 2);
+  builders_begin(CMD_UPDATE, cmdctx, tc, false);
+  builders_set_selection(NULL, NULL, config);
   if (!project_update(tc, opts[REFRESH_PACKAGES].present))
-    return error_code(CMD_UPDATE, 0);
+    return builders_end(error_code(CMD_UPDATE, 0));
 
-  return 0;
+  return builders_end(0);
 }
 
 static const char* gen_gitignore_text(void) {
@@ -1901,9 +1887,10 @@ static int run_cmd_build(cmd_ctx* cmdctx) {
   cmd_parse_build_args(cmdctx, &args, NULL, 0);
 
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  builders_begin(CMD_BUILD, cmdctx, tc, false);
   if (!cmd_exec_build_args(&args, tc))
-    return error_code(CMD_BUILD, 0);
-  return 0;
+    return builders_end(error_code(CMD_BUILD, 0));
+  return builders_end(0);
 }
 
 static int run_cmd_run(cmd_ctx* cmdctx) {
@@ -1925,15 +1912,17 @@ static int run_cmd_run(cmd_ctx* cmdctx) {
   cmdline_validate(cmdctx->cl);
 
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  builders_begin(CMD_RUN, cmdctx, tc, false);
   if (cmdopt_is_star(target) || cmdopt_is_star(platform) || cmdopt_is_star(config)) {
     if (!cmd_run_run_matrix(target, platform, config, tc))
-      return error_code(CMD_RUN, 0);
-    return 0;
+      return builders_end(error_code(CMD_RUN, 0));
+    return builders_end(0);
   }
 
+  builders_set_selection(target, platform, config);
   if (!project_run(target, platform, config, tc))
-    return error_code(CMD_RUN, 0);
-  return 0;
+    return builders_end(error_code(CMD_RUN, 0));
+  return builders_end(0);
 }
 
 static bool text_contains_ci(const char* text, const char* needle) {
@@ -2443,15 +2432,17 @@ static int run_cmd_dist(cmd_ctx* cmdctx) {
   cmdline_validate(cmdctx->cl);
 
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  builders_begin(CMD_DIST, cmdctx, tc, false);
   if (cmdopt_is_star(target) || cmdopt_is_star(platform) || cmdopt_is_star(config)) {
     if (!cmd_run_dist_matrix(target, platform, config, tc))
-      return error_code(CMD_DIST, 0);
-    return 0;
+      return builders_end(error_code(CMD_DIST, 0));
+    return builders_end(0);
   }
 
+  builders_set_selection(target, platform, config);
   if (!project_dist(target, platform, config, tc))
-    return error_code(CMD_DIST, 0);
-  return 0;
+    return builders_end(error_code(CMD_DIST, 0));
+  return builders_end(0);
 }
 
 static int run_cmd_test(cmd_ctx* cmdctx) {
@@ -2474,15 +2465,17 @@ static int run_cmd_test(cmd_ctx* cmdctx) {
   cmdline_validate(cmdctx->cl);
 
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
+  builders_begin(CMD_TEST, cmdctx, tc, false);
   if (cmdopt_is_star(target) || cmdopt_is_star(platform) || cmdopt_is_star(config)) {
     if (!cmd_run_test_matrix(test_name, target, platform, config, tc))
-      return error_code(CMD_TEST, 0);
-    return 0;
+      return builders_end(error_code(CMD_TEST, 0));
+    return builders_end(0);
   }
 
+  builders_set_selection(target, platform, config);
   if (!project_test(test_name, target, platform, config, tc))
-    return error_code(CMD_TEST, 0);
-  return 0;
+    return builders_end(error_code(CMD_TEST, 0));
+  return builders_end(0);
 }
 
 static bool bumpver_match_meta_field(node* scope, const char* field_name, const char* value);

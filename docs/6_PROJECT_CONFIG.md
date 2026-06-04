@@ -18,6 +18,7 @@ A `project.bbs` file usually has these parts:
 2. optional config list
 3. project-level filters
 4. target list
+5. optional builder list
 
 Smallest valid shape:
 
@@ -165,6 +166,63 @@ Container for target definitions.
 
 Projects must define at least one target.
 
+## `builders(...)`
+
+Optional top-level metacompilation section.
+
+Builders are project-local modules that `bbs` compiles and loads dynamically, then calls before and after command phases.
+They are useful for dynamic build logic such as appending compile options, injecting defines, or adjusting resolved target settings for one command only.
+
+Example:
+
+```txt
+builders(
+  id(preprocessor)
+  units(
+    src/builder.c
+  )
+)
+```
+
+Targets can opt into builder behavior through `dependencies(...)`:
+
+```txt
+console(
+  id(my_app)
+  units(src/main.c)
+  dependencies(
+    preprocessor
+  )
+)
+```
+
+Minimal builder source:
+
+```c
+#include <bbs/build.h>
+
+bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
+  (void)ctx;
+  (void)tgt;
+
+  if (signal != BBS_SIG_PRE_BUILD || !prj)
+    return true;
+
+  for (int i = 0; i < prj->target_c; ++i) {
+    bbs_tgt* current = &prj->targets[i];
+    if (!bbs_target_has_dependency(current, "preprocessor"))
+      continue;
+
+    if (!bbs_target_append_text(current, BBS_TARGET_TEXT_ADDITIONAL_COMPILE_ARGS, "-DPREPROCESSOR_ACTIVE", " "))
+      return false;
+  }
+
+  return true;
+}
+```
+
+For full lifecycle details and the shipped example, see [11_BUILDERS.md](./11_BUILDERS.md).
+
 ## Target Types
 
 Supported target section names:
@@ -309,6 +367,8 @@ Link search directories.
 Dependencies on other `bbs` targets by name.
 
 These are project-internal target links, not raw system libraries.
+
+They can also be used to opt into builder behavior when the dependency name matches a builder id declared in `builders(...)`.
 
 ## `link_libs(...)`
 

@@ -258,6 +258,74 @@ bbs build
 bbs run
 ```
 
+## 7. Builder-Driven Metacompilation
+
+This follows `examples/builders/project.bbs`.
+
+```txt
+id(builders_example)
+name("Builders Example")
+ver(0.1.0)
+
+targets(
+  console(
+    id(my_app)
+    units(
+      src/main.c
+    )
+    dependencies(
+      preprocessor
+    )
+  )
+)
+
+builders(
+  id(preprocessor)
+  units(
+    src/builder.c
+  )
+)
+```
+
+Builder source:
+
+```c
+#include <bbs/build.h>
+
+bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
+  (void)ctx;
+  (void)tgt;
+
+  if (signal != BBS_SIG_PRE_BUILD || !prj)
+    return true;
+
+  for (int i = 0; i < prj->target_c; ++i) {
+    bbs_tgt* current = &prj->targets[i];
+    if (!bbs_target_has_dependency(current, "preprocessor"))
+      continue;
+
+    if (!bbs_target_append_text(current, BBS_TARGET_TEXT_ADDITIONAL_COMPILE_ARGS, "-DPREPROCESSOR_ACTIVE", " "))
+      return false;
+  }
+
+  return true;
+}
+```
+
+Useful commands:
+
+```bat
+bbs build
+bbs run -t my_app
+```
+
+What this demonstrates:
+
+- builders are defined in `project.bbs`, not in the global tool
+- targets opt into builder behavior through `dependencies(...)`
+- builders can mutate compile-time settings dynamically before the target is built
+- the mutation is local to the current command unless the builder explicitly saves it
+
 What this demonstrates:
 
 - a package target can point at a directory that has its own `project.bbs`

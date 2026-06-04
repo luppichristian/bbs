@@ -1,5 +1,6 @@
 #pragma once
 #include "bbs_project.h"
+#include "bbs_builders.h"
 #include "bbs_toolchain.c"
 #include "bbs_user.c"
 
@@ -7,6 +8,8 @@ static bool project_parse_string_list(node* list_n, const char*** out_items, int
 static const char* project_join_scalar_list(node* list_n, int* out_count);
 static bool project_apply_unity_node(node* unity_n, target* out, const char* target_label);
 static bool project_apply_target_attr_node_with_mode(node* attr_n, target* out, const char* target_label, bool reset_package_sources);
+static bool project_parse_builder_node(node* builders_n, builder* out);
+static int project_find_builder_index(const project* proj, const char* name);
 static bool project_load_user_config(const char* local_cfg_path, user* out);
 static const char* project_target_executable_abs(const project* proj, const target* tgt, const char* platform);
 static bool project_apply_dist_node(node* dist_n, target* out, const char* target_label);
@@ -486,6 +489,38 @@ static target* project_add_target(project* proj) {
 
   target* out = &proj->targets[proj->target_c++];
   memset(out, 0, sizeof(*out));
+  return out;
+}
+
+static bool project_ensure_builder_capacity(project* proj, int min_cap) {
+  if (!proj || min_cap <= 0)
+    return false;
+  if (proj->builder_cap >= min_cap)
+    return true;
+
+  int new_cap = proj->builder_cap > 0 ? proj->builder_cap : 4;
+  while (new_cap < min_cap)
+    new_cap *= 2;
+
+  builder* items = push((size_t)new_cap * sizeof(*items));
+  if (!items)
+    return false;
+  memset(items, 0, (size_t)new_cap * sizeof(*items));
+  if (proj->builders && proj->builder_c > 0)
+    memcpy(items, proj->builders, (size_t)proj->builder_c * sizeof(*items));
+
+  proj->builders = items;
+  proj->builder_cap = new_cap;
+  return true;
+}
+
+static builder* project_add_builder(project* proj) {
+  if (!proj || !project_ensure_builder_capacity(proj, proj->builder_c + 1))
+    return NULL;
+
+  builder* out = &proj->builders[proj->builder_c++];
+  memset(out, 0, sizeof(*out));
+  out->lang = LANG_C;
   return out;
 }
 
@@ -1140,6 +1175,113 @@ static bool project_parse_target_node(node* target_n, target* out, const char* a
   return true;
 }
 
+static bool project_parse_builder_node(node* builders_n, builder* out) {
+  if (!builders_n || !out)
+    return false;
+  if (builders_n->type != NODE_TYPE_DEF) {
+    error("Attribute 'builders' must be a section.");
+    return false;
+  }
+
+  memset(out, 0, sizeof(*out));
+  out->lang = LANG_C;
+  if (!project_parse_meta_fields(builders_n, &out->meta))
+    return false;
+
+  int child_count = 0;
+  node** children = project_children_in_source_order(builders_n, &child_count);
+  for (int i = 0; i < child_count; ++i) {
+    node* child = children[i];
+    const char* text = NULL;
+    if (!child || !child->name)
+      continue;
+
+    if (_stricmp(child->name, "id") == 0 || _stricmp(child->name, "name") == 0 || _stricmp(child->name, "authors") == 0 ||
+        _stricmp(child->name, "ver") == 0 || _stricmp(child->name, "license") == 0)
+      continue;
+
+    if (_stricmp(child->name, "lang") == 0) {
+      text = project_scalar_text(child);
+      if (!text) {
+        error("Builder attribute 'lang' must be a string or identifier.");
+        return false;
+      }
+      if (_stricmp(text, "c") != 0 && _stricmp(text, "cpp") != 0 && _stricmp(text, "c++") != 0) {
+        error("Unknown builder lang '%s'.", text);
+        return false;
+      }
+      out->lang = project_lang_from_text(text);
+      continue;
+    }
+
+    if (_stricmp(child->name, "output") == 0) {
+      text = project_scalar_text(child);
+      if (!text) {
+        error("Builder attribute 'output' must be a string or identifier.");
+        return false;
+      }
+      out->output = text;
+      continue;
+    }
+
+    if (_stricmp(child->name, "units") == 0) {
+      if (!project_parse_string_list(child, &out->units, &out->unit_c))
+        return false;
+      continue;
+    }
+
+    if (_stricmp(child->name, "include_dirs") == 0) {
+      if (!project_parse_string_list(child, &out->include_dirs, &out->include_dir_c))
+        return false;
+      continue;
+    }
+
+    if (_stricmp(child->name, "defines") == 0) {
+      out->defines = project_join_scalar_list(child, &out->define_c);
+      if (out->define_c < 0)
+        return false;
+      continue;
+    }
+
+    if (_stricmp(child->name, "additional_compile_args") == 0) {
+      text = project_scalar_text(child);
+      if (!text) {
+        error("Builder attribute 'additional_compile_args' must be a string or identifier.");
+        return false;
+      }
+      out->additional_compile_args = text;
+      continue;
+    }
+
+    if (_stricmp(child->name, "additional_link_args") == 0) {
+      text = project_scalar_text(child);
+      if (!text) {
+        error("Builder attribute 'additional_link_args' must be a string or identifier.");
+        return false;
+      }
+      out->additional_link_args = text;
+      continue;
+    }
+
+    error("Unknown builder attribute '%s'.", child->name);
+    return false;
+  }
+
+  if (!out->meta.id || !out->meta.id[0]) {
+    error("Builder is missing required attribute 'id'.");
+    return false;
+  }
+  if (out->unit_c <= 0) {
+    error("Builder '%s' must define at least one source unit.", out->meta.id);
+    return false;
+  }
+  if (!out->meta.name)
+    out->meta.name = out->meta.id;
+  if (!out->output)
+    out->output = out->meta.id;
+  return true;
+}
+
 static const char* project_make_default_target_id(target_type type, int index) {
   char buf[64] = {0};
   snprintf(buf, sizeof(buf), "%s_%d", project_target_type_name(type), index + 1);
@@ -1304,6 +1446,30 @@ static bool project_validate(const project* proj) {
     }
   }
 
+  for (int i = 0; i < proj->builder_c; ++i) {
+    const builder* bld = &proj->builders[i];
+    if (!bld->meta.id || !bld->meta.id[0]) {
+      error("Builder %d resolved to an empty id.", i + 1);
+      return false;
+    }
+    if (bld->unit_c <= 0) {
+      error("Builder '%s' must define at least one source unit.", bld->meta.id);
+      return false;
+    }
+    for (int j = i + 1; j < proj->builder_c; ++j) {
+      if (_stricmp(bld->meta.id, proj->builders[j].meta.id) == 0) {
+        error("Duplicate builder id '%s'.", bld->meta.id);
+        return false;
+      }
+    }
+    for (int j = 0; j < proj->target_c; ++j) {
+      if (_stricmp(bld->meta.id, proj->targets[j].meta.id) == 0) {
+        error("Builder id '%s' conflicts with target id.", bld->meta.id);
+        return false;
+      }
+    }
+  }
+
   unsigned char* visit_state = push((size_t)proj->target_c * sizeof(*visit_state));
   if (!visit_state)
     return false;
@@ -1317,6 +1483,8 @@ static bool project_validate(const project* proj) {
     visit_state[i] = 1;
     for (int j = 0; j < tgt->dependency_c; ++j) {
       const char* dep_name = tgt->dependencies[j];
+      if (project_find_builder_index(proj, dep_name) >= 0)
+        continue;
       int dep_idx = project_find_target_index(proj, dep_name);
       if (dep_idx < 0)
         return false;
@@ -1352,6 +1520,8 @@ static bool project_validate(const project* proj) {
       }
 
       const char* dep_name = tgt->dependencies[edge_idx[sp]++];
+      if (project_find_builder_index(proj, dep_name) >= 0)
+        continue;
       int dep_idx = project_find_target_index(proj, dep_name);
       if (dep_idx < 0)
         return false;
@@ -1779,6 +1949,22 @@ static bool project_parse_project_node(node* project_n, const char* selected_con
       if (!project_parse_target_node(child, tgt, out->active_config))
         return false;
     }
+  }
+
+  int project_child_c = 0;
+  node** project_children = project_children_in_source_order(project_n, &project_child_c);
+  for (int i = 0; i < project_child_c; ++i) {
+    node* child = project_children[i];
+    if (!child || !child->name || _stricmp(child->name, "builders") != 0)
+      continue;
+
+    builder* bld = project_add_builder(out);
+    if (!bld) {
+      error("Failed to allocate project builder.");
+      return false;
+    }
+    if (!project_parse_builder_node(child, bld))
+      return false;
   }
 
   if (!project_validate_filter_refs(project_n, out))
@@ -3756,6 +3942,8 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
         return false;
     }
     for (int i = 0; i < tgt->dependency_c; ++i) {
+      if (project_find_builder_index(proj, tgt->dependencies[i]) >= 0)
+        continue;
       int dep_idx = project_find_target_index(proj, tgt->dependencies[i]);
       if (dep_idx < 0)
         return false;
@@ -3944,6 +4132,8 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
   }
 
   for (int i = 0; i < tgt->dependency_c; ++i) {
+    if (project_find_builder_index(proj, tgt->dependencies[i]) >= 0)
+      continue;
     int dep_idx = project_find_target_index(proj, tgt->dependencies[i]);
     if (dep_idx < 0)
       return false;
@@ -4597,6 +4787,15 @@ static int project_find_target_index(const project* proj, const char* name) {
   return match;
 }
 
+static int project_find_builder_index(const project* proj, const char* name) {
+  if (!proj || !name || !name[0])
+    return -1;
+  for (int i = 0; i < proj->builder_c; ++i)
+    if (proj->builders[i].meta.id && _stricmp(proj->builders[i].meta.id, name) == 0)
+      return i;
+  return -1;
+}
+
 static int project_count_package_targets(const project* proj) {
   if (!proj)
     return 0;
@@ -4804,15 +5003,19 @@ static void project_print_target_line(const char* action, const target* tgt) {
 
 static bool project_build(const char* target_name, const char* platform, const char* config, toolchain* tc) {
   project proj = {0};
+  bool ok = false;
+  target* event_tgt = NULL;
   if (!project_load_config(config, &proj))
+    return false;
+  if (!builders_project_loaded(&proj))
     return false;
 
   const char* platform_id = project_resolve_platform_id(platform, tc);
   if (!platform_id)
-    return false;
+    goto done;
   bool backend_changed = false;
   if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
-    return false;
+    goto done;
 
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
 
@@ -4821,11 +5024,13 @@ static bool project_build(const char* target_name, const char* platform, const c
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
-      return false;
+      goto done;
+    event_tgt = &proj.targets[idx];
     project_print_target_line("Build", &proj.targets[idx]);
     if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
-      return false;
-    return project_run_cmake_build(tc, &proj, preset, project_target_build_target_name(&proj.targets[idx]), platform_id);
+      goto done;
+    ok = project_run_cmake_build(tc, &proj, preset, project_target_build_target_name(&proj.targets[idx]), platform_id);
+    goto done;
   }
 
   if (proj.target_c == 1)
@@ -4837,30 +5042,38 @@ static bool project_build(const char* target_name, const char* platform, const c
   }
 
   if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
-    return false;
-  return project_run_cmake_build(tc, &proj, preset, NULL, platform_id);
+    goto done;
+  ok = project_run_cmake_build(tc, &proj, preset, NULL, platform_id);
+
+done:
+  builders_project_finished(&proj, event_tgt, ok);
+  return ok;
 }
 
 static bool project_run(const char* target_name, const char* platform, const char* config, toolchain* tc) {
   project proj = {0};
+  bool ok = false;
+  target* event_tgt = NULL;
   if (!project_load_config(config, &proj))
+    return false;
+  if (!builders_project_loaded(&proj))
     return false;
 
   const char* platform_id = project_resolve_platform_id(platform, tc);
   if (!platform_id)
-    return false;
+    goto done;
   os target_os = OS_MAX;
   arch target_arch = ARCH_MAX;
   if (!project_parse_platform_id(platform_id, &target_os, &target_arch))
-    return false;
+    goto done;
   if (target_os != tc->p_os || target_arch != tc->p_arch) {
     error("Run only supports host-native outputs. Requested '%s' but host is '%s'.", platform_id, project_default_platform_id());
-    return false;
+    goto done;
   }
 
   bool backend_changed = false;
   if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
-    return false;
+    goto done;
 
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
 
@@ -4869,51 +5082,60 @@ static bool project_run(const char* target_name, const char* platform, const cha
   if (target_name && target_name[0]) {
     idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
-      return false;
+      goto done;
     if (!project_target_is_buildable(&proj.targets[idx])) {
       error("Target '%s' is a package target and is not runnable.", target_name);
-      return false;
+      goto done;
     }
     if (!project_target_is_runnable(&proj.targets[idx])) {
       error("Target '%s' is not runnable.", target_name);
-      return false;
+      goto done;
     }
   } else {
     idx = project_find_single_runnable_target(&proj);
     if (idx == -2) {
       error("Multiple runnable targets found. Use '-t target'.");
-      return false;
+      goto done;
     }
     if (idx < 0) {
       error("No runnable targets found.");
-      return false;
+      goto done;
     }
   }
 
+  event_tgt = &proj.targets[idx];
   project_print_target_line("Run", &proj.targets[idx]);
   if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
-    return false;
+    goto done;
   if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
-    return false;
-  return project_run_execute(&proj, &proj.targets[idx], platform_id, tc);
+    goto done;
+  ok = project_run_execute(&proj, &proj.targets[idx], platform_id, tc);
+
+done:
+  builders_project_finished(&proj, event_tgt, ok);
+  return ok;
 }
 
 static bool project_test(const char* test_name, const char* target_name, const char* platform, const char* config, toolchain* tc) {
   project proj = {0};
+  bool ok = false;
+  target* event_tgt = NULL;
   if (!project_load_config(config, &proj))
+    return false;
+  if (!builders_project_loaded(&proj))
     return false;
   if (!tc) {
     error("Toolchain is not initialized.");
     print("Run 'bbs update --init-toolchain' first.");
-    return false;
+    goto done;
   }
 
   const char* platform_id = project_resolve_platform_id(platform, tc);
   if (!platform_id)
-    return false;
+    goto done;
   bool backend_changed = false;
   if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
-    return false;
+    goto done;
 
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
 
@@ -4926,144 +5148,161 @@ static bool project_test(const char* test_name, const char* target_name, const c
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
-      return false;
+      goto done;
     if (!project_target_is_buildable(&proj.targets[idx])) {
       error("Target '%s' is a package target and is not a test target.", target_name);
-      return false;
+      goto done;
     }
     if (!project_target_is_test(&proj.targets[idx])) {
       error("Target '%s' is not a test target.", target_name);
-      return false;
+      goto done;
     }
+    event_tgt = &proj.targets[idx];
     project_print_target_line("Test", &proj.targets[idx]);
     if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
-      return false;
+      goto done;
     if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
-      return false;
-    return project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
+      goto done;
+    ok = project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
+    goto done;
   }
 
   int idx = project_find_single_test_target(&proj);
   if (idx == -2) {
     error("Multiple test targets found. Use '-t target'.");
-    return false;
+    goto done;
   }
   if (idx < 0) {
     error("No test targets found.");
-    return false;
+    goto done;
   }
 
+  event_tgt = &proj.targets[idx];
   project_print_target_line("Test", &proj.targets[idx]);
   if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
-    return false;
+    goto done;
   if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
-    return false;
-  return project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
+    goto done;
+  ok = project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
+
+done:
+  builders_project_finished(&proj, event_tgt, ok);
+  return ok;
 }
 
 static bool project_dist(const char* target_name, const char* platform, const char* config, toolchain* tc) {
   project proj = {0};
+  bool ok = false;
+  target* event_tgt = NULL;
   if (!project_load_config(config, &proj))
+    return false;
+  if (!builders_project_loaded(&proj))
     return false;
 
   if (!tc) {
     error("Toolchain is not initialized.");
     print("Run 'bbs update --init-toolchain' first.");
-    return false;
+    goto done;
   }
 
   const char* platform_id = project_resolve_platform_id(platform, tc);
   if (!platform_id)
-    return false;
+    goto done;
   bool backend_changed = false;
   if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
-    return false;
+    goto done;
 
   project_print_action_header("Dist", &proj, platform_id);
   project_print_field("Directory", project_resolved_dir(user_text(&proj.user_cfg, USER_TEXT_DISTDIR), proj.active_config, platform_id));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
-      return false;
+      goto done;
+    event_tgt = &proj.targets[idx];
     project_print_target_line("Dist", &proj.targets[idx]);
     if (!project_target_is_buildable(&proj.targets[idx])) {
       error("Target '%s' is a package target and is not distributable.", target_name);
-      return false;
+      goto done;
     }
     if (!project_target_is_runnable(&proj.targets[idx])) {
       error("Target '%s' is not distributable.", target_name);
-      return false;
+      goto done;
     }
 
     const char* preset = project_build_dir_name(proj.active_config, platform_id);
     if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
-      return false;
+      goto done;
     if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
-      return false;
+      goto done;
 
     target* tgt = &proj.targets[idx];
     const char* dist_root = project_dist_root_abs(&proj);
     const char* dist_cfg_dir = project_dist_config_dir_abs(&proj, proj.active_config, platform_id);
     const char* gen_dir = project_dist_gen_dir_abs(&proj, proj.active_config, platform_id);
     if (!project_ensure_dir_exists(dist_root, "dist directory"))
-      return false;
+      goto done;
     if (!project_ensure_dir_exists(dist_cfg_dir, "dist output directory"))
-      return false;
+      goto done;
     if (dir_exists(gen_dir) && !dir_delete(gen_dir)) {
       error("Failed to delete dist staging directory: %s", gen_dir);
-      return false;
+      goto done;
     }
     if (!project_ensure_dir_exists(gen_dir, "dist staging directory"))
-      return false;
+      goto done;
 
     const char** pre_dist_cmds = target_hook_cmds(tgt, TARGET_HOOK_PRE_DIST);
     for (int i = 0; i < target_hook_cmd_count(tgt, TARGET_HOOK_PRE_DIST); ++i)
       if (toolchain_run_bash(tc, gen_dir, project_expand_config_string(pre_dist_cmds[i], &proj, tgt, platform_id, tc, gen_dir)) != 0)
-        return false;
+        goto done;
 
     const char* exe_path = project_target_executable_abs(&proj, tgt, platform_id);
     if (!exe_path || !file_exists(exe_path)) {
       error("Built executable not found for target '%s': %s", tgt->meta.id ? tgt->meta.id : "", exe_path ? exe_path : "");
-      return false;
+      goto done;
     }
 
     const char* exe_name = project_path_filename(exe_path);
     const char* exe_dst = toolchain_join2(gen_dir, exe_name);
     if (!project_copy_file(exe_path, exe_dst)) {
       error("Failed to copy executable '%s'.", exe_path);
-      return false;
+      goto done;
     }
 
     os target_os = OS_MAX;
     arch target_arch = ARCH_MAX;
     if (!project_parse_platform_id(platform_id, &target_os, &target_arch))
-      return false;
+      goto done;
     const char* runtime_dir = project_path_parent(exe_path);
     if (!project_copy_runtime_files(runtime_dir, gen_dir, target_os))
-      return false;
+      goto done;
 
     const char** post_dist_cmds = target_hook_cmds(tgt, TARGET_HOOK_POST_DIST);
     for (int i = 0; i < target_hook_cmd_count(tgt, TARGET_HOOK_POST_DIST); ++i)
       if (toolchain_run_bash(tc, gen_dir, project_expand_config_string(post_dist_cmds[i], &proj, tgt, platform_id, tc, gen_dir)) != 0)
-        return false;
+        goto done;
 
     if (tgt->dist.archive && !project_create_dist_archive(&proj, tgt, platform_id, tc))
-      return false;
+      goto done;
 
-    return true;
+    ok = true;
+    goto done;
   }
 
   int idx = project_find_single_runnable_target(&proj);
   if (idx == -2) {
     error("Multiple runnable targets found. Use '-t target'.");
-    return false;
+    goto done;
   }
   if (idx < 0) {
     error("No runnable targets found.");
-    return false;
+    goto done;
   }
 
-  return project_dist(proj.targets[idx].meta.id, platform_id, proj.active_config, tc);
+  ok = project_dist(proj.targets[idx].meta.id, platform_id, proj.active_config, tc);
+
+done:
+  builders_project_finished(&proj, event_tgt, ok);
+  return ok;
 }
 
 static bool project_update(toolchain* tc, bool refresh_packages) {
@@ -5072,10 +5311,14 @@ static bool project_update(toolchain* tc, bool refresh_packages) {
   project proj = {0};
   if (!project_load(&proj))
     return false;
+  if (!builders_project_loaded(&proj))
+    return false;
 
   ok = project_prepare_backend(&proj, tc, NULL, false, refresh_packages, NULL);
   if (ok)
     print("Project update completed for %d target(s).", proj.target_c);
+
+  builders_project_finished(&proj, NULL, ok);
 
   return ok;
 }

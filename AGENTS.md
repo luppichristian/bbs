@@ -10,6 +10,8 @@
 - This project uses `.c` files as implementation includes, similar to headers.
 - Many `.c` files use `#pragma once` and are included from other `.c` files.
 - `src/bbs.c` is the main aggregation point and includes the implementation units directly.
+- `pub/` contains the public API surface intended for external users and builder modules.
+- `pub/bbs/build.h` is the main public reference header and should stay clear, documented, and stable-minded.
 
 ## Function Declarations
 

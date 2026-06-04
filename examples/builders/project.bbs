@@ -1,0 +1,22 @@
+id(builders_example)
+name("Builders Example")
+ver(0.1.0)
+
+targets(
+  console(
+    id(my_app)
+    units(
+      src/main.c
+    )
+    dependencies(
+      preprocessor
+    )
+  )
+)
+
+builders(
+  id(preprocessor)
+  units(
+    src/builder.c
+  )
+)

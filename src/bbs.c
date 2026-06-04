@@ -1,8 +1,10 @@
+#define BBS_INTERNAL
 #include "bbs_base.c"
-#include "bbs_cmd.c"
-#include "bbs_project.c"
 #include "bbs_toolchain.c"
 #include "bbs_user.c"
+#include "bbs_project.c"
+#include "bbs_builders.c"
+#include "bbs_cmd.c"
 
 int main(int argc, char** argv) {
   atexit(release);

@@ -11,4 +11,4 @@ elif [ "$uname_s" = "Darwin" ]; then
   printf '%s\n' "warning: macOS does not support fully static system runtime linking; building without -static" >&2
 fi
 
-gcc -std=gnu11 $static_flags -Wall -Wpedantic -Wno-unused-function src/bbs.c -o build/bbs
+gcc -std=gnu11 -O3 -DNDEBUG $static_flags -Wall -Wpedantic -Wno-unused-function src/bbs.c -o build/bbs

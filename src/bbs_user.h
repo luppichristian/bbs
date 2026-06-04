@@ -5,97 +5,53 @@
 #define DEF_BUILD_DIR "build"
 #define DEF_DIST_DIR  "dist"
 
-typedef struct {
-  const char* name;
-  const char* copyfile;
-} user_gen;
+typedef bbs_gen user_gen;
+typedef bbs_user_attr user_attr;
+typedef bbs_user_text_attr user_text_attr;
+typedef bbs_user_uint_attr user_uint_attr;
+typedef bbs_user_attr_kind user_attr_kind;
+typedef bbs_user_attr_info user_attr_info;
+typedef bbs_user_gen_attr_info user_gen_attr_info;
+typedef bbs_user user;
 
-typedef enum {
-  USER_ATTR_BUILDDIR,
-  USER_ATTR_DISTDIR,
-  USER_ATTR_AUTO_DEBOUNCE_MS,
-  USER_ATTR_AUTO_RETRY_COUNT,
-  USER_ATTR_AUTO_RETRY_DELAY_MS,
-  USER_ATTR_DIST_ARCHIVE_FORMAT,
-  USER_ATTR_DIST_ARCHIVE_NAME,
-  USER_ATTR_CMAKE_ARGS,
-  USER_ATTR_CMAKE_BUILD_ARGS,
-  USER_ATTR_CTEST_ARGS,
-  USER_ATTR_GEN,
-} user_attr;
+#define USER_ATTR_BUILDDIR BBS_USER_ATTR_BUILD_DIR
+#define USER_ATTR_DISTDIR BBS_USER_ATTR_DIST_DIR
+#define USER_ATTR_AUTO_DEBOUNCE_MS BBS_USER_ATTR_AUTO_DEBOUNCE_MS
+#define USER_ATTR_AUTO_RETRY_COUNT BBS_USER_ATTR_AUTO_RETRY_COUNT
+#define USER_ATTR_AUTO_RETRY_DELAY_MS BBS_USER_ATTR_AUTO_RETRY_DELAY_MS
+#define USER_ATTR_DIST_ARCHIVE_FORMAT BBS_USER_ATTR_DIST_ARCHIVE_FORMAT
+#define USER_ATTR_DIST_ARCHIVE_NAME BBS_USER_ATTR_DIST_ARCHIVE_NAME
+#define USER_ATTR_CMAKE_ARGS BBS_USER_ATTR_CMAKE_ARGS
+#define USER_ATTR_CMAKE_BUILD_ARGS BBS_USER_ATTR_CMAKE_BUILD_ARGS
+#define USER_ATTR_CTEST_ARGS BBS_USER_ATTR_CTEST_ARGS
+#define USER_ATTR_GEN BBS_USER_ATTR_GEN
 
-typedef enum {
-  USER_TEXT_BUILDDIR,
-  USER_TEXT_DISTDIR,
-  USER_TEXT_DIST_ARCHIVE_FORMAT,
-  USER_TEXT_DIST_ARCHIVE_NAME,
-  USER_TEXT_CMAKE_ARGS,
-  USER_TEXT_CMAKE_BUILD_ARGS,
-  USER_TEXT_CTEST_ARGS,
-  USER_TEXT_MAX,
-} user_text_attr;
+#define USER_TEXT_BUILDDIR BBS_USER_TEXT_BUILD_DIR
+#define USER_TEXT_DISTDIR BBS_USER_TEXT_DIST_DIR
+#define USER_TEXT_DIST_ARCHIVE_FORMAT BBS_USER_TEXT_DIST_ARCHIVE_FORMAT
+#define USER_TEXT_DIST_ARCHIVE_NAME BBS_USER_TEXT_DIST_ARCHIVE_NAME
+#define USER_TEXT_CMAKE_ARGS BBS_USER_TEXT_CMAKE_ARGS
+#define USER_TEXT_CMAKE_BUILD_ARGS BBS_USER_TEXT_CMAKE_BUILD_ARGS
+#define USER_TEXT_CTEST_ARGS BBS_USER_TEXT_CTEST_ARGS
+#define USER_TEXT_MAX BBS_USER_TEXT_MAX
 
-typedef enum {
-  USER_UINT_AUTO_DEBOUNCE_MS,
-  USER_UINT_AUTO_RETRY_COUNT,
-  USER_UINT_AUTO_RETRY_DELAY_MS,
-  USER_UINT_MAX,
-} user_uint_attr;
+#define USER_UINT_AUTO_DEBOUNCE_MS BBS_USER_UINT_AUTO_DEBOUNCE_MS
+#define USER_UINT_AUTO_RETRY_COUNT BBS_USER_UINT_AUTO_RETRY_COUNT
+#define USER_UINT_AUTO_RETRY_DELAY_MS BBS_USER_UINT_AUTO_RETRY_DELAY_MS
+#define USER_UINT_MAX BBS_USER_UINT_MAX
 
-typedef enum {
-  USER_ATTR_KIND_TEXT,
-  USER_ATTR_KIND_UINT,
-  USER_ATTR_KIND_ARCHIVE_FORMAT,
-  USER_ATTR_KIND_SECTION,
-} user_attr_kind;
+#define USER_ATTR_KIND_TEXT BBS_USER_ATTR_KIND_TEXT
+#define USER_ATTR_KIND_UINT BBS_USER_ATTR_KIND_UINT
+#define USER_ATTR_KIND_ARCHIVE_FORMAT BBS_USER_ATTR_KIND_ARCHIVE_FORMAT
+#define USER_ATTR_KIND_SECTION BBS_USER_ATTR_KIND_SECTION
 
-typedef struct {
-  user_attr id;
-  const char* name;
-  user_attr_kind kind;
-} user_attr_info;
+#define USER_ATTR_INFOS BBS_USER_ATTR_INFOS
+#define USER_GEN_ATTR_INFOS BBS_USER_GEN_ATTR_INFOS
 
-static const user_attr_info USER_ATTR_INFOS[] = {
-    {USER_ATTR_BUILDDIR, "builddir", USER_ATTR_KIND_TEXT},
-    {USER_ATTR_DISTDIR, "distdir", USER_ATTR_KIND_TEXT},
-    {USER_ATTR_AUTO_DEBOUNCE_MS, "auto_debounce_ms", USER_ATTR_KIND_UINT},
-    {USER_ATTR_AUTO_RETRY_COUNT, "auto_retry_count", USER_ATTR_KIND_UINT},
-    {USER_ATTR_AUTO_RETRY_DELAY_MS, "auto_retry_delay_ms", USER_ATTR_KIND_UINT},
-    {USER_ATTR_DIST_ARCHIVE_FORMAT, "dist_archive_format", USER_ATTR_KIND_ARCHIVE_FORMAT},
-    {USER_ATTR_DIST_ARCHIVE_NAME, "dist_archive_name", USER_ATTR_KIND_TEXT},
-    {USER_ATTR_CMAKE_ARGS, "cmake_args", USER_ATTR_KIND_TEXT},
-    {USER_ATTR_CMAKE_BUILD_ARGS, "cmake_build_args", USER_ATTR_KIND_TEXT},
-    {USER_ATTR_CTEST_ARGS, "ctest_args", USER_ATTR_KIND_TEXT},
-    {USER_ATTR_GEN, "gen", USER_ATTR_KIND_SECTION},
-};
-
-typedef enum {
-  USER_GEN_ATTR_NAME,
-  USER_GEN_ATTR_COPYFILE,
-} user_gen_attr;
-
-typedef struct {
-  user_gen_attr id;
-  const char* name;
-} user_gen_attr_info;
-
-static const user_gen_attr_info USER_GEN_ATTR_INFOS[] = {
-    {USER_GEN_ATTR_NAME, "name"},
-    {USER_GEN_ATTR_COPYFILE, "copyfile"},
-};
-
-typedef struct {
-  const char* text_values[USER_TEXT_MAX];
-  unsigned int uint_values[USER_UINT_MAX];
-  node* merged_scope;
-  user_gen* gens;
-  int gen_c;
-} user;
-
-static const char* user_text(const user* u, user_text_attr attr) {
-  return u && attr >= 0 && attr < USER_TEXT_MAX ? u->text_values[attr] : NULL;
+static inline const char* user_text(const user* u, user_text_attr attr) {
+  return bbs_user_text(u, attr);
 }
 
-static unsigned int user_uint(const user* u, user_uint_attr attr) {
-  return u && attr >= 0 && attr < USER_UINT_MAX ? u->uint_values[attr] : 0;
+static inline unsigned int user_uint(const user* u, user_uint_attr attr) {
+  return bbs_user_uint(u, attr);
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bbs_platform.h"
+#include "../pub/bbs/build.h"
 
 #define VER_MAJOR 0
 #define VER_MINOR 1
@@ -50,58 +51,27 @@ typedef struct {
   int argc;
 } cmdline;
 
-typedef enum {
-  NODE_TYPE_DEF = 0,
-  NODE_TYPE_STR,
-  NODE_TYPE_INT,
-  NODE_TYPE_FLT,
-  NODE_TYPE_VER,
-  NODE_TYPE_IDF,
-  NODE_TYPE_BOL,
-  NODE_TYPE_MAX,
-} node_type;
+typedef bbs_node_type node_type;
+typedef bbs_ver ver;
+typedef bbs_node node;
 
-const char* NODE_TYPE_NAMES[] = {
-    [NODE_TYPE_DEF] = "def",
-    [NODE_TYPE_STR] = "str",
-    [NODE_TYPE_INT] = "int",
-    [NODE_TYPE_FLT] = "flt",
-    [NODE_TYPE_VER] = "ver",
-    [NODE_TYPE_IDF] = "idf",
-    [NODE_TYPE_BOL] = "bol",
-};
+#define NODE_TYPE_DEF BBS_NODE_DEF
+#define NODE_TYPE_STR BBS_NODE_STR
+#define NODE_TYPE_INT BBS_NODE_INT
+#define NODE_TYPE_FLT BBS_NODE_FLT
+#define NODE_TYPE_VER BBS_NODE_VER
+#define NODE_TYPE_IDF BBS_NODE_IDF
+#define NODE_TYPE_BOL BBS_NODE_BOL
+#define NODE_TYPE_MAX BBS_NODE_MAX
 
-typedef struct {
-  uint8_t major;
-  uint8_t minor;
-  uint8_t patch;
-  uint8_t user;
-} ver;
+#define NODE_TYPE_NAMES BBS_NODE_TYPE_NAMES
 
-typedef struct node node;
-struct node {
-  node* next;
-  node* parent;
-  node* children;
-
-  const char* name;
-  size_t name_dim;
-  node_type type;
-  union {
-    const char* _str;
-    int64_t _int;
-    double _flt;
-    ver _ver;
-    const char* _idf;
-    bool _bol;
-  };
-
-  size_t txt_offset;
-  size_t txt_dim;
-  size_t src_txt_offset;
-  size_t src_txt_dim;
-  uint8_t ver_parts;
-};
+#define _str value._str
+#define _int value._int
+#define _flt value._flt
+#define _ver value._ver
+#define _idf value._idf
+#define _bol value._bol
 
 typedef struct arena_blk arena_blk;
 struct arena_blk {
