@@ -32,6 +32,45 @@ typedef struct {
 
 static builder_session g_builder_session = {0};
 
+static toolchain_env* builders_host_env(toolchain* tc) {
+  if (!tc || !tc->envs || tc->env_c <= 0)
+    return NULL;
+
+  for (int i = 0; i < tc->env_c; ++i) {
+    toolchain_env* env = &tc->envs[i];
+    if (env->provider && env->name && _stricmp(env->provider, "host") == 0 && _stricmp(env->name, "current") == 0)
+      return env;
+  }
+
+  return NULL;
+}
+
+static const bbs_tool* builders_find_tool_result(toolchain* tc, const char* id) {
+  toolchain_env* env = builders_host_env(tc);
+  if (!env || !id || !id[0])
+    return NULL;
+
+  for (int i = 0; i < env->tool_c; ++i) {
+    if (env->tools[i].id && _stricmp(env->tools[i].id, id) == 0)
+      return &env->tools[i];
+  }
+
+  return NULL;
+}
+
+static const bbs_sdk* builders_find_sdk_result(toolchain* tc, const char* name) {
+  toolchain_env* env = builders_host_env(tc);
+  if (!env || !name || !name[0])
+    return NULL;
+
+  for (int i = 0; i < env->sdk_c; ++i) {
+    if (env->sdks[i].name && _stricmp(env->sdks[i].name, name) == 0)
+      return &env->sdks[i];
+  }
+
+  return NULL;
+}
+
 static const char* builders_copy_text(const char* text) {
   return text ? arena_text(text, strlen(text)) : NULL;
 }
@@ -483,6 +522,50 @@ bool bbs_target_append_text(bbs_tgt* tgt, bbs_target_text_field field, const cha
 int bbs_run_bash(bbs_ctx* ctx, const char* workdir, const char* command) {
   (void)ctx;
   return g_builder_session.tc ? toolchain_run_bash(g_builder_session.tc, workdir, command) : -1;
+}
+
+const bbs_tool* bbs_find_tool(bbs_ctx* ctx, const bbs_tool_discover_strat* strat) {
+  (void)ctx;
+  if (!g_builder_session.tc || !strat) {
+    bbs_error("bbs_find_tool requires an active builder toolchain and a non-null strategy.");
+    return NULL;
+  }
+  if (!strat->id || !strat->id[0]) {
+    bbs_error("bbs_find_tool requires strategy field 'id'.");
+    return NULL;
+  }
+  if (!strat->exe_name || !strat->exe_name[0]) {
+    bbs_error("bbs_find_tool('%s') requires strategy field 'exe_name'.", strat->id);
+    return NULL;
+  }
+
+  toolchain_discover_tool(g_builder_session.tc, (const tool_discover_strat*)strat);
+  toolchain_sort_tools(g_builder_session.tc);
+  toolchain_snapshot_current_host_env(g_builder_session.tc);
+  toolchain_refresh_runtime_support(g_builder_session.tc);
+  return builders_find_tool_result(g_builder_session.tc, strat->id);
+}
+
+const bbs_sdk* bbs_find_sdk(bbs_ctx* ctx, const bbs_sdk_discover_strat* strat) {
+  (void)ctx;
+  if (!g_builder_session.tc || !strat) {
+    bbs_error("bbs_find_sdk requires an active builder toolchain and a non-null strategy.");
+    return NULL;
+  }
+  if (!strat->id || !strat->id[0]) {
+    bbs_error("bbs_find_sdk requires strategy field 'id'.");
+    return NULL;
+  }
+  if ((!strat->env_vars || !strat->env_vars[0]) && (!strat->root_hints || !strat->root_hints[0])) {
+    bbs_error("bbs_find_sdk('%s') requires at least one of 'env_vars' or 'root_hints'.", strat->id);
+    return NULL;
+  }
+
+  toolchain_discover_sdk(g_builder_session.tc, (const sdk_discover_strat*)strat);
+  toolchain_sort_sdks(g_builder_session.tc);
+  toolchain_snapshot_current_host_env(g_builder_session.tc);
+  toolchain_refresh_runtime_support(g_builder_session.tc);
+  return builders_find_sdk_result(g_builder_session.tc, strat->id);
 }
 
 static void builders_fill_ctx(cmd c, cmd_ctx* cmdctx, toolchain* tc, bool hotbuild_mode) {

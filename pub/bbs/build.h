@@ -1252,6 +1252,37 @@ BBS_SERVICE_API ptrdiff_t bbs_project_find_gen_index(const bbs_proj* proj, const
 BBS_SERVICE_API int bbs_run_bash(bbs_ctx* ctx, const char* workdir, const char* command);
 
 /*
+  Run one discovery strategy directly against the active host toolchain.
+
+  Example:
+
+  bbs_tool_discover_strat cmake = {
+      .id = "cmake",
+      .target_os = BBS_OS_MAX,
+      .exe_name = "cmake",
+      .dir_hints = "/usr/bin;/usr/local/bin",
+      .version_arg = "--version",
+      .version_regex = "cmake version ([0-9]+\\.[0-9]+(\\.[0-9]+)?)",
+  };
+  const bbs_tool* tool = bbs_find_tool(ctx, &cmake);
+
+  bbs_sdk_discover_strat vulkan = {
+      .id = "vulkan_sdk",
+      .target_os = BBS_OS_MAX,
+      .env_vars = "VULKAN_SDK",
+      .root_hints = "{home}/VulkanSDK/<version>",
+      .include_rel = "Include",
+      .lib_rel = "Lib",
+      .bin_rel = "Bin",
+      .version_file_rel = "README.txt",
+      .version_regex = "([0-9]+\\.[0-9]+\\.[0-9]+)",
+  };
+  const bbs_sdk* sdk = bbs_find_sdk(ctx, &vulkan);
+*/
+BBS_SERVICE_API const bbs_tool* bbs_find_tool(bbs_ctx* ctx, const bbs_tool_discover_strat* strat);
+BBS_SERVICE_API const bbs_sdk* bbs_find_sdk(bbs_ctx* ctx, const bbs_sdk_discover_strat* strat);
+
+/*
   Persist the current in-memory state to the corresponding config file.
 
   Builders can use these to keep selected command-local mutations instead of

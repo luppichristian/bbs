@@ -7,7 +7,9 @@ It uses a small `.bbs` configuration format, discovers your local toolchain, gen
 It also supports project-local metacompilation through `builders`: small dynamically loaded modules that can modify targets, flags, and command behavior before and after build phases.
 
 Current compiler support: `MSVC`, `Clang`, and `GCC`.
+
 Current supported target platforms: `windows`, `linux`, `macos`
+
 Current supported target architectures: `x86_64`, `x86`, `arm64`
 
 For escape-hatch flags, `bbs` treats `additional_compile_args` as Clang/GCC-style input and translates supported subsets to MSVC when generating the backend.
