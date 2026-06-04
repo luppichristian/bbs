@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ctype.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -1172,13 +1173,28 @@ static inline int bbs_target_hook_cmd_count(const bbs_tgt* tgt, bbs_hook_kind ki
   return tgt && kind >= 0 && kind < BBS_HOOK_MAX ? tgt->hook_cmd_counts[kind] : 0;
 }
 
+static inline int bbs_stricmp(const char* a, const char* b) {
+  while (*a && *b) {
+    int ca = tolower((unsigned char)*a);
+    int cb = tolower((unsigned char)*b);
+
+    if (ca != cb)
+      return ca - cb;
+
+    a++;
+    b++;
+  }
+
+  return tolower((unsigned char)*a) -
+         tolower((unsigned char)*b);
+}
 /* Access the count for one hook command list. */
 
 static inline bool bbs_target_has_dependency(const bbs_tgt* tgt, const char* name) {
   if (!tgt || !name || !name[0])
     return false;
   for (int i = 0; i < tgt->dependency_c; ++i)
-    if (tgt->dependencies[i] && _stricmp(tgt->dependencies[i], name) == 0)
+    if (tgt->dependencies[i] && bbs_stricmp(tgt->dependencies[i], name) == 0)
       return true;
   return false;
 }
