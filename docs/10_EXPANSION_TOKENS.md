@@ -113,6 +113,10 @@ Absolute path to `local.bbs`.
 
 Absolute path to the resolved build output directory for the selected config and platform.
 
+## `$DASSETS`
+
+Absolute path to the resolved assets directory.
+
 ## `$DDIST`
 
 Absolute path to the resolved dist config directory.
@@ -221,5 +225,5 @@ post_build_cmds(
 
 ## Related Reads
 
-- [6_PROJECT_CONFIG.md](./6_PROJECT_CONFIG.md)
-- [4_EXAMPLES.md](./4_EXAMPLES.md)
+- [7_PROJECT_CONFIG.md](./7_PROJECT_CONFIG.md)
+- [5_EXAMPLES.md](./5_EXAMPLES.md)

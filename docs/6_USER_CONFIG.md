@@ -10,6 +10,8 @@ This guide covers both files because they intentionally share the same structure
 - `user.bbs`: next to the `bbs` executable
 - `local.bbs`: in the project root
 
+For a broader explanation of how these files relate to the project directory and generated folders, see [3_PROJECT_FOLDER.md](./3_PROJECT_FOLDER.md).
+
 The optional top-level `user(...)` wrapper is allowed.
 
 ## Why These Files Exist
@@ -128,6 +130,24 @@ Example:
 builddir("out")
 ```
 
+## `assetsdir`
+
+Assets root directory name.
+
+Default:
+
+```txt
+assets
+```
+
+This directory is created automatically and can be copied into `bbs dist` payloads.
+
+Example:
+
+```txt
+assetsdir("resources")
+```
+
 ## `distdir`
 
 Distribution root directory name.
@@ -228,7 +248,7 @@ Default:
 $CFG-$OS-$ARC--$VER
 ```
 
-This supports the expansion tokens documented in [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md).
+This supports the expansion tokens documented in [10_EXPANSION_TOKENS.md](./10_EXPANSION_TOKENS.md).
 
 Example:
 
@@ -240,7 +260,7 @@ dist_archive_name("$PROJECT(id)-$CFG-$OS-$ARC-$VER")
 
 Extra arguments appended to the CMake configure step.
 
-This supports the expansion tokens documented in [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md).
+This supports the expansion tokens documented in [10_EXPANSION_TOKENS.md](./10_EXPANSION_TOKENS.md).
 
 Typical use cases:
 
@@ -260,7 +280,7 @@ Custom discovery hooks are top-level config entries, not inline value expression
 
 Extra arguments appended to the CMake build step.
 
-This supports the expansion tokens documented in [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md).
+This supports the expansion tokens documented in [10_EXPANSION_TOKENS.md](./10_EXPANSION_TOKENS.md).
 
 Example:
 
@@ -272,7 +292,7 @@ cmake_build_args("--parallel")
 
 Extra arguments appended to the CTest step.
 
-This supports the expansion tokens documented in [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md).
+This supports the expansion tokens documented in [10_EXPANSION_TOKENS.md](./10_EXPANSION_TOKENS.md).
 
 Example:
 
@@ -345,5 +365,5 @@ These belong in `project.bbs` instead:
 
 ## Related Reads
 
-- [6_PROJECT_CONFIG.md](./6_PROJECT_CONFIG.md)
-- [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md)
+- [7_PROJECT_CONFIG.md](./7_PROJECT_CONFIG.md)
+- [10_EXPANSION_TOKENS.md](./10_EXPANSION_TOKENS.md)

@@ -8,6 +8,8 @@ This is the main file you edit when creating and growing a `bbs` project.
 
 `project.bbs` lives in the project root.
 
+For a broader explanation of how the full project directory is handled, see [3_PROJECT_FOLDER.md](./3_PROJECT_FOLDER.md).
+
 The optional top-level `project(...)` wrapper is accepted, but most examples use the direct form.
 
 ## Mental Model
@@ -221,7 +223,7 @@ bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
 }
 ```
 
-For full lifecycle details and the shipped example, see [11_BUILDERS.md](./11_BUILDERS.md).
+For full lifecycle details and the shipped example, see [12_BUILDERS.md](./12_BUILDERS.md).
 
 ## Target Types
 
@@ -466,7 +468,7 @@ All hook commands are Bash commands.
 - `pre_dist_cmds(...)`
 - `post_dist_cmds(...)`
 
-These support the tokens documented in [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md).
+These support the tokens documented in [10_EXPANSION_TOKENS.md](./10_EXPANSION_TOKENS.md).
 
 ## Distribution Fields
 
@@ -485,6 +487,9 @@ You can use only the normal dist hook lists:
 dist(
   name("$OUT-$CFG-$OS-$ARC")
   archive(true)
+  copy_assets(true)
+  exclude_assets("dev")
+  exclude_assets("raw/*.psd")
   precommand("...")
   postcommand("...")
 )
@@ -494,10 +499,14 @@ Supported fields inside `dist(...)`:
 
 - `name`: archive name pattern override
 - `archive`: boolean
+- `copy_assets`: boolean
+- repeated `exclude_assets(...)`: asset paths relative to the assets root
 - repeated `precommand(...)`
 - repeated `postcommand(...)`
 
 `dist(...)` is the only place where repeated `precommand(...)` and `postcommand(...)` entries are used directly.
+
+When `copy_assets(true)` is enabled, each `exclude_assets(...)` entry removes either one exact asset path or an entire nested subtree from the copied assets payload.
 
 ## Package Target Fields
 
@@ -639,8 +648,8 @@ targets(
 
 ## Related Reads
 
-- [3_FILE_FORMAT.md](./3_FILE_FORMAT.md)
-- [4_EXAMPLES.md](./4_EXAMPLES.md)
-- [5_USER_CONFIG.md](./5_USER_CONFIG.md)
-- [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md)
-- [10_PACKAGES.md](./10_PACKAGES.md)
+- [4_FILE_FORMAT.md](./4_FILE_FORMAT.md)
+- [5_EXAMPLES.md](./5_EXAMPLES.md)
+- [6_USER_CONFIG.md](./6_USER_CONFIG.md)
+- [10_EXPANSION_TOKENS.md](./10_EXPANSION_TOKENS.md)
+- [11_PACKAGES.md](./11_PACKAGES.md)

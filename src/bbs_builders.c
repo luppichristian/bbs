@@ -458,6 +458,8 @@ bool bbs_project_set_text(bbs_proj* proj, bbs_project_text_field field, const ch
       return builders_set_text_ptr(&proj->active_config, value);
     case BBS_PROJECT_TEXT_BUILD_DIR:
       return builders_set_text_ptr(&proj->build_dir, value);
+    case BBS_PROJECT_TEXT_ASSETS_DIR:
+      return builders_set_text_ptr(&proj->assets_dir, value);
     case BBS_PROJECT_TEXT_DIST_DIR:
       return builders_set_text_ptr(&proj->dist_dir, value);
     case BBS_PROJECT_TEXT_DIST_ARCHIVE_FORMAT:

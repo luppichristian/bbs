@@ -277,5 +277,5 @@ bbs info toolchain --values-only
 
 ## Related Reads
 
-- [7_CROSSBUILD.md](./7_CROSSBUILD.md)
+- [8_CROSSBUILD.md](./8_CROSSBUILD.md)
 - [2_COMMAND_GUIDE.md](./2_COMMAND_GUIDE.md)

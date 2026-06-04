@@ -276,6 +276,6 @@ Typical syntax errors are:
 
 After understanding the syntax here, continue with:
 
-- [5_USER_CONFIG.md](./5_USER_CONFIG.md)
-- [6_PROJECT_CONFIG.md](./6_PROJECT_CONFIG.md)
-- [4_EXAMPLES.md](./4_EXAMPLES.md)
+- [6_USER_CONFIG.md](./6_USER_CONFIG.md)
+- [7_PROJECT_CONFIG.md](./7_PROJECT_CONFIG.md)
+- [5_EXAMPLES.md](./5_EXAMPLES.md)

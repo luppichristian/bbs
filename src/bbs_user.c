@@ -33,6 +33,9 @@ static bool user_try_text_attr(user_attr attr, user_text_attr* out) {
     case USER_ATTR_BUILDDIR:
       *out = USER_TEXT_BUILDDIR;
       return true;
+    case USER_ATTR_ASSETSDIR:
+      *out = USER_TEXT_ASSETSDIR;
+      return true;
     case USER_ATTR_DISTDIR:
       *out = USER_TEXT_DISTDIR;
       return true;
@@ -389,6 +392,7 @@ static void user_apply_defaults(user* u) {
   memset(u->text_values, 0, sizeof(u->text_values));
   memset(u->uint_values, 0, sizeof(u->uint_values));
   u->text_values[USER_TEXT_BUILDDIR] = DEF_BUILD_DIR;
+  u->text_values[USER_TEXT_ASSETSDIR] = DEF_ASSETS_DIR;
   u->text_values[USER_TEXT_DISTDIR] = DEF_DIST_DIR;
   u->uint_values[USER_UINT_AUTO_DEBOUNCE_MS] = 500;
   u->uint_values[USER_UINT_AUTO_RETRY_COUNT] = 3;

@@ -95,6 +95,39 @@ Build and run:
 bbs run
 ```
 
+## Project Layout Overview
+
+A typical `bbs` project directory looks like this:
+
+```txt
+my_project/
+  project.bbs
+  src/
+  include/
+  assets/
+  local.bbs
+  build/
+  dist/
+```
+
+What these mean:
+
+- `project.bbs`: main project definition
+- `src/`, `include/`, `assets/`: project-owned files and folders
+- `local.bbs`: optional machine-local override file for this project
+- `build/`: generated backend and build output directory
+- `dist/`: generated distribution staging and archive output directory
+
+Related files outside the project root:
+
+- `user.bbs`: shared defaults next to the `bbs` executable
+- `toolchain.bbs`: generated toolchain cache next to the `bbs` executable
+- `packages/`: shared fetched package cache next to the `bbs` executable
+
+The configured assets directory is created automatically and can be copied into dist payloads with `dist(copy_assets(true))`.
+
+For the full explanation, see [docs/3_PROJECT_FOLDER.md](./docs/3_PROJECT_FOLDER.md).
+
 With builders:
 
 ```txt
@@ -149,7 +182,7 @@ bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
 }
 ```
 
-See [docs/11_BUILDERS.md](./docs/11_BUILDERS.md) for the full builders guide.
+See [docs/12_BUILDERS.md](./docs/12_BUILDERS.md) for the full builders guide.
 
 `bbs` initializes the backend automatically when needed.
 Use `bbs update --init-toolchain` when you explicitly want to regenerate the cached toolchain state.
@@ -241,19 +274,20 @@ The numbered docs are meant to be read in roughly this order:
 - [docs/0_INSTALL.md](./docs/0_INSTALL.md)
 - [docs/1_BUILDING.md](./docs/1_BUILDING.md)
 - [docs/2_COMMAND_GUIDE.md](./docs/2_COMMAND_GUIDE.md)
-- [docs/3_FILE_FORMAT.md](./docs/3_FILE_FORMAT.md)
-- [docs/4_EXAMPLES.md](./docs/4_EXAMPLES.md)
-- [docs/5_USER_CONFIG.md](./docs/5_USER_CONFIG.md)
-- [docs/6_PROJECT_CONFIG.md](./docs/6_PROJECT_CONFIG.md)
-- [docs/7_CROSSBUILD.md](./docs/7_CROSSBUILD.md)
-- [docs/8_TOOLCHAIN.md](./docs/8_TOOLCHAIN.md)
-- [docs/9_EXPANSION_TOKENS.md](./docs/9_EXPANSION_TOKENS.md)
-- [docs/10_PACKAGES.md](./docs/10_PACKAGES.md)
-- [docs/11_BUILDERS.md](./docs/11_BUILDERS.md)
+- [docs/3_PROJECT_FOLDER.md](./docs/3_PROJECT_FOLDER.md)
+- [docs/4_FILE_FORMAT.md](./docs/4_FILE_FORMAT.md)
+- [docs/5_EXAMPLES.md](./docs/5_EXAMPLES.md)
+- [docs/6_USER_CONFIG.md](./docs/6_USER_CONFIG.md)
+- [docs/7_PROJECT_CONFIG.md](./docs/7_PROJECT_CONFIG.md)
+- [docs/8_CROSSBUILD.md](./docs/8_CROSSBUILD.md)
+- [docs/9_TOOLCHAIN.md](./docs/9_TOOLCHAIN.md)
+- [docs/10_EXPANSION_TOKENS.md](./docs/10_EXPANSION_TOKENS.md)
+- [docs/11_PACKAGES.md](./docs/11_PACKAGES.md)
+- [docs/12_BUILDERS.md](./docs/12_BUILDERS.md)
 
 ## Examples
 
-- [docs/4_EXAMPLES.md](./docs/4_EXAMPLES.md)
+- [docs/5_EXAMPLES.md](./docs/5_EXAMPLES.md)
 - [`examples/static_lib/`](./examples/static_lib/)
 - [`examples/raylib_example/`](./examples/raylib_example/)
 - [`examples/bbs_package_consumer/`](./examples/bbs_package_consumer/) consuming [`examples/bbs_package_dep/`](./examples/bbs_package_dep/) as a nested `project.bbs` package

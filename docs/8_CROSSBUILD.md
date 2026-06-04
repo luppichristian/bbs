@@ -145,5 +145,5 @@ when:
 
 ## Related Reads
 
-- [8_TOOLCHAIN.md](./8_TOOLCHAIN.md)
+- [9_TOOLCHAIN.md](./9_TOOLCHAIN.md)
 - [2_COMMAND_GUIDE.md](./2_COMMAND_GUIDE.md)

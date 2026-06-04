@@ -738,6 +738,8 @@ static bool project_apply_dist_node(node* dist_n, target* out, const char* targe
     return false;
   if (!project_parse_named_scalar_children(dist_n, "postcommand", &out->hook_cmds[TARGET_HOOK_POST_DIST], &out->hook_cmd_counts[TARGET_HOOK_POST_DIST]))
     return false;
+  if (!project_parse_named_scalar_children(dist_n, "exclude_assets", &out->dist.exclude_assets, &out->dist.exclude_asset_c))
+    return false;
 
   const char* text = NULL;
   if (!project_read_text_child(dist_n, "name", &text))
@@ -752,6 +754,15 @@ static bool project_apply_dist_node(node* dist_n, target* out, const char* targe
       return false;
     }
     out->dist.archive = node_get_bool(archive_n);
+  }
+
+  node* copy_assets_n = node_get_child(dist_n, "copy_assets");
+  if (copy_assets_n) {
+    if (copy_assets_n->type != NODE_TYPE_BOL) {
+      error("Attribute 'copy_assets' must be a boolean.");
+      return false;
+    }
+    out->dist.copy_assets = node_get_bool(copy_assets_n);
   }
   return true;
 }
@@ -1909,7 +1920,9 @@ static void project_print(const project* proj) {
     project_print_list("Test Args", tgt->test_args, tgt->test_arg_c);
     project_print_list(TARGET_HOOK_INFOS[TARGET_HOOK_PRE_DIST].label, target_hook_cmds(tgt, TARGET_HOOK_PRE_DIST), target_hook_cmd_count(tgt, TARGET_HOOK_PRE_DIST));
     project_print_list(TARGET_HOOK_INFOS[TARGET_HOOK_POST_DIST].label, target_hook_cmds(tgt, TARGET_HOOK_POST_DIST), target_hook_cmd_count(tgt, TARGET_HOOK_POST_DIST));
+    project_print_list("Dist Exclude Assets", tgt->dist.exclude_assets, tgt->dist.exclude_asset_c);
     print("Dist Archive: %s", tgt->dist.archive ? "true" : "false");
+    print("Dist Copy Assets: %s", tgt->dist.copy_assets ? "true" : "false");
     if (tgt->dist.archive_name)
       print("Dist Archive Name: %s", tgt->dist.archive_name);
   }
@@ -2022,7 +2035,23 @@ static bool project_load_file_config(const char* path, const char* config, proje
   out->config_path = toolchain_norm_path(path);
   out->root_dir = project_path_parent(out->config_path);
   out->local_cfg_path = toolchain_join2(out->root_dir ? out->root_dir : project_current_workdir(), CFG_INFOS[CFG_LOCAL].filename);
-  return project_load_user_config(out->local_cfg_path, &out->user_cfg);
+  if (!project_load_user_config(out->local_cfg_path, &out->user_cfg))
+    return false;
+
+  out->build_dir = user_text(&out->user_cfg, USER_TEXT_BUILDDIR);
+  out->assets_dir = user_text(&out->user_cfg, USER_TEXT_ASSETSDIR);
+  out->dist_dir = user_text(&out->user_cfg, USER_TEXT_DISTDIR);
+  out->dist_archive_format = user_text(&out->user_cfg, USER_TEXT_DIST_ARCHIVE_FORMAT);
+  out->dist_archive_name = user_text(&out->user_cfg, USER_TEXT_DIST_ARCHIVE_NAME);
+  out->cmake_args = user_text(&out->user_cfg, USER_TEXT_CMAKE_ARGS);
+  out->cmake_build_args = user_text(&out->user_cfg, USER_TEXT_CMAKE_BUILD_ARGS);
+  out->ctest_args = user_text(&out->user_cfg, USER_TEXT_CTEST_ARGS);
+  out->auto_debounce_ms = user_uint(&out->user_cfg, USER_UINT_AUTO_DEBOUNCE_MS);
+  out->auto_retry_count = user_uint(&out->user_cfg, USER_UINT_AUTO_RETRY_COUNT);
+  out->auto_retry_delay_ms = user_uint(&out->user_cfg, USER_UINT_AUTO_RETRY_DELAY_MS);
+  out->gens = out->user_cfg.gens;
+  out->gen_c = out->user_cfg.gen_c;
+  return true;
 }
 
 static bool project_load_config(const char* config, project* out) {
@@ -2522,6 +2551,10 @@ static const char* project_build_file_abs(const project* proj, const char* filen
 
 static const char* project_build_binary_dir_abs(const project* proj, const char* config, const char* platform) {
   return project_resolve_path_from_root(project_root_dir(proj), project_resolved_dir(user_text(proj ? &proj->user_cfg : NULL, USER_TEXT_BUILDDIR), config, platform));
+}
+
+static const char* project_assets_root_abs(const project* proj) {
+  return project_resolve_path_from_root(project_root_dir(proj), user_text(proj ? &proj->user_cfg : NULL, USER_TEXT_ASSETSDIR));
 }
 
 static bool project_ensure_dir_tree(const char* path, const char* label) {
@@ -3265,6 +3298,148 @@ static bool project_copy_file(const char* src, const char* dst) {
   return ok;
 }
 
+static bool project_path_has_sep(char ch) {
+  return ch == '/' || ch == '\\';
+}
+
+static const char* project_norm_rel_path(const char* path) {
+  if (!path)
+    return NULL;
+
+  size_t len = strlen(path);
+  char* out = push(len + 1);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  bool last_sep = false;
+  for (size_t i = 0; i < len; ++i) {
+    char ch = path[i];
+    if (project_path_has_sep(ch)) {
+      if (wi == 0 || last_sep)
+        continue;
+      out[wi++] = '/';
+      last_sep = true;
+      continue;
+    }
+    out[wi++] = (char)tolower((unsigned char)ch);
+    last_sep = false;
+  }
+
+  while (wi > 0 && out[wi - 1] == '/')
+    --wi;
+  out[wi] = '\0';
+  return out;
+}
+
+static bool project_asset_path_is_excluded(const target_dist_config* dist, const char* rel_path) {
+  if (!dist || !rel_path || !rel_path[0])
+    return false;
+
+  const char* rel_norm = project_norm_rel_path(rel_path);
+  if (!rel_norm || !rel_norm[0])
+    return false;
+
+  for (int i = 0; i < dist->exclude_asset_c; ++i) {
+    const char* rule = project_norm_rel_path(dist->exclude_assets[i]);
+    if (!rule || !rule[0])
+      continue;
+
+    size_t rule_len = strlen(rule);
+    if (_stricmp(rel_norm, rule) == 0)
+      return true;
+    if (_strnicmp(rel_norm, rule, rule_len) == 0 && rel_norm[rule_len] == '/')
+      return true;
+  }
+
+  return false;
+}
+
+static bool project_copy_dir_recursive(const char* src_dir, const char* dst_dir, const char* rel_dir, const target_dist_config* dist) {
+  if (!src_dir || !src_dir[0] || !dst_dir || !dst_dir[0])
+    return false;
+  if (!dir_exists(src_dir)) {
+    error("Assets directory does not exist: %s", src_dir);
+    return false;
+  }
+  if (rel_dir && rel_dir[0] && project_asset_path_is_excluded(dist, rel_dir))
+    return true;
+  if (!project_ensure_dir_tree(dst_dir, "assets directory"))
+    return false;
+
+#if defined(_WIN32)
+  char pattern[_MAX_PATH] = {0};
+  snprintf(pattern, sizeof(pattern), "%s\\*", src_dir);
+  WIN32_FIND_DATAA data;
+  HANDLE handle = FindFirstFileA(pattern, &data);
+  if (handle == INVALID_HANDLE_VALUE)
+    return true;
+
+  bool ok = true;
+  do {
+    if (_stricmp(data.cFileName, ".") == 0 || _stricmp(data.cFileName, "..") == 0)
+      continue;
+
+    const char* src = toolchain_join2(src_dir, data.cFileName);
+    const char* dst = toolchain_join2(dst_dir, data.cFileName);
+    const char* rel = rel_dir && rel_dir[0] ? toolchain_join2(rel_dir, data.cFileName) : data.cFileName;
+    if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      if (!project_copy_dir_recursive(src, dst, rel, dist)) {
+        ok = false;
+        break;
+      }
+      continue;
+    }
+
+    if (project_asset_path_is_excluded(dist, rel))
+      continue;
+
+    if (!project_copy_file(src, dst)) {
+      error("Failed to copy asset '%s'.", src);
+      ok = false;
+      break;
+    }
+  } while (FindNextFileA(handle, &data) != 0);
+
+  FindClose(handle);
+  return ok;
+#else
+  DIR* dir = opendir(src_dir);
+  if (!dir)
+    return true;
+
+  bool ok = true;
+  struct dirent* entry = NULL;
+  while ((entry = readdir(dir)) != NULL) {
+    if (_stricmp(entry->d_name, ".") == 0 || _stricmp(entry->d_name, "..") == 0)
+      continue;
+
+    const char* src = toolchain_join2(src_dir, entry->d_name);
+    const char* dst = toolchain_join2(dst_dir, entry->d_name);
+    const char* rel = rel_dir && rel_dir[0] ? toolchain_join2(rel_dir, entry->d_name) : entry->d_name;
+    if (dir_exists(src)) {
+      if (!project_copy_dir_recursive(src, dst, rel, dist)) {
+        ok = false;
+        break;
+      }
+      continue;
+    }
+
+    if (project_asset_path_is_excluded(dist, rel))
+      continue;
+
+    if (!project_copy_file(src, dst)) {
+      error("Failed to copy asset '%s'.", src);
+      ok = false;
+      break;
+    }
+  }
+
+  closedir(dir);
+  return ok;
+#endif
+}
+
 static bool project_is_runtime_library_name(const char* name, os target_os) {
   if (!name || !name[0])
     return false;
@@ -3404,6 +3579,8 @@ static const char* project_token_value(const char* name,
     return tc && tc->local_cfg_path ? tc->local_cfg_path : get_path_cwd("local.bbs");
   if (strcmp(name, "DBUILD") == 0)
     return project_build_binary_dir_abs(proj, proj ? proj->active_config : NULL, platform);
+  if (strcmp(name, "DASSETS") == 0)
+    return project_assets_root_abs(proj);
   if (strcmp(name, "DDIST") == 0)
     return project_dist_config_dir_abs(proj, proj ? proj->active_config : NULL, platform);
   if (strcmp(name, "DGEN") == 0)
@@ -4595,8 +4772,11 @@ static bool project_prepare_backend(project* proj, toolchain* tc, const char* pl
   }
 
   const char* build_root = project_build_root_abs(proj);
+  const char* assets_root = project_assets_root_abs(proj);
   const char* dist_root = project_dist_root_abs(proj);
   if (!project_ensure_dir_exists(build_root, "build directory"))
+    return false;
+  if (!project_ensure_dir_exists(assets_root, "assets directory"))
     return false;
   if (!project_ensure_dir_exists(dist_root, "dist directory"))
     return false;
@@ -5255,6 +5435,9 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     const char* dist_root = project_dist_root_abs(&proj);
     const char* dist_cfg_dir = project_dist_config_dir_abs(&proj, proj.active_config, platform_id);
     const char* gen_dir = project_dist_gen_dir_abs(&proj, proj.active_config, platform_id);
+    const char* assets_root = project_assets_root_abs(&proj);
+    const char* assets_cfg = user_text(&proj.user_cfg, USER_TEXT_ASSETSDIR);
+    const char* assets_rel = toolchain_is_abs_path(assets_cfg) ? project_path_filename(assets_cfg) : assets_cfg;
     if (!project_ensure_dir_exists(dist_root, "dist directory"))
       goto done;
     if (!project_ensure_dir_exists(dist_cfg_dir, "dist output directory"))
@@ -5291,6 +5474,14 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     const char* runtime_dir = project_path_parent(exe_path);
     if (!project_copy_runtime_files(runtime_dir, gen_dir, target_os))
       goto done;
+
+    if (tgt->dist.copy_assets) {
+      if (!assets_rel || !assets_rel[0])
+        assets_rel = DEF_ASSETS_DIR;
+      const char* assets_dst = toolchain_join2(gen_dir, assets_rel);
+      if (!project_copy_dir_recursive(assets_root, assets_dst, NULL, &tgt->dist))
+        goto done;
+    }
 
     const char** post_dist_cmds = target_hook_cmds(tgt, TARGET_HOOK_POST_DIST);
     for (int i = 0; i < target_hook_cmd_count(tgt, TARGET_HOOK_POST_DIST); ++i)

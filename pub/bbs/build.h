@@ -238,6 +238,7 @@ typedef enum {
 
 typedef enum {
   BBS_USER_TEXT_BUILD_DIR = 0,
+  BBS_USER_TEXT_ASSETS_DIR,
   BBS_USER_TEXT_DIST_DIR,
   BBS_USER_TEXT_DIST_ARCHIVE_FORMAT,
   BBS_USER_TEXT_DIST_ARCHIVE_NAME,
@@ -256,6 +257,7 @@ typedef enum {
 
 typedef enum {
   BBS_USER_ATTR_BUILD_DIR = 0,
+  BBS_USER_ATTR_ASSETS_DIR,
   BBS_USER_ATTR_DIST_DIR,
   BBS_USER_ATTR_AUTO_DEBOUNCE_MS,
   BBS_USER_ATTR_AUTO_RETRY_COUNT,
@@ -315,6 +317,7 @@ typedef enum {
   BBS_PROJECT_TEXT_LICENSE_FILE,
   BBS_PROJECT_TEXT_ACTIVE_CONFIG,
   BBS_PROJECT_TEXT_BUILD_DIR,
+  BBS_PROJECT_TEXT_ASSETS_DIR,
   BBS_PROJECT_TEXT_DIST_DIR,
   BBS_PROJECT_TEXT_DIST_ARCHIVE_FORMAT,
   BBS_PROJECT_TEXT_DIST_ARCHIVE_NAME,
@@ -546,6 +549,7 @@ static const bbs_hook_info BBS_HOOK_INFOS[BBS_HOOK_MAX] = {
 
 static const bbs_user_attr_info BBS_USER_ATTR_INFOS[] = {
     {          BBS_USER_ATTR_BUILD_DIR,            "builddir",           BBS_USER_ATTR_KIND_TEXT},
+    {         BBS_USER_ATTR_ASSETS_DIR,           "assetsdir",           BBS_USER_ATTR_KIND_TEXT},
     {           BBS_USER_ATTR_DIST_DIR,             "distdir",           BBS_USER_ATTR_KIND_TEXT},
     {   BBS_USER_ATTR_AUTO_DEBOUNCE_MS,    "auto_debounce_ms",           BBS_USER_ATTR_KIND_UINT},
     {   BBS_USER_ATTR_AUTO_RETRY_COUNT,    "auto_retry_count",           BBS_USER_ATTR_KIND_UINT},
@@ -862,7 +866,10 @@ typedef struct {
 /* Distribution settings stored on a resolved target. */
 typedef struct {
   bool archive;
+  bool copy_assets;
   const char* archive_name;
+  const char** exclude_assets;
+  int exclude_asset_c;
 } bbs_dist;
 
 typedef struct bbs_tgt {
@@ -1034,6 +1041,7 @@ typedef struct {
   const char* active_config;
 
   const char* build_dir;
+  const char* assets_dir;
   const char* dist_dir;
   const char* dist_archive_format;
   const char* dist_archive_name;

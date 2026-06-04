@@ -323,10 +323,10 @@ bbs package <package_name>
 
 See:
 
-- [4_EXAMPLES.md](./4_EXAMPLES.md)
+- [5_EXAMPLES.md](./5_EXAMPLES.md)
 - [`../examples/raylib_example/`](../examples/raylib_example/)
 
 ## Related Reads
 
 - [2_COMMAND_GUIDE.md](./2_COMMAND_GUIDE.md)
-- [6_PROJECT_CONFIG.md](./6_PROJECT_CONFIG.md)
+- [7_PROJECT_CONFIG.md](./7_PROJECT_CONFIG.md)

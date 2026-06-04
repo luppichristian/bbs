@@ -340,8 +340,9 @@ bbs bumpver user -t my_library
 
 ## Suggested Reading Order
 
-- [3_FILE_FORMAT.md](./3_FILE_FORMAT.md)
-- [5_USER_CONFIG.md](./5_USER_CONFIG.md)
-- [6_PROJECT_CONFIG.md](./6_PROJECT_CONFIG.md)
-- [4_EXAMPLES.md](./4_EXAMPLES.md)
-- [10_PACKAGES.md](./10_PACKAGES.md)
+- [3_PROJECT_FOLDER.md](./3_PROJECT_FOLDER.md)
+- [4_FILE_FORMAT.md](./4_FILE_FORMAT.md)
+- [6_USER_CONFIG.md](./6_USER_CONFIG.md)
+- [7_PROJECT_CONFIG.md](./7_PROJECT_CONFIG.md)
+- [5_EXAMPLES.md](./5_EXAMPLES.md)
+- [11_PACKAGES.md](./11_PACKAGES.md)

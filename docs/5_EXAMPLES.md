@@ -338,6 +338,7 @@ What this demonstrates:
 
 ```txt
 builddir("build")
+assetsdir("assets")
 distdir("dist")
 ctest_args("--output-on-failure")
 ```
@@ -377,7 +378,7 @@ What this demonstrates:
 - hook commands run in Bash
 - `$OUT`, `$PLT`, and `$EXE` are expanded before execution
 
-See [9_EXPANSION_TOKENS.md](./9_EXPANSION_TOKENS.md) for the full token list.
+See [10_EXPANSION_TOKENS.md](./10_EXPANSION_TOKENS.md) for the full token list.
 
 ## 9. Distribution Archive
 
@@ -398,6 +399,9 @@ targets(
     dist(
       archive(true)
       name("$OUT-$CFG")
+      copy_assets(true)
+      exclude_assets("dev")
+      exclude_assets("raw")
       precommand("cp README.md $DGEN/")
     )
   )
