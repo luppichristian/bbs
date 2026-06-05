@@ -207,7 +207,7 @@ project(
 )
 ```
 
-`user.bbs` also accepts an optional `user(...)` wrapper.
+`config.bbs` also accepts an optional `config(...)` wrapper.
 
 ## Comments
 
@@ -276,6 +276,6 @@ Typical syntax errors are:
 
 After understanding the syntax here, continue with:
 
-- [6_USER_CONFIG.md](./6_USER_CONFIG.md)
+- [6_CONFIG.md](./6_CONFIG.md)
 - [7_PROJECT_CONFIG.md](./7_PROJECT_CONFIG.md)
 - [5_EXAMPLES.md](./5_EXAMPLES.md)

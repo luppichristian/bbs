@@ -180,7 +180,7 @@ By default these mutations are temporary.
 If a builder wants the mutated state to survive future commands, it can call:
 
 - `bbs_save_toolchain(...)`
-- `bbs_save_user(...)`
+- `bbs_save_global(...)`
 - `bbs_save_local(...)`
 - `bbs_save_project(...)`
 

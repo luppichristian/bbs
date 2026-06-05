@@ -10,7 +10,7 @@ typedef bbs_cmd_info cmd_info;
 typedef bbs_cmd cmd;
 
 #define CFG_PROJECT BBS_CFG_PROJECT
-#define CFG_USER BBS_CFG_USER
+#define CFG_GLOBAL BBS_CFG_GLOBAL
 #define CFG_LOCAL BBS_CFG_LOCAL
 #define CFG_TOOLCHAIN BBS_CFG_TOOLCHAIN
 #define CFG_MAX BBS_CFG_MAX

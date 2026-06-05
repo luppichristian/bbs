@@ -1,22 +1,22 @@
-# User Config
+# Config Files
 
-`user.bbs` stores your shared defaults across projects.
-`local.bbs` uses the same schema, but applies only to the current project and overrides `user.bbs`.
+`config` is the merged result of the global and local config files.
 
-This guide covers both files because they intentionally share the same structure.
+`bbs` looks for the same filename in two places:
 
-## Where These Files Live
+- global `config.bbs`: next to the `bbs` executable
+- local `config.bbs`: in the project root
 
-- `user.bbs`: next to the `bbs` executable
-- `local.bbs`: in the project root
+They intentionally share the same schema.
+`config` means the merged result, where local overrides global.
 
 For a broader explanation of how these files relate to the project directory and generated folders, see [3_PROJECT_FOLDER.md](./3_PROJECT_FOLDER.md).
 
-The optional top-level `user(...)` wrapper is allowed.
+The optional top-level `config(...)` wrapper is allowed.
 
 ## Why These Files Exist
 
-Use `user.bbs` for settings you want across many projects.
+Use the global `config.bbs` for settings you want across many projects.
 
 Examples:
 
@@ -26,7 +26,7 @@ Examples:
 - default test flags
 - reusable custom generators
 
-Use `local.bbs` for machine-specific or project-specific overrides that should not be shared.
+Use the local `config.bbs` for machine-specific or project-specific overrides that should not be shared.
 
 Examples:
 
@@ -39,16 +39,16 @@ Examples:
 The merge order is:
 
 1. built-in defaults
-2. `user.bbs`
-3. `local.bbs`
+2. global `config.bbs`
+3. local `config.bbs`
 
-So `local.bbs` always wins over `user.bbs` for the same field.
+So the local `config.bbs` always wins for the same field.
 
-For custom generators, a same-name `gen(...)` in `local.bbs` replaces the one from `user.bbs`.
+For custom generators, a same-name `gen(...)` in the local `config.bbs` replaces the one from the global `config.bbs`.
 
 ## Custom Discovery Hooks
 
-`user.bbs` and `local.bbs` can declare additional toolchain discovery strategies with top-level:
+The global and local `config.bbs` files can declare additional toolchain discovery strategies with top-level:
 
 - `find_tool(...)`
 - `find_sdk(...)`
@@ -176,8 +176,6 @@ Default:
 500
 ```
 
-Use a larger value if your editor writes multiple file updates during save.
-
 Example:
 
 ```txt
@@ -262,19 +260,11 @@ Extra arguments appended to the CMake configure step.
 
 This supports the expansion tokens documented in [10_EXPANSION_TOKENS.md](./10_EXPANSION_TOKENS.md).
 
-Typical use cases:
-
-- `compile_commands.json`
-- custom cache variables
-- generator-specific tuning
-
 Example:
 
 ```txt
 cmake_args("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
 ```
-
-Custom discovery hooks are top-level config entries, not inline value expressions.
 
 ## `cmake_build_args`
 
@@ -318,13 +308,7 @@ gen(
 )
 ```
 
-Then:
-
-```bat
-bbs gen .clang-format
-```
-
-## Example `user.bbs`
+## Example Global `config.bbs`
 
 ```txt
 builddir("build")
@@ -344,7 +328,7 @@ gen(
 )
 ```
 
-## Example `local.bbs`
+## Example Local `config.bbs`
 
 ```txt
 cmake_args("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DMY_MACHINE=ON")

@@ -19,6 +19,27 @@ static const char* cfg_short_name(const char* filename) {
   return buf;
 }
 
+static const char* cfg_topic_name(cfg c) {
+  return c >= 0 && c < CFG_MAX ? CFG_INFOS[c].name : NULL;
+}
+
+static bool cfg_filename_is_unique(const char* filename, cfg skip) {
+  if (!filename || !filename[0])
+    return false;
+
+  for (int i = 0; i < CFG_MAX; ++i) {
+    if (i == skip)
+      continue;
+    if (CFG_INFOS[i].filename && _stricmp(CFG_INFOS[i].filename, filename) == 0)
+      return false;
+  }
+  return true;
+}
+
+static bool is_merged_config_topic(const char* name) {
+  return name && _stricmp(name, "config") == 0;
+}
+
 static void print_summary_entry(const char* lhs, const char* rhs, size_t width) {
   size_t lhs_len = lhs ? strlen(lhs) : 0;
   if (lhs_len <= width) {
@@ -66,12 +87,14 @@ static cfg parse_cfg_name(const char* name) {
 
   for (int i = 0; i < CFG_MAX; ++i) {
     const cfg_info info = CFG_INFOS[i];
-    if (info.filename && _stricmp(name, info.filename) == 0)
+    if (info.name && _stricmp(name, info.name) == 0)
+      return (cfg)i;
+    if (info.filename && cfg_filename_is_unique(info.filename, (cfg)i) && _stricmp(name, info.filename) == 0)
       return (cfg)i;
 
     const char* dot = info.filename ? strchr(info.filename, '.') : NULL;
     size_t name_len = dot ? (size_t)(dot - info.filename) : (info.filename ? strlen(info.filename) : 0);
-    if (info.filename && strlen(name) == name_len && _strnicmp(name, info.filename, name_len) == 0)
+    if (info.filename && cfg_filename_is_unique(info.filename, (cfg)i) && strlen(name) == name_len && _strnicmp(name, info.filename, name_len) == 0)
       return (cfg)i;
   }
 
@@ -82,7 +105,7 @@ static void print_cfg_help(cfg c) {
   const cfg_info info = CFG_INFOS[c];
 
   print_section("Config");
-  print("  %s", info.filename);
+  print("  %s", info.name ? info.name : cfg_short_name(info.filename));
 
   print_section("Description");
   print("  %s", info.desc);
@@ -94,6 +117,19 @@ static void print_cfg_help(cfg c) {
 
   print_section("Location");
   print("  Expected in the %s.", cfg_loc_label(info.loc));
+}
+
+static void print_merged_config_help(void) {
+  print_section("Config");
+  print("  config");
+
+  print_section("Description");
+  print("  Merged config view");
+
+  print_section("Details");
+  print("  This is not a single file path.");
+  print("  bbs loads the global 'config.bbs' first, then applies overrides from the local 'config.bbs'.");
+  print("  Use 'bbs info config' to inspect the merged result.");
 }
 
 static void format_cmd_usage(char* out, size_t out_size, cmd command) {
@@ -146,8 +182,8 @@ static void print_usage(void) {
 
   print_section("Getting Started");
   print("  Create '{PROJECT_DIR}/%s' in the %s.", CFG_INFOS[CFG_PROJECT].filename, cfg_loc_label(CFG_INFOS[CFG_PROJECT].loc));
-  print("  Add shared defaults in '{BBS_DIR}/%s' in the %s.", CFG_INFOS[CFG_USER].filename, cfg_loc_label(CFG_INFOS[CFG_USER].loc));
-  print("  Add machine-local overrides in '{PROJECT_DIR}/%s' in the %s.", CFG_INFOS[CFG_LOCAL].filename, cfg_loc_label(CFG_INFOS[CFG_LOCAL].loc));
+  print("  Add global config in '{BBS_DIR}/%s' in the %s.", CFG_INFOS[CFG_GLOBAL].filename, cfg_loc_label(CFG_INFOS[CFG_GLOBAL].loc));
+  print("  Add local config overrides in '{PROJECT_DIR}/%s' in the %s.", CFG_INFOS[CFG_LOCAL].filename, cfg_loc_label(CFG_INFOS[CFG_LOCAL].loc));
 
   print_section("Next Step");
   print("  Run 'bbs %s' to see the command and config reference.", CMD_INFOS[CMD_HELP].name);
@@ -165,11 +201,14 @@ static cmd parse_cmd_name(const char* name) {
 static void print_help(int argc, char** argv) {
   cmd help_page = CMD_HELP;
   cfg cfg_page = CFG_MAX;
+  bool merged_config_page = false;
   if (argc > 2) {
     help_page = parse_cmd_name(argv[2]);
-    if (help_page == CMD_MAX)
+    if (help_page == CMD_MAX && is_merged_config_topic(argv[2]))
+      merged_config_page = true;
+    if (help_page == CMD_MAX && !merged_config_page)
       cfg_page = parse_cfg_name(argv[2]);
-    if (help_page == CMD_MAX && cfg_page == CFG_MAX)
+    if (help_page == CMD_MAX && !merged_config_page && cfg_page == CFG_MAX)
       warn("'bbs help %s' is not a recognized command or config. Showing general help instead", argv[2]);
   }
 
@@ -181,22 +220,26 @@ static void print_help(int argc, char** argv) {
         for (int i = CMD_HELP; i < CMD_MAX; ++i)
           print_cmd_help((cmd)i);
         print_section("Configs");
+        print_summary_entry("config", "Merged global + local config view", 11);
         for (int i = 0; i < CFG_MAX; ++i)
-          print_summary_entry(cfg_short_name(CFG_INFOS[i].filename), CFG_INFOS[i].desc, 11);
+          print_summary_entry(cfg_topic_name((cfg)i), CFG_INFOS[i].desc, 11);
         break;
       default:
         print_cmd_detailed_help(help_page);
         break;
     }
-  else if (cfg_page != CFG_MAX) {
+  else if (merged_config_page) {
+    print_merged_config_help();
+  } else if (cfg_page != CFG_MAX) {
     print_cfg_help(cfg_page);
   } else {
     print_section("Commands");
     for (int i = CMD_HELP; i < CMD_MAX; ++i)
       print_cmd_help((cmd)i);
     print_section("Configs");
+    print_summary_entry("config", "Merged global + local config view", 11);
     for (int i = 0; i < CFG_MAX; ++i)
-      print_summary_entry(cfg_short_name(CFG_INFOS[i].filename), CFG_INFOS[i].desc, 11);
+      print_summary_entry(cfg_topic_name((cfg)i), CFG_INFOS[i].desc, 11);
   }
 
   print_section("Notes");
@@ -525,16 +568,16 @@ static int run_cmd_auto(cmd_ctx* cmdctx) {
   const char* ignored_dirs[2] = {0};
   int ignored_dir_c = 0;
   if (project_load_config(args.config, &proj)) {
-    ignored_dirs[ignored_dir_c++] = get_path_cwd(user_text(&proj.user_cfg, USER_TEXT_BUILDDIR));
-    ignored_dirs[ignored_dir_c++] = get_path_cwd(user_text(&proj.user_cfg, USER_TEXT_DISTDIR));
+    ignored_dirs[ignored_dir_c++] = get_path_cwd(config_text(&proj.config, CONFIG_TEXT_BUILDDIR));
+    ignored_dirs[ignored_dir_c++] = get_path_cwd(config_text(&proj.config, CONFIG_TEXT_DISTDIR));
   } else {
     ignored_dirs[ignored_dir_c++] = get_path_cwd(DEF_BUILD_DIR);
     ignored_dirs[ignored_dir_c++] = get_path_cwd(DEF_DIST_DIR);
   }
 
-  unsigned int debounce_ms = user_uint(&proj.user_cfg, USER_UINT_AUTO_DEBOUNCE_MS) ? user_uint(&proj.user_cfg, USER_UINT_AUTO_DEBOUNCE_MS) : AUTO_DEBOUNCE_MS;
-  unsigned int retry_count = user_uint(&proj.user_cfg, USER_UINT_AUTO_RETRY_COUNT);
-  unsigned int retry_delay_ms = user_uint(&proj.user_cfg, USER_UINT_AUTO_RETRY_DELAY_MS);
+  unsigned int debounce_ms = config_uint(&proj.config, CONFIG_UINT_AUTO_DEBOUNCE_MS) ? config_uint(&proj.config, CONFIG_UINT_AUTO_DEBOUNCE_MS) : AUTO_DEBOUNCE_MS;
+  unsigned int retry_count = config_uint(&proj.config, CONFIG_UINT_AUTO_RETRY_COUNT);
+  unsigned int retry_delay_ms = config_uint(&proj.config, CONFIG_UINT_AUTO_RETRY_DELAY_MS);
   if (debounce_value && !cmd_parse_uint_option(debounce_value, "debounce", &debounce_ms))
     return builders_end(error_code(CMD_AUTO, 3));
 
@@ -877,7 +920,7 @@ static int run_cmd_cfg(cmd_ctx* cmdctx) {
   enum {
     MINIMAL = 0,
     PROJECT,
-    USER,
+    GLOBAL,
     LOCAL,
     TOOLCHAIN
   };
@@ -885,24 +928,24 @@ static int run_cmd_cfg(cmd_ctx* cmdctx) {
   cmdopt opts[] = {
       [MINIMAL] = {"m",   "minimal"},
       [PROJECT] = {"p",   "project"},
-      [USER] = {"u",      "user"},
+      [GLOBAL] = {"g",    "global"},
       [LOCAL] = {"l",     "local"},
       [TOOLCHAIN] = {"t", "toolchain"},
   };
 
   cmdline_consume_all_options(cl, opts, _countof(opts));
   cmdline_validate(cl);
-  if ((opts[PROJECT].present == opts[USER].present) && (opts[USER].present == opts[LOCAL].present) && (opts[LOCAL].present == opts[TOOLCHAIN].present))
-    opts[PROJECT].present = opts[USER].present = opts[LOCAL].present = opts[TOOLCHAIN].present = true;
+  if ((opts[PROJECT].present == opts[GLOBAL].present) && (opts[GLOBAL].present == opts[LOCAL].present) && (opts[LOCAL].present == opts[TOOLCHAIN].present))
+    opts[PROJECT].present = opts[GLOBAL].present = opts[LOCAL].present = opts[TOOLCHAIN].present = true;
 
   if (opts[0].present) {
     if (opts[PROJECT].present) print("%s", cmdctx_cfg_path(cmdctx, CFG_PROJECT));
-    if (opts[USER].present) print("%s", cmdctx_cfg_path(cmdctx, CFG_USER));
+    if (opts[GLOBAL].present) print("%s", cmdctx_cfg_path(cmdctx, CFG_GLOBAL));
     if (opts[LOCAL].present) print("%s", cmdctx_cfg_path(cmdctx, CFG_LOCAL));
     if (opts[TOOLCHAIN].present) print("%s", cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN));
   } else {
     if (opts[PROJECT].present) print_cfg_path("Project", cmdctx_cfg_path(cmdctx, CFG_PROJECT));
-    if (opts[USER].present) print_cfg_path("User", cmdctx_cfg_path(cmdctx, CFG_USER));
+    if (opts[GLOBAL].present) print_cfg_path("Global", cmdctx_cfg_path(cmdctx, CFG_GLOBAL));
     if (opts[LOCAL].present) print_cfg_path("Local", cmdctx_cfg_path(cmdctx, CFG_LOCAL));
     if (opts[TOOLCHAIN].present) print_cfg_path("Toolchain", cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN));
   }
@@ -942,8 +985,8 @@ static int run_cmd_clean(cmd_ctx* cmdctx) {
       return clean_one_file("project config", cmdctx_cfg_path(cmdctx, c), CMD_CLEAN, 0);
     case CFG_LOCAL:
       return clean_one_file("local config", cmdctx_cfg_path(cmdctx, c), CMD_CLEAN, 1);
-    case CFG_USER:
-      return clean_one_file("user config", cmdctx_cfg_path(cmdctx, c), CMD_CLEAN, 2);
+    case CFG_GLOBAL:
+      return clean_one_file("global config", cmdctx_cfg_path(cmdctx, c), CMD_CLEAN, 2);
     case CFG_TOOLCHAIN:
       return clean_one_file("toolchain config", cmdctx_cfg_path(cmdctx, c), CMD_CLEAN, 3);
     default:
@@ -951,7 +994,7 @@ static int run_cmd_clean(cmd_ctx* cmdctx) {
   }
 
   error("Unknown clean target '%s'.", scope);
-  print("Use 'project', 'user', 'local', or 'toolchain'.");
+  print("Use 'project', 'global', 'local', or 'toolchain'.");
   return error_code(CMD_CLEAN, 4);
 }
 
@@ -997,7 +1040,7 @@ static const char* gen_gitignore_text(void) {
          "gen/\n"
          "\n"
          "# bbs local overrides\n"
-         "local.bbs\n"
+         "config.bbs\n"
          "toolchain.bbs\n"
          "\n"
          "# CMake-generated files\n"
@@ -1608,7 +1651,7 @@ static bool gen_build_github_workflow_text(const project* proj, project_textbuf*
 
   bool has_tests = project_count_test_targets(proj) > 0;
   bool has_runnables = project_count_runnable_targets(proj) > 0;
-  const char* dist_root = user_text(&proj->user_cfg, USER_TEXT_DISTDIR);
+  const char* dist_root = config_text(&proj->config, CONFIG_TEXT_DISTDIR);
 
   const char* default_platforms[] = {
       "windows-x86_64",
@@ -1724,7 +1767,7 @@ static bool gen_build_github_release_workflow_text(const project* proj, project_
   if (!proj || !buf)
     return false;
 
-  const char* dist_root = user_text(&proj->user_cfg, USER_TEXT_DISTDIR);
+  const char* dist_root = config_text(&proj->config, CONFIG_TEXT_DISTDIR);
 
   const char* default_platforms[] = {
       "windows-x86_64",
@@ -2287,13 +2330,62 @@ static int run_cmd_info_file(const char* title, const char* path, const char* at
   return 0;
 }
 
+static int run_cmd_info_tree(const char* title, const char* source_label, node* tree, const char* attr_filter, const char* text_filter, info_print_mode mode) {
+  if (!tree) {
+    if (mode == INFO_PRINT_NORMAL)
+      print("%s is not available.", title);
+    return 0;
+  }
+
+  int total_nodes = 0;
+  int visible_nodes = 0;
+  int flat_matches = 0;
+  int child_count = 0;
+  node** children = info_children_in_source_order(tree, &child_count);
+  for (int i = 0; i < child_count; ++i) {
+    total_nodes += info_count_nodes(children[i]);
+    visible_nodes += info_count_visible_nodes(children[i], "", attr_filter, text_filter);
+    flat_matches += info_count_flat_matches(children[i], "", attr_filter, text_filter);
+  }
+
+  if (mode == INFO_PRINT_NORMAL) {
+    print_section(title);
+    if (source_label && source_label[0])
+      print("Source: %s", source_label);
+    print("Nodes: %d", total_nodes);
+    if (attr_filter && attr_filter[0])
+      print("Attribute: %s", attr_filter);
+    if (text_filter && text_filter[0])
+      print("Filter: %s", text_filter);
+  }
+
+  if ((mode == INFO_PRINT_NORMAL && visible_nodes == 0) || (mode != INFO_PRINT_NORMAL && flat_matches == 0)) {
+    if (mode == INFO_PRINT_NORMAL)
+      print("No matching attributes found.");
+    return 0;
+  }
+
+  if (mode == INFO_PRINT_NORMAL) {
+    print("Matches: %d", visible_nodes);
+    printf("\n");
+  }
+
+  for (int i = 0; i < child_count; ++i) {
+    if (mode == INFO_PRINT_NORMAL)
+      info_print_node(children[i], "", 0, attr_filter, text_filter);
+    else
+      info_print_flat_node(children[i], "", attr_filter, text_filter, mode);
+  }
+  return 0;
+}
+
 static int run_cmd_info(cmd_ctx* cmdctx) {
   cmdline* cl = cmdctx->cl;
   const char* scope = cmdline_consume_param(cl);
 
   if (!scope || !scope[0]) {
     error("Missing info topic.");
-    print("Use 'bbs info project', 'bbs info user', 'bbs info local', or 'bbs info toolchain'.");
+    print("Use 'bbs info project', 'bbs info config', 'bbs info global', 'bbs info local', or 'bbs info toolchain'.");
     return error_code(CMD_INFO, 0);
   }
 
@@ -2327,8 +2419,8 @@ static int run_cmd_info(cmd_ctx* cmdctx) {
   switch (c) {
     case CFG_PROJECT:
       return run_cmd_info_file("Project File Attributes", cmdctx_cfg_path(cmdctx, c), attr_filter, text_filter, mode);
-    case CFG_USER:
-      return run_cmd_info_file("User File Attributes", cmdctx_cfg_path(cmdctx, c), attr_filter, text_filter, mode);
+    case CFG_GLOBAL:
+      return run_cmd_info_file("Global Config File Attributes", cmdctx_cfg_path(cmdctx, c), attr_filter, text_filter, mode);
     case CFG_LOCAL:
       return run_cmd_info_file("Local File Attributes", cmdctx_cfg_path(cmdctx, c), attr_filter, text_filter, mode);
     case CFG_TOOLCHAIN:
@@ -2337,8 +2429,15 @@ static int run_cmd_info(cmd_ctx* cmdctx) {
       break;
   }
 
+  if (_stricmp(scope, "config") == 0) {
+    project proj = {0};
+    if (!project_load(&proj))
+      return error_code(CMD_INFO, 2);
+    return run_cmd_info_tree("Config Attributes", "merged global + local config", proj.config.merged_scope, attr_filter, text_filter, mode);
+  }
+
   error("Unknown info topic '%s'.", scope);
-  print("Use 'project', 'user', 'local', or 'toolchain'.");
+  print("Use 'project', 'config', 'global', 'local', or 'toolchain'.");
   return error_code(CMD_INFO, 1);
 }
 

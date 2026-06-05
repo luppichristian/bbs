@@ -1,7 +1,7 @@
 #pragma once
 #include "bbs_base.h"
 #include "bbs_toolchain.h"
-#include "bbs_user.h"
+#include "bbs_config.h"
 
 typedef bbs_meta meta;
 typedef bbs_target_type target_type;

@@ -16,7 +16,7 @@ my_project/
   src/
   include/
   assets/
-  local.bbs
+  config.bbs
   build/
   dist/
 ```
@@ -31,7 +31,7 @@ Required project definition.
 
 This declares targets, configs, packages, builders, dist settings, and so on.
 
-### `local.bbs`
+### local `config.bbs`
 
 Optional machine-local override file in the project root.
 
@@ -130,7 +130,7 @@ Inside `gen/`, `bbs` may place:
 
 Some `bbs` files are not stored in the project folder:
 
-### `user.bbs`
+### global `config.bbs`
 
 Shared user defaults file.
 
@@ -169,13 +169,13 @@ Usually do not commit:
 
 - `build/`
 - `dist/`
-- `local.bbs`
+- local `config.bbs`
 
 `bbs gen gitignore` can generate a starter `.gitignore` for the generated output.
 
 ## Related Docs
 
 - [4_FILE_FORMAT.md](./4_FILE_FORMAT.md)
-- [6_USER_CONFIG.md](./6_USER_CONFIG.md)
+- [6_CONFIG.md](./6_CONFIG.md)
 - [7_PROJECT_CONFIG.md](./7_PROJECT_CONFIG.md)
 - [10_EXPANSION_TOKENS.md](./10_EXPANSION_TOKENS.md)

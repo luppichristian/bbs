@@ -2,7 +2,7 @@
 #include "bbs_project.h"
 #include "bbs_builders.h"
 #include "bbs_toolchain.c"
-#include "bbs_user.c"
+#include "bbs_config.c"
 
 static bool project_parse_string_list(node* list_n, const char*** out_items, int* out_count);
 static const char* project_join_scalar_list(node* list_n, int* out_count);
@@ -2035,22 +2035,22 @@ static bool project_load_file_config(const char* path, const char* config, proje
   out->config_path = toolchain_norm_path(path);
   out->root_dir = project_path_parent(out->config_path);
   out->local_cfg_path = toolchain_join2(out->root_dir ? out->root_dir : project_current_workdir(), CFG_INFOS[CFG_LOCAL].filename);
-  if (!project_load_user_config(out->local_cfg_path, &out->user_cfg))
+  if (!project_load_user_config(out->local_cfg_path, &out->config))
     return false;
 
-  out->build_dir = user_text(&out->user_cfg, USER_TEXT_BUILDDIR);
-  out->assets_dir = user_text(&out->user_cfg, USER_TEXT_ASSETSDIR);
-  out->dist_dir = user_text(&out->user_cfg, USER_TEXT_DISTDIR);
-  out->dist_archive_format = user_text(&out->user_cfg, USER_TEXT_DIST_ARCHIVE_FORMAT);
-  out->dist_archive_name = user_text(&out->user_cfg, USER_TEXT_DIST_ARCHIVE_NAME);
-  out->cmake_args = user_text(&out->user_cfg, USER_TEXT_CMAKE_ARGS);
-  out->cmake_build_args = user_text(&out->user_cfg, USER_TEXT_CMAKE_BUILD_ARGS);
-  out->ctest_args = user_text(&out->user_cfg, USER_TEXT_CTEST_ARGS);
-  out->auto_debounce_ms = user_uint(&out->user_cfg, USER_UINT_AUTO_DEBOUNCE_MS);
-  out->auto_retry_count = user_uint(&out->user_cfg, USER_UINT_AUTO_RETRY_COUNT);
-  out->auto_retry_delay_ms = user_uint(&out->user_cfg, USER_UINT_AUTO_RETRY_DELAY_MS);
-  out->gens = out->user_cfg.gens;
-  out->gen_c = out->user_cfg.gen_c;
+  out->build_dir = config_text(&out->config, CONFIG_TEXT_BUILDDIR);
+  out->assets_dir = config_text(&out->config, CONFIG_TEXT_ASSETSDIR);
+  out->dist_dir = config_text(&out->config, CONFIG_TEXT_DISTDIR);
+  out->dist_archive_format = config_text(&out->config, CONFIG_TEXT_DIST_ARCHIVE_FORMAT);
+  out->dist_archive_name = config_text(&out->config, CONFIG_TEXT_DIST_ARCHIVE_NAME);
+  out->cmake_args = config_text(&out->config, CONFIG_TEXT_CMAKE_ARGS);
+  out->cmake_build_args = config_text(&out->config, CONFIG_TEXT_CMAKE_BUILD_ARGS);
+  out->ctest_args = config_text(&out->config, CONFIG_TEXT_CTEST_ARGS);
+  out->auto_debounce_ms = config_uint(&out->config, CONFIG_UINT_AUTO_DEBOUNCE_MS);
+  out->auto_retry_count = config_uint(&out->config, CONFIG_UINT_AUTO_RETRY_COUNT);
+  out->auto_retry_delay_ms = config_uint(&out->config, CONFIG_UINT_AUTO_RETRY_DELAY_MS);
+  out->gens = out->config.gens;
+  out->gen_c = out->config.gen_c;
   return true;
 }
 
@@ -2074,9 +2074,9 @@ static bool project_load_user_config(const char* local_cfg_path, user* out) {
   if (!cfg)
     return false;
 
-  if (!user_load_paths(get_path_exe(CFG_INFOS[CFG_USER].filename),
-                       local_cfg_path ? local_cfg_path : get_path_cwd(CFG_INFOS[CFG_LOCAL].filename),
-                       cfg))
+  if (!user_load_paths(get_path_exe(CFG_INFOS[CFG_GLOBAL].filename),
+                        local_cfg_path ? local_cfg_path : get_path_cwd(CFG_INFOS[CFG_LOCAL].filename),
+                        cfg))
     return false;
 
   *out = *cfg;
@@ -2542,7 +2542,7 @@ static bool project_append_cmake_opt_level(project_textbuf* buf, const char* tar
 }
 
 static const char* project_build_root_abs(const project* proj) {
-  return project_resolve_path_from_root(project_root_dir(proj), user_text(proj ? &proj->user_cfg : NULL, USER_TEXT_BUILDDIR));
+  return project_resolve_path_from_root(project_root_dir(proj), config_text(proj ? &proj->config : NULL, CONFIG_TEXT_BUILDDIR));
 }
 
 static const char* project_build_file_abs(const project* proj, const char* filename) {
@@ -2550,11 +2550,11 @@ static const char* project_build_file_abs(const project* proj, const char* filen
 }
 
 static const char* project_build_binary_dir_abs(const project* proj, const char* config, const char* platform) {
-  return project_resolve_path_from_root(project_root_dir(proj), project_resolved_dir(user_text(proj ? &proj->user_cfg : NULL, USER_TEXT_BUILDDIR), config, platform));
+  return project_resolve_path_from_root(project_root_dir(proj), project_resolved_dir(config_text(proj ? &proj->config : NULL, CONFIG_TEXT_BUILDDIR), config, platform));
 }
 
 static const char* project_assets_root_abs(const project* proj) {
-  return project_resolve_path_from_root(project_root_dir(proj), user_text(proj ? &proj->user_cfg : NULL, USER_TEXT_ASSETSDIR));
+  return project_resolve_path_from_root(project_root_dir(proj), config_text(proj ? &proj->config : NULL, CONFIG_TEXT_ASSETSDIR));
 }
 
 static bool project_ensure_dir_tree(const char* path, const char* label) {
@@ -3209,11 +3209,11 @@ static bool project_prepare_packages(project* proj, toolchain* tc, const char* p
 }
 
 static const char* project_dist_root_abs(const project* proj) {
-  return project_resolve_path_from_root(project_root_dir(proj), user_text(proj ? &proj->user_cfg : NULL, USER_TEXT_DISTDIR));
+  return project_resolve_path_from_root(project_root_dir(proj), config_text(proj ? &proj->config : NULL, CONFIG_TEXT_DISTDIR));
 }
 
 static const char* project_dist_config_dir_abs(const project* proj, const char* config, const char* platform) {
-  return project_resolve_path_from_root(project_root_dir(proj), project_resolved_dir(user_text(proj ? &proj->user_cfg : NULL, USER_TEXT_DISTDIR), config, platform));
+  return project_resolve_path_from_root(project_root_dir(proj), project_resolved_dir(config_text(proj ? &proj->config : NULL, CONFIG_TEXT_DISTDIR), config, platform));
 }
 
 static const char* project_dist_gen_dir_abs(const project* proj, const char* config, const char* platform) {
@@ -3534,8 +3534,8 @@ static const char* project_scoped_token_value(const char* name, const char* path
 
   if (strcmp(name, "PROJECT") == 0)
     return project_lookup_config_path(proj ? proj->config_tree : NULL, path);
-  if (strcmp(name, "USER") == 0)
-    return project_lookup_config_path(proj ? proj->user_cfg.merged_scope : NULL, path);
+  if (strcmp(name, "CONFIG") == 0)
+    return project_lookup_config_path(proj ? proj->config.merged_scope : NULL, path);
   if (strcmp(name, "TOOLCHAIN") == 0)
     return project_lookup_config_path(tc ? tc->config_tree : NULL, path);
   return NULL;
@@ -3569,14 +3569,14 @@ static const char* project_token_value(const char* name,
     return tc && tc->toolchain_cfg_path ? tc->toolchain_cfg_path : NULL;
   if (strcmp(name, "TOOLCHAIN_FILE") == 0)
     return tc && tc->toolchain_cfg_path ? tc->toolchain_cfg_path : NULL;
-  if (strcmp(name, "USER") == 0)
-    return tc && tc->user_cfg_path ? tc->user_cfg_path : NULL;
-  if (strcmp(name, "USER_FILE") == 0)
-    return tc && tc->user_cfg_path ? tc->user_cfg_path : NULL;
+  if (strcmp(name, "GLOBAL") == 0)
+    return tc && tc->global_cfg_path ? tc->global_cfg_path : NULL;
+  if (strcmp(name, "GLOBAL_FILE") == 0)
+    return tc && tc->global_cfg_path ? tc->global_cfg_path : NULL;
   if (strcmp(name, "LOCAL") == 0)
-    return tc && tc->local_cfg_path ? tc->local_cfg_path : get_path_cwd("local.bbs");
+    return tc && tc->local_cfg_path ? tc->local_cfg_path : get_path_cwd("config.bbs");
   if (strcmp(name, "LOCAL_FILE") == 0)
-    return tc && tc->local_cfg_path ? tc->local_cfg_path : get_path_cwd("local.bbs");
+    return tc && tc->local_cfg_path ? tc->local_cfg_path : get_path_cwd("config.bbs");
   if (strcmp(name, "DBUILD") == 0)
     return project_build_binary_dir_abs(proj, proj ? proj->active_config : NULL, platform);
   if (strcmp(name, "DASSETS") == 0)
@@ -3726,8 +3726,8 @@ static const char* project_expand_config_string(const char* text, const project*
 }
 
 static const char* project_dist_archive_name(const project* proj, const target* tgt, const char* platform, toolchain* tc) {
-  const char* fmt = user_text(&proj->user_cfg, USER_TEXT_DIST_ARCHIVE_FORMAT);
-  const char* pattern = tgt && tgt->dist.archive_name ? tgt->dist.archive_name : user_text(&proj->user_cfg, USER_TEXT_DIST_ARCHIVE_NAME);
+  const char* fmt = config_text(&proj->config, CONFIG_TEXT_DIST_ARCHIVE_FORMAT);
+  const char* pattern = tgt && tgt->dist.archive_name ? tgt->dist.archive_name : config_text(&proj->config, CONFIG_TEXT_DIST_ARCHIVE_NAME);
   if (!pattern || !pattern[0])
     pattern = "$CFG-$OS-$ARC--$VER";
 
@@ -3750,7 +3750,7 @@ static bool project_create_dist_archive(const project* proj, const target* tgt, 
 
   const char* workdir = project_dist_config_dir_abs(proj, proj->active_config, platform);
   const char* archive_name = project_dist_archive_name(proj, tgt, platform, tc);
-  const char* format = user_text(&proj->user_cfg, USER_TEXT_DIST_ARCHIVE_FORMAT);
+  const char* format = config_text(&proj->config, CONFIG_TEXT_DIST_ARCHIVE_FORMAT);
   char script[2048] = {0};
 
   if (_stricmp(format, "zip") == 0) {
@@ -4833,7 +4833,7 @@ static bool project_needs_configure(const project* proj, const char* platform, b
 static bool project_run_cmake_preset(toolchain* tc, const project* proj, const char* preset, const char* platform) {
   const char* cmake = toolchain_get_host_tool_path(tc, "cmake");
   const char* build_root = project_build_root_abs(proj);
-  const char* extra_args = proj && user_text(&proj->user_cfg, USER_TEXT_CMAKE_ARGS) ? project_expand_config_string(user_text(&proj->user_cfg, USER_TEXT_CMAKE_ARGS), proj, NULL, platform, tc, build_root) : NULL;
+  const char* extra_args = proj && config_text(&proj->config, CONFIG_TEXT_CMAKE_ARGS) ? project_expand_config_string(config_text(&proj->config, CONFIG_TEXT_CMAKE_ARGS), proj, NULL, platform, tc, build_root) : NULL;
   char script[4096] = {0};
   if (!cmake || !cmake[0]) {
     error("cmake was not found in the current toolchain.");
@@ -4852,7 +4852,7 @@ static bool project_run_cmake_preset(toolchain* tc, const project* proj, const c
 static bool project_run_cmake_build(toolchain* tc, const project* proj, const char* preset, const char* target_name, const char* platform) {
   const char* cmake = toolchain_get_host_tool_path(tc, "cmake");
   const char* build_root = project_build_root_abs(proj);
-  const char* extra_args = proj && user_text(&proj->user_cfg, USER_TEXT_CMAKE_BUILD_ARGS) ? project_expand_config_string(user_text(&proj->user_cfg, USER_TEXT_CMAKE_BUILD_ARGS), proj, NULL, platform, tc, build_root) : NULL;
+  const char* extra_args = proj && config_text(&proj->config, CONFIG_TEXT_CMAKE_BUILD_ARGS) ? project_expand_config_string(config_text(&proj->config, CONFIG_TEXT_CMAKE_BUILD_ARGS), proj, NULL, platform, tc, build_root) : NULL;
   char script[4096] = {0};
   if (!cmake || !cmake[0]) {
     error("cmake was not found in the current toolchain.");
@@ -4881,7 +4881,7 @@ static bool project_run_cmake_build(toolchain* tc, const project* proj, const ch
 static bool project_run_ctest_preset(toolchain* tc, const project* proj, const char* preset, const char* test_name, const char* platform) {
   const char* ctest = toolchain_get_host_tool_path(tc, "ctest");
   const char* build_root = project_build_root_abs(proj);
-  const char* extra_args = proj && user_text(&proj->user_cfg, USER_TEXT_CTEST_ARGS) ? project_expand_config_string(user_text(&proj->user_cfg, USER_TEXT_CTEST_ARGS), proj, NULL, platform, tc, build_root) : NULL;
+  const char* extra_args = proj && config_text(&proj->config, CONFIG_TEXT_CTEST_ARGS) ? project_expand_config_string(config_text(&proj->config, CONFIG_TEXT_CTEST_ARGS), proj, NULL, platform, tc, build_root) : NULL;
   char script[4096] = {0};
   if (!ctest || !ctest[0]) {
     error("ctest was not found in the current toolchain.");
@@ -5216,7 +5216,7 @@ static bool project_build(const char* target_name, const char* platform, const c
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
 
   project_print_action_header("Build", &proj, platform_id);
-  project_print_field("Directory", project_resolved_dir(user_text(&proj.user_cfg, USER_TEXT_BUILDDIR), proj.active_config, platform_id));
+  project_print_field("Directory", project_resolved_dir(config_text(&proj.config, CONFIG_TEXT_BUILDDIR), proj.active_config, platform_id));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
@@ -5336,7 +5336,7 @@ static bool project_test(const char* test_name, const char* target_name, const c
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
 
   project_print_action_header("Test", &proj, platform_id);
-  const char* build_dir = project_resolved_dir(user_text(&proj.user_cfg, USER_TEXT_BUILDDIR), proj.active_config, platform_id);
+  const char* build_dir = project_resolved_dir(config_text(&proj.config, CONFIG_TEXT_BUILDDIR), proj.active_config, platform_id);
   project_print_field("Directory", build_dir);
   if (test_name && test_name[0])
     project_print_field("Test", test_name);
@@ -5409,7 +5409,7 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     goto done;
 
   project_print_action_header("Dist", &proj, platform_id);
-  project_print_field("Directory", project_resolved_dir(user_text(&proj.user_cfg, USER_TEXT_DISTDIR), proj.active_config, platform_id));
+  project_print_field("Directory", project_resolved_dir(config_text(&proj.config, CONFIG_TEXT_DISTDIR), proj.active_config, platform_id));
   if (target_name && target_name[0]) {
     int idx = project_find_target_index(&proj, target_name);
     if (idx < 0)
@@ -5436,7 +5436,7 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     const char* dist_cfg_dir = project_dist_config_dir_abs(&proj, proj.active_config, platform_id);
     const char* gen_dir = project_dist_gen_dir_abs(&proj, proj.active_config, platform_id);
     const char* assets_root = project_assets_root_abs(&proj);
-    const char* assets_cfg = user_text(&proj.user_cfg, USER_TEXT_ASSETSDIR);
+    const char* assets_cfg = config_text(&proj.config, CONFIG_TEXT_ASSETSDIR);
     const char* assets_rel = toolchain_is_abs_path(assets_cfg) ? project_path_filename(assets_cfg) : assets_cfg;
     if (!project_ensure_dir_exists(dist_root, "dist directory"))
       goto done;
@@ -5557,7 +5557,7 @@ static bool project_cleanup(void) {
     }
   }
 
-  const char* local_cfg = get_path_cwd("local.bbs");
+  const char* local_cfg = get_path_cwd("config.bbs");
   if (file_exists(local_cfg)) {
     if (!file_delete(local_cfg)) {
       error("Failed to delete local config: %s", local_cfg);

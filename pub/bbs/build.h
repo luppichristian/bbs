@@ -66,7 +66,7 @@ typedef enum {
 /* Known `.bbs` config files. */
 typedef enum {
   BBS_CFG_PROJECT = 0,
-  BBS_CFG_USER,
+  BBS_CFG_GLOBAL,
   BBS_CFG_LOCAL,
   BBS_CFG_TOOLCHAIN,
   BBS_CFG_MAX,
@@ -80,6 +80,7 @@ typedef enum {
 /* Static description of one config file kind. */
 /* Simple 3-part or 4-part version value. */
 typedef struct {
+  const char* name;
   bbs_cfg_loc loc;
   const char* filename;
   const char* desc;
@@ -242,45 +243,45 @@ typedef enum {
 } bbs_node_type;
 
 typedef enum {
-  BBS_USER_TEXT_BUILD_DIR = 0,
-  BBS_USER_TEXT_ASSETS_DIR,
-  BBS_USER_TEXT_DIST_DIR,
-  BBS_USER_TEXT_DIST_ARCHIVE_FORMAT,
-  BBS_USER_TEXT_DIST_ARCHIVE_NAME,
-  BBS_USER_TEXT_CMAKE_ARGS,
-  BBS_USER_TEXT_CMAKE_BUILD_ARGS,
-  BBS_USER_TEXT_CTEST_ARGS,
-  BBS_USER_TEXT_MAX,
-} bbs_user_text_attr;
+  BBS_CONFIG_TEXT_BUILD_DIR = 0,
+  BBS_CONFIG_TEXT_ASSETS_DIR,
+  BBS_CONFIG_TEXT_DIST_DIR,
+  BBS_CONFIG_TEXT_DIST_ARCHIVE_FORMAT,
+  BBS_CONFIG_TEXT_DIST_ARCHIVE_NAME,
+  BBS_CONFIG_TEXT_CMAKE_ARGS,
+  BBS_CONFIG_TEXT_CMAKE_BUILD_ARGS,
+  BBS_CONFIG_TEXT_CTEST_ARGS,
+  BBS_CONFIG_TEXT_MAX,
+} bbs_config_text_attr;
 
 typedef enum {
-  BBS_USER_UINT_AUTO_DEBOUNCE_MS = 0,
-  BBS_USER_UINT_AUTO_RETRY_COUNT,
-  BBS_USER_UINT_AUTO_RETRY_DELAY_MS,
-  BBS_USER_UINT_MAX,
-} bbs_user_uint_attr;
+  BBS_CONFIG_UINT_AUTO_DEBOUNCE_MS = 0,
+  BBS_CONFIG_UINT_AUTO_RETRY_COUNT,
+  BBS_CONFIG_UINT_AUTO_RETRY_DELAY_MS,
+  BBS_CONFIG_UINT_MAX,
+} bbs_config_uint_attr;
 
 typedef enum {
-  BBS_USER_ATTR_BUILD_DIR = 0,
-  BBS_USER_ATTR_ASSETS_DIR,
-  BBS_USER_ATTR_DIST_DIR,
-  BBS_USER_ATTR_AUTO_DEBOUNCE_MS,
-  BBS_USER_ATTR_AUTO_RETRY_COUNT,
-  BBS_USER_ATTR_AUTO_RETRY_DELAY_MS,
-  BBS_USER_ATTR_DIST_ARCHIVE_FORMAT,
-  BBS_USER_ATTR_DIST_ARCHIVE_NAME,
-  BBS_USER_ATTR_CMAKE_ARGS,
-  BBS_USER_ATTR_CMAKE_BUILD_ARGS,
-  BBS_USER_ATTR_CTEST_ARGS,
-  BBS_USER_ATTR_GEN,
-} bbs_user_attr;
+  BBS_CONFIG_ATTR_BUILD_DIR = 0,
+  BBS_CONFIG_ATTR_ASSETS_DIR,
+  BBS_CONFIG_ATTR_DIST_DIR,
+  BBS_CONFIG_ATTR_AUTO_DEBOUNCE_MS,
+  BBS_CONFIG_ATTR_AUTO_RETRY_COUNT,
+  BBS_CONFIG_ATTR_AUTO_RETRY_DELAY_MS,
+  BBS_CONFIG_ATTR_DIST_ARCHIVE_FORMAT,
+  BBS_CONFIG_ATTR_DIST_ARCHIVE_NAME,
+  BBS_CONFIG_ATTR_CMAKE_ARGS,
+  BBS_CONFIG_ATTR_CMAKE_BUILD_ARGS,
+  BBS_CONFIG_ATTR_CTEST_ARGS,
+  BBS_CONFIG_ATTR_GEN,
+} bbs_config_attr;
 
 typedef enum {
-  BBS_USER_ATTR_KIND_TEXT = 0,
-  BBS_USER_ATTR_KIND_UINT,
-  BBS_USER_ATTR_KIND_ARCHIVE_FORMAT,
-  BBS_USER_ATTR_KIND_SECTION,
-} bbs_user_attr_kind;
+  BBS_CONFIG_ATTR_KIND_TEXT = 0,
+  BBS_CONFIG_ATTR_KIND_UINT,
+  BBS_CONFIG_ATTR_KIND_ARCHIVE_FORMAT,
+  BBS_CONFIG_ATTR_KIND_SECTION,
+} bbs_config_attr_kind;
 
 typedef enum {
   BBS_HOOK_POST_BUILD = 0,
@@ -461,14 +462,14 @@ typedef struct {
 } bbs_hook_info;
 
 typedef struct {
-  bbs_user_attr id;
+  bbs_config_attr id;
   const char* name;
-  bbs_user_attr_kind kind;
-} bbs_user_attr_info;
+  bbs_config_attr_kind kind;
+} bbs_config_attr_info;
 
 typedef struct {
   const char* name;
-} bbs_user_gen_attr_info;
+} bbs_config_gen_attr_info;
 
 typedef struct {
   const char** items;
@@ -499,29 +500,33 @@ static const char* BBS_NODE_TYPE_NAMES[BBS_NODE_MAX] = {
 };
 
 static const bbs_cfg_info BBS_CFG_INFOS[BBS_CFG_MAX] = {
-    [BBS_CFG_PROJECT] = {.loc = BBS_CFG_LOC_CWD,
+    [BBS_CFG_PROJECT] = {.name = "project",
+                         .loc = BBS_CFG_LOC_CWD,
                          .filename = "project.bbs",
                          .desc = "Project definition",
                          .detailed_desc = "Defines the project, its targets, supported platforms, and build settings.\n"
-                         "Keep it in the project root.\n"
-                         "bbs reads this file first, then applies defaults from 'user.bbs' and overrides from 'local.bbs' when present."},
-    [BBS_CFG_USER] = {.loc = BBS_CFG_LOC_EXE,
-                         .filename = "user.bbs",
-                         .desc = "Shared user defaults",
+                          "Keep it in the project root.\n"
+                         "bbs reads this file first, then applies defaults from the global 'config.bbs' and overrides from the local 'config.bbs' when present."},
+    [BBS_CFG_GLOBAL] = {.name = "global",
+                          .loc = BBS_CFG_LOC_EXE,
+                          .filename = "config.bbs",
+                         .desc = "Global config defaults",
                          .detailed_desc = "Stores your default settings across projects.\n"
-                         "Keep it next to the bbs executable.\n"
-                         "Values from 'user.bbs' can be overridden by 'local.bbs' in a specific project."                               },
-    [BBS_CFG_LOCAL] = {.loc = BBS_CFG_LOC_CWD,
-                         .filename = "local.bbs",
-                         .desc = "Machine-local overrides",
-                         .detailed_desc = "Stores machine-specific overrides for a single project.\n"
-                         "Keep it in the project root next to 'project.bbs'.\n"
-                         "Use it for values that should not be shared.\n"
-                         "In most projects this file should be added to .gitignore."                                                    },
-    [BBS_CFG_TOOLCHAIN] = {.loc = BBS_CFG_LOC_EXE,
-                         .filename = "toolchain.bbs",
-                         .desc = "Generated toolchain cache",
-                         .detailed_desc = "Caches detected toolchain state.\n"
+                          "Keep it next to the bbs executable.\n"
+                          "Values from this global 'config.bbs' can be overridden by the local 'config.bbs' in a specific project."                               },
+    [BBS_CFG_LOCAL] = {.name = "local",
+                          .loc = BBS_CFG_LOC_CWD,
+                          .filename = "config.bbs",
+                          .desc = "Local config overrides",
+                          .detailed_desc = "Stores machine-specific overrides for a single project.\n"
+                          "Keep it in the project root next to 'project.bbs'.\n"
+                          "Use it for values that should not be shared.\n"
+                          "In most projects this file should be added to .gitignore."                                                    },
+    [BBS_CFG_TOOLCHAIN] = {.name = "toolchain",
+                         .loc = BBS_CFG_LOC_EXE,
+                          .filename = "toolchain.bbs",
+                          .desc = "Generated toolchain cache",
+                          .detailed_desc = "Caches detected toolchain state.\n"
                          "bbs creates and refreshes this file while preparing the build environment.\n"
                          "Keep it next to the bbs executable.\n"
                          "Regenerate it with 'bbs update --init-toolchain' after local toolchain changes."                              },
@@ -529,14 +534,14 @@ static const bbs_cfg_info BBS_CFG_INFOS[BBS_CFG_MAX] = {
 
 static const bbs_cmd_info BBS_CMD_INFOS[BBS_CMD_MAX] = {
     [BBS_CMD_HELP] = {   .name = "help",                                                                               .params = "[command/topic]",         .desc = "Show help for commands and configs",                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          .detailed_desc = "Without arguments, lists all available commands and config topics.\nPass a command or config name to show its usage and details."},
-    [BBS_CMD_CLEAN] = {  .name = "clean",                                                                .params = "[project|user|local|toolchain]",           .desc = "Remove selected bbs config files",                                                                                                                                                                                                                                                                                                                                                                                                                                        .detailed_desc = "Removes one selected bbs config file.\nUse 'project', 'user', 'local', or 'toolchain' to clean only that file.\nIf no argument is provided, bbs cleans both 'project' and 'local'."},
+    [BBS_CMD_CLEAN] = {  .name = "clean",                                                                .params = "[project|global|local|toolchain]",           .desc = "Remove selected bbs config files",                                                                                                                                                                                                                                                                                                                                                                                                                                        .detailed_desc = "Removes one selected bbs config file.\nUse 'project', 'global', 'local', or 'toolchain' to clean only that file.\nIf no argument is provided, bbs cleans both 'project' and 'local'."},
     [BBS_CMD_UPDATE] = { .name = "update",                               .params = "[-i|--info] [-c config] [--init-toolchain] [--refresh-packages]",             .desc = "Generate derived project files",                                                    .detailed_desc = "Parses and validates the project configuration, then generates the derived files and directories used by bbs.\nUse '-i' or '--info' to print the resolved project state before updating.\nUse '-c' or '--config' to resolve the project with a specific config for the info output.\nIf the toolchain file is missing, bbs generates it automatically.\nUse '--init-toolchain' to force regeneration instead of reusing the cached toolchain file.\nUse '--refresh-packages' to re-fetch repo-backed packages into the shared cache before regenerating backend files."},
-    [BBS_CMD_GEN] = {    .name = "gen",                                          .params = "<format> [-o|--override] [-p platform[,platform...]]", .desc = "Generate utility files in the project root", .detailed_desc = "Generates one supported utility file in the current project root.\nUse 'gitignore' to generate a complete '.gitignore' template for bbs-based C/C++ projects.\nUse 'github' to generate a multi-platform GitHub Actions workflow for build, test, run, and dist commands.\nUse '-p' or '--platform' with a comma-separated list such as 'windows-x86_64,linux-x86_64' to override the workflow matrix.\nCustom generators can also be defined in 'user.bbs' or 'local.bbs' with 'gen(name(...), copyfile(...))'.\nIf the target file already exists, bbs refuses to overwrite it unless '-o' or '--override' is provided."},
-    [BBS_CMD_CFG] = {    .name = "cfg",                                                                      .params = "[-m] [-p] [-u] [-l] [-t]",                 .desc = "Show resolved config paths",                                                                                                                                                                                                                .detailed_desc = "Prints the resolved config file paths used by bbs.\nUse -m or --minimal to print raw paths only.\nUse -p or --project to print the project config path.\nUse -u or --user to print the shared user config path.\nUse -l or --local to print the machine-local config path.\nUse -t or --toolchain to print the toolchain config path.\nIf none of -p, -u, -t or -l is provided, bbs prints all four paths."},
+    [BBS_CMD_GEN] = {    .name = "gen",                                          .params = "<format> [-o|--override] [-p platform[,platform...]]", .desc = "Generate utility files in the project root", .detailed_desc = "Generates one supported utility file in the current project root.\nUse 'gitignore' to generate a complete '.gitignore' template for bbs-based C/C++ projects.\nUse 'github' to generate a multi-platform GitHub Actions workflow for build, test, run, and dist commands.\nUse '-p' or '--platform' with a comma-separated list such as 'windows-x86_64,linux-x86_64' to override the workflow matrix.\nCustom generators can also be defined in the global or local 'config.bbs' with 'gen(name(...), copyfile(...))'.\nIf the target file already exists, bbs refuses to overwrite it unless '-o' or '--override' is provided."},
+    [BBS_CMD_CFG] = {    .name = "cfg",                                                                      .params = "[-m] [-p] [-g] [-l] [-t]",                 .desc = "Show resolved config paths",                                                                                                                                                                                                                .detailed_desc = "Prints the resolved config file paths used by bbs.\nUse -m or --minimal to print raw paths only.\nUse -p or --project to print the project config path.\nUse -g or --global to print the global config path.\nUse -l or --local to print the local config path.\nUse -t or --toolchain to print the toolchain config path.\nIf none of -p, -g, -t or -l is provided, bbs prints all four paths."},
     [BBS_CMD_BUILD] = {  .name = "build",                                                   .params = "[-t target|*] [-p platform|*] [-c config|*]",                     .desc = "Build selected targets",                                                                                                                                                                                                     .detailed_desc = "Builds the selected target for the requested platform.\nIf no target is provided, bbs uses the only project target when possible or operates on all targets.\nIf no platform is provided, the default platform selection is used.\nUse '*' with -t, -p, or -c to execute the command for all matching targets, platforms, or configs.\nIf no config is provided, bbs resolves the project using the 'default' config."},
     [BBS_CMD_AUTO] = {   .name = "auto",                                   .params = "[-t target|*] [-p platform|*] [-c config|*] [--debounce ms]",      .desc = "Watch files and rebuild automatically",                                                                                                                          .detailed_desc = "Runs the same build selection as 'bbs build', then keeps watching the project for file changes.\nWhen a source or config file changes, bbs rebuilds using the same target, platform, and config arguments.\nUse '--debounce' to wait for a quiet period before rebuilding when editors save through multiple file updates.\nUse '*' with -t, -p, or -c to execute the command for all matching targets, platforms, or configs.\nGenerated output directories are ignored to avoid rebuild loops."},
     [BBS_CMD_RUN] = {    .name = "run",                                 .params = "[-t target|*] [-p platform|*] [-c config|*] | [optional args]",        .desc = "Run a target, building it if needed",                                                                                                                                          .detailed_desc = "Builds the selected runnable target if needed, then executes it.\nAny remaining arguments are forwarded to the program.\nThe optional platform selects which build output to run when multiple platforms are available.\nUse '*' with -t or -c to execute the command for all matching runnable targets or configs.\nUse '-p *' to run all host-native runnable outputs for the current machine.\nIf no config is provided, bbs resolves the project using the 'default' config."},
-    [BBS_CMD_INFO] = {   .name = "info", .params = "<project|user|local|toolchain> [attribute] [-m] [--attr=path] [--filter=text] [--values-only]",                 .desc = "Inspect parsed config data",                                                                                                                                                                                   .detailed_desc = "Use 'project', 'user', or 'local' to inspect the parsed nodes from that file.\nUse the optional attribute argument or '--attr=path' to show only one attribute.\nUse '-m' or '--minimal' to print only matching attribute paths.\nUse '--filter=text' to show only matching attributes.\nUse '--values-only' to print only matching values.\nUse 'toolchain' to inspect the parsed toolchain.bbs file just like the other config files."},
+    [BBS_CMD_INFO] = {   .name = "info", .params = "<project|config|global|local|toolchain> [attribute] [-m] [--attr=path] [--filter=text] [--values-only]",                 .desc = "Inspect parsed config data",                                                                                                                                                                                   .detailed_desc = "Use 'config' to inspect the merged config view, or 'global' and 'local' to inspect the parsed nodes from each file.\nUse the optional attribute argument or '--attr=path' to show only one attribute.\nUse '-m' or '--minimal' to print only matching attribute paths.\nUse '--filter=text' to show only matching attributes.\nUse '--values-only' to print only matching values.\nUse 'toolchain' to inspect the parsed toolchain.bbs file just like the other config files."},
     [BBS_CMD_PACKAGE] = {.name = "package",                                              .params = "<list|refresh [name|*]|package_name> [--refresh]",                .desc = "Inspect configured packages",                                                                                                                                                                                      .detailed_desc = "Use 'bbs package list' to print all package-backed targets in the current project.\nUse 'bbs package refresh' to refresh all repo/archive-backed packages, or 'bbs package refresh <name>' to refresh one package.\nUse 'bbs package <package_name>' to inspect one configured package, including its source, cache location, and resolution status.\nUse '--refresh' to re-fetch repo-backed packages before printing package info."},
     [BBS_CMD_DIST] = {   .name = "dist",                                                   .params = "[-t target|*] [-p platform|*] [-c config|*]",      .desc = "Package build output for distribution",                                                                                                                                                                                                                                       .detailed_desc = "Collects the selected build output and prepares it for distribution.\nUse the optional target and platform arguments to package a specific artifact when the project produces multiple outputs.\nUse '*' with -t, -p, or -c to execute the command for all matching targets, platforms, or configs.\nIf no config is provided, bbs resolves the project using the 'default' config."},
     [BBS_CMD_TEST] = {   .name = "test",                                            .params = "[name] [-t target|*] [-p platform|*] [-c config|*]",                          .desc = "Run project tests",                                                                                                                                                                                                                                   .detailed_desc = "Runs the project's test suite, or a specific named test when provided.\nThe optional target and platform arguments restrict execution to the matching test target or cross-compilation output.\nUse '*' with -t, -p, or -c to execute the command for all matching test targets, platforms, or configs.\nIf no config is provided, bbs resolves the project using the 'default' config."},
@@ -552,22 +557,22 @@ static const bbs_hook_info BBS_HOOK_INFOS[BBS_HOOK_MAX] = {
     { .kind = BBS_HOOK_POST_DIST,  .attr_name = "post_dist_cmds",  .label = "Post Dist Cmds"},
 };
 
-static const bbs_user_attr_info BBS_USER_ATTR_INFOS[] = {
-    {          BBS_USER_ATTR_BUILD_DIR,            "builddir",           BBS_USER_ATTR_KIND_TEXT},
-    {         BBS_USER_ATTR_ASSETS_DIR,           "assetsdir",           BBS_USER_ATTR_KIND_TEXT},
-    {           BBS_USER_ATTR_DIST_DIR,             "distdir",           BBS_USER_ATTR_KIND_TEXT},
-    {   BBS_USER_ATTR_AUTO_DEBOUNCE_MS,    "auto_debounce_ms",           BBS_USER_ATTR_KIND_UINT},
-    {   BBS_USER_ATTR_AUTO_RETRY_COUNT,    "auto_retry_count",           BBS_USER_ATTR_KIND_UINT},
-    {BBS_USER_ATTR_AUTO_RETRY_DELAY_MS, "auto_retry_delay_ms",           BBS_USER_ATTR_KIND_UINT},
-    {BBS_USER_ATTR_DIST_ARCHIVE_FORMAT, "dist_archive_format", BBS_USER_ATTR_KIND_ARCHIVE_FORMAT},
-    {  BBS_USER_ATTR_DIST_ARCHIVE_NAME,   "dist_archive_name",           BBS_USER_ATTR_KIND_TEXT},
-    {         BBS_USER_ATTR_CMAKE_ARGS,          "cmake_args",           BBS_USER_ATTR_KIND_TEXT},
-    {   BBS_USER_ATTR_CMAKE_BUILD_ARGS,    "cmake_build_args",           BBS_USER_ATTR_KIND_TEXT},
-    {         BBS_USER_ATTR_CTEST_ARGS,          "ctest_args",           BBS_USER_ATTR_KIND_TEXT},
-    {                BBS_USER_ATTR_GEN,                 "gen",        BBS_USER_ATTR_KIND_SECTION},
+static const bbs_config_attr_info BBS_CONFIG_ATTR_INFOS[] = {
+    {          BBS_CONFIG_ATTR_BUILD_DIR,            "builddir",           BBS_CONFIG_ATTR_KIND_TEXT},
+    {         BBS_CONFIG_ATTR_ASSETS_DIR,           "assetsdir",           BBS_CONFIG_ATTR_KIND_TEXT},
+    {           BBS_CONFIG_ATTR_DIST_DIR,             "distdir",           BBS_CONFIG_ATTR_KIND_TEXT},
+    {   BBS_CONFIG_ATTR_AUTO_DEBOUNCE_MS,    "auto_debounce_ms",           BBS_CONFIG_ATTR_KIND_UINT},
+    {   BBS_CONFIG_ATTR_AUTO_RETRY_COUNT,    "auto_retry_count",           BBS_CONFIG_ATTR_KIND_UINT},
+    {BBS_CONFIG_ATTR_AUTO_RETRY_DELAY_MS, "auto_retry_delay_ms",           BBS_CONFIG_ATTR_KIND_UINT},
+    {BBS_CONFIG_ATTR_DIST_ARCHIVE_FORMAT, "dist_archive_format", BBS_CONFIG_ATTR_KIND_ARCHIVE_FORMAT},
+    {  BBS_CONFIG_ATTR_DIST_ARCHIVE_NAME,   "dist_archive_name",           BBS_CONFIG_ATTR_KIND_TEXT},
+    {         BBS_CONFIG_ATTR_CMAKE_ARGS,          "cmake_args",           BBS_CONFIG_ATTR_KIND_TEXT},
+    {   BBS_CONFIG_ATTR_CMAKE_BUILD_ARGS,    "cmake_build_args",           BBS_CONFIG_ATTR_KIND_TEXT},
+    {         BBS_CONFIG_ATTR_CTEST_ARGS,          "ctest_args",           BBS_CONFIG_ATTR_KIND_TEXT},
+    {                BBS_CONFIG_ATTR_GEN,                 "gen",        BBS_CONFIG_ATTR_KIND_SECTION},
 };
 
-static const bbs_user_gen_attr_info BBS_USER_GEN_ATTR_INFOS[] = {
+static const bbs_config_gen_attr_info BBS_CONFIG_GEN_ATTR_INFOS[] = {
     {"name"},
     {"copyfile"},
 };
@@ -964,20 +969,20 @@ typedef struct {
   void* user_data;
 } bbs_builder;
 
-/* One custom generator from `user.bbs` / `local.bbs`. */
+/* One custom generator from the global/local config files. */
 typedef struct {
   const char* name;
   const char* copyfile;
 } bbs_gen;
 
-/* Resolved merged user/local config view. */
+/* Resolved merged config view from global + local inputs. */
 typedef struct {
-  const char* text_values[BBS_USER_TEXT_MAX];
-  unsigned int uint_values[BBS_USER_UINT_MAX];
+  const char* text_values[BBS_CONFIG_TEXT_MAX];
+  unsigned int uint_values[BBS_CONFIG_UINT_MAX];
   bbs_node* merged_scope;
   bbs_gen* gens;
   int gen_c;
-} bbs_user;
+} bbs_config;
 
 /* One discovered tool executable. */
 typedef struct {
@@ -1023,7 +1028,7 @@ typedef struct {
   const char* support_source[BBS_OS_MAX][BBS_ARCH_MAX];
   bbs_node* config_tree;
   const char* project_cfg_path;
-  const char* user_cfg_path;
+  const char* global_cfg_path;
   const char* local_cfg_path;
   const char* toolchain_cfg_path;
   bbs_toolchain_env* envs;
@@ -1034,7 +1039,7 @@ typedef struct {
 /* Resolved project view passed to builders. */
 typedef struct {
   bbs_meta meta;
-  bbs_user user_cfg;
+  bbs_config config;
   bbs_node* config_tree;
 
   const char* root_dir;
@@ -1092,7 +1097,7 @@ typedef struct {
   const char* workdir;
 
   const char* project_cfg_path;
-  const char* user_cfg_path;
+  const char* global_cfg_path;
   const char* local_cfg_path;
   const char* toolchain_cfg_path;
 
@@ -1108,17 +1113,17 @@ typedef struct {
   void* user_data;
 } bbs_ctx;
 
-static inline const char* bbs_user_text(const bbs_user* user, bbs_user_text_attr attr) {
-  return user && attr >= 0 && attr < BBS_USER_TEXT_MAX ? user->text_values[attr] : NULL;
+static inline const char* bbs_config_text(const bbs_config* config, bbs_config_text_attr attr) {
+  return config && attr >= 0 && attr < BBS_CONFIG_TEXT_MAX ? config->text_values[attr] : NULL;
 }
 
-/* Read one resolved text value from merged user config. */
+/* Read one resolved text value from merged config. */
 
-static inline unsigned int bbs_user_uint(const bbs_user* user, bbs_user_uint_attr attr) {
-  return user && attr >= 0 && attr < BBS_USER_UINT_MAX ? user->uint_values[attr] : 0u;
+static inline unsigned int bbs_config_uint(const bbs_config* config, bbs_config_uint_attr attr) {
+  return config && attr >= 0 && attr < BBS_CONFIG_UINT_MAX ? config->uint_values[attr] : 0u;
 }
 
-/* Read one resolved integer value from merged user config. */
+/* Read one resolved integer value from merged config. */
 
 static inline bbs_node* bbs_node_get_child(bbs_node* node, const char* name) {
   bbs_node* child = node ? node->children : NULL;
@@ -1320,7 +1325,7 @@ BBS_SERVICE_API const bbs_sdk* bbs_find_sdk(bbs_ctx* ctx, const bbs_sdk_discover
   temporary.
 */
 BBS_SERVICE_API bool bbs_save_toolchain(const bbs_ctx* ctx);
-BBS_SERVICE_API bool bbs_save_user(const bbs_ctx* ctx, const bbs_proj* proj);
+BBS_SERVICE_API bool bbs_save_global(const bbs_ctx* ctx, const bbs_proj* proj);
 BBS_SERVICE_API bool bbs_save_local(const bbs_ctx* ctx, const bbs_proj* proj);
 BBS_SERVICE_API bool bbs_save_project(const bbs_ctx* ctx, const bbs_proj* proj);
 

@@ -84,14 +84,14 @@ $PROJECT(license.type)
 
 Scoped lookup into the parsed `toolchain.bbs` tree.
 
-## `$USER`
+## `$CONFIG`
 
-Scoped lookup into the effective merged user config tree.
-This reflects `user.bbs` with `local.bbs` overrides applied.
+Scoped lookup into the effective merged config tree.
+This reflects global `config.bbs` with local `config.bbs` overrides applied.
 
 ## `$LOCAL`
 
-Absolute path to `local.bbs`.
+Absolute path to the local `config.bbs`.
 
 ## `$PROJECT_FILE`
 
@@ -101,13 +101,13 @@ Absolute path to `project.bbs`.
 
 Absolute path to `toolchain.bbs`.
 
-## `$USER_FILE`
+## `$GLOBAL_FILE`
 
-Absolute path to `user.bbs`.
+Absolute path to the global `config.bbs`.
 
 ## `$LOCAL_FILE`
 
-Absolute path to `local.bbs`.
+Absolute path to the local `config.bbs`.
 
 ## `$DBUILD`
 
@@ -159,7 +159,7 @@ Working directory used for the script being executed.
 - scalar values are expanded as text
 - non-scalar nodes are left unchanged
 - numeric path segments can index repeated children in source order, for example `$PROJECT(targets.0.output)`
-- bare `$PROJECT`, `$USER`, and `$TOOLCHAIN` were previously file-path tokens; prefer `$PROJECT_FILE`, `$USER_FILE`, and `$TOOLCHAIN_FILE` for that use
+- bare `$PROJECT`, `$CONFIG`, and `$TOOLCHAIN` were previously file-path tokens; prefer `$PROJECT_FILE`, `$GLOBAL_FILE`, and `$TOOLCHAIN_FILE` for that use
 
 ## Practical Examples
 
@@ -221,7 +221,7 @@ post_build_cmds(
 - use quotes around path-like expansions in shell commands
 - prefer `$DDIST` and `$DGEN` instead of hardcoding dist paths
 - prefer `$CFG`, `$OS`, `$ARC`, and `$VER` for archive names instead of repeating fixed strings
-- prefer `$PROJECT_FILE`, `$USER_FILE`, and `$TOOLCHAIN_FILE` over the deprecated bare file-path forms
+- prefer `$PROJECT_FILE`, `$GLOBAL_FILE`, and `$TOOLCHAIN_FILE` over the deprecated bare file-path forms
 
 ## Related Reads
 

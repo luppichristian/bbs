@@ -1,5 +1,5 @@
 #pragma once
-#include "bbs_user.h"
+#include "bbs_config.h"
 
 static const user_attr_info* user_find_attr_info(const char* name) {
   if (!name || !name[0])
@@ -181,14 +181,14 @@ static node* user_scope_from_tree(node* tree, const char* path) {
   node* user_n = NULL;
   int user_count = 0;
   node_foreach(tree, child) {
-    if (!child->name || _stricmp(child->name, "user") != 0)
+    if (!child->name || _stricmp(child->name, "config") != 0)
       continue;
     user_n = child;
     ++user_count;
   }
 
   if (user_count > 1) {
-    error("Multiple top-level user nodes found in %s.", path);
+    error("Multiple top-level config nodes found in %s.", path);
     return NULL;
   }
 
@@ -203,13 +203,13 @@ static node* user_parse_scope_file(const char* path) {
 
   const char* text = read_entire_file(path);
   if (!text) {
-    error("Failed to read user config: %s", path);
+    error("Failed to read config: %s", path);
     return NULL;
   }
 
   node* tree = node_parse(text);
   if (!tree) {
-    error("Failed to parse user config: %s", path);
+    error("Failed to parse config: %s", path);
     return NULL;
   }
 
@@ -520,7 +520,7 @@ static bool user_load_paths(const char* user_path, const char* local_path, user*
   node* user_scope = user_parse_scope_file(user_path);
   if (user_path && user_path[0] && file_exists(user_path) && !user_scope)
     return false;
-  if (user_scope && !user_validate_scope(user_scope, "user"))
+  if (user_scope && !user_validate_scope(user_scope, "config"))
     return false;
 
   node* local_scope = user_parse_scope_file(local_path);
@@ -554,7 +554,7 @@ static user* user_init(cmd_ctx* ctx) {
   if (!ctx)
     return u;
 
-  if (!user_load_paths(ctx->cfg_paths[CFG_USER], ctx->cfg_paths[CFG_LOCAL], u))
+  if (!user_load_paths(ctx->cfg_paths[CFG_GLOBAL], ctx->cfg_paths[CFG_LOCAL], u))
     return NULL;
 
   return u;

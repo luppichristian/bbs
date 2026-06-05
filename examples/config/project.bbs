@@ -3,8 +3,8 @@ configs(
   release
 )
 
-id(user_config_example)
-name("User Config Example")
+id(config_example)
+name("Config Example")
 ver(0.3.0)
 
 # Project-scoped discovery for tools that only this repo needs.
@@ -18,7 +18,7 @@ find_tool(
 
 targets(
   console(
-    output(user_config_example)
+    output(config_example)
     include_dirs(
       src
     )

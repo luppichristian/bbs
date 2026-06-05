@@ -28,7 +28,7 @@ Instead of doing a full discovery every time, `bbs` writes the results into `too
 - you run `bbs update --init-toolchain`
 
 Normal build and run commands can also trigger initialization when the cache is missing.
-Custom discovery declarations from `project.bbs`, `user.bbs`, and `local.bbs` can also trigger targeted refreshes when a declared tool or SDK is not present in the current cache.
+Custom discovery declarations from `project.bbs`, the global `config.bbs`, and the local `config.bbs` can also trigger targeted refreshes when a declared tool or SDK is not present in the current cache.
 
 ## Generation Flow
 
@@ -78,7 +78,7 @@ Important:
 
 ## Custom Discovery Declarations
 
-`project.bbs`, `user.bbs`, and `local.bbs` can add custom discovery strategies with:
+`project.bbs`, the global `config.bbs`, and the local `config.bbs` can add custom discovery strategies with:
 
 - `find_tool(...)`
 - `find_sdk(...)`

@@ -2196,13 +2196,13 @@ static bool toolchain_apply_custom_discovery(toolchain* tc, bool only_missing, b
   if (!tc)
     return false;
 
-  node* user_scope = toolchain_parse_custom_scope_file(tc->user_cfg_path, "user", "user");
-  if (tc->user_cfg_path && tc->user_cfg_path[0] && file_exists(tc->user_cfg_path) && !user_scope)
+  node* user_scope = toolchain_parse_custom_scope_file(tc->global_cfg_path, "config", "global");
+  if (tc->global_cfg_path && tc->global_cfg_path[0] && file_exists(tc->global_cfg_path) && !user_scope)
     return false;
-  if (!toolchain_apply_custom_scope(tc, user_scope, "user config", only_missing, include_tools, include_sdks, changed))
+  if (!toolchain_apply_custom_scope(tc, user_scope, "config", only_missing, include_tools, include_sdks, changed))
     return false;
 
-  node* local_scope = toolchain_parse_custom_scope_file(tc->local_cfg_path, "user", "local");
+  node* local_scope = toolchain_parse_custom_scope_file(tc->local_cfg_path, "config", "local");
   if (tc->local_cfg_path && tc->local_cfg_path[0] && file_exists(tc->local_cfg_path) && !local_scope)
     return false;
   if (!toolchain_apply_custom_scope(tc, local_scope, "local config", only_missing, include_tools, include_sdks, changed))
@@ -3006,7 +3006,7 @@ static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx)
     toolchain* tc = toolchain_read(tree);
     if (tc && cmdctx) {
       tc->project_cfg_path = cmdctx->cfg_paths[CFG_PROJECT];
-      tc->user_cfg_path = cmdctx->cfg_paths[CFG_USER];
+      tc->global_cfg_path = cmdctx->cfg_paths[CFG_GLOBAL];
       tc->local_cfg_path = cmdctx->cfg_paths[CFG_LOCAL];
       tc->toolchain_cfg_path = cmdctx->cfg_paths[CFG_TOOLCHAIN];
     }
@@ -3043,7 +3043,7 @@ static toolchain* toolchain_init(const char* path, bool reinit, cmd_ctx* cmdctx)
   memset(tc, 0, sizeof(toolchain));
   if (cmdctx) {
     tc->project_cfg_path = cmdctx->cfg_paths[CFG_PROJECT];
-    tc->user_cfg_path = cmdctx->cfg_paths[CFG_USER];
+    tc->global_cfg_path = cmdctx->cfg_paths[CFG_GLOBAL];
     tc->local_cfg_path = cmdctx->cfg_paths[CFG_LOCAL];
     tc->toolchain_cfg_path = cmdctx->cfg_paths[CFG_TOOLCHAIN];
   }

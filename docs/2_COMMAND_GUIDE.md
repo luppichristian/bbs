@@ -35,6 +35,12 @@ bbs help [command|config]
 
 Shows general help or detailed help for one command or config topic.
 
+Config topic rules:
+
+- `bbs help config`: merged config view
+- `bbs help global`: global `config.bbs`
+- `bbs help local`: local `config.bbs`
+
 Examples:
 
 ```bat
@@ -46,17 +52,17 @@ bbs help project
 ## clean
 
 ```txt
-bbs clean [project|user|local|toolchain]
+bbs clean [project|global|local|toolchain]
 ```
 
 Removes selected `bbs` config files.
 
 Behavior:
 
-- no argument: removes `project.bbs` and `local.bbs`
+- no argument: removes `project.bbs` and the local `config.bbs`
 - `project`: removes `project.bbs`
-- `user`: removes `user.bbs`
-- `local`: removes `local.bbs`
+- `global`: removes the global `config.bbs`
+- `local`: removes the local `config.bbs`
 - `toolchain`: removes `toolchain.bbs`
 
 Use it when you want to reset a specific config file rather than the generated build directories.
@@ -105,7 +111,7 @@ Built-in formats:
 - `gitignore`
 - `github`
 
-Custom formats can be defined in `user.bbs` or `local.bbs` with `gen(...)` entries.
+Custom formats can be defined in the global or local `config.bbs` with `gen(...)` entries.
 
 Options:
 
@@ -124,19 +130,25 @@ bbs gen .clang-format
 ## cfg
 
 ```txt
-bbs cfg [-m] [-p] [-u] [-l] [-t]
+bbs cfg [-m] [-p] [-g] [-l] [-t]
 ```
 
 Prints the resolved config file paths used by `bbs`.
 
 Useful when you want to confirm which files are being loaded.
 
+Topic model:
+
+- `global`: `config.bbs` next to `bbs`
+- `local`: `config.bbs` in the project root
+- `config`: merged global + local view
+
 Options:
 
 - `-m`, `--minimal`: print raw paths only
 - `-p`, `--project`: only `project.bbs`
-- `-u`, `--user`: only `user.bbs`
-- `-l`, `--local`: only `local.bbs`
+- `-g`, `--global`: only the global `config.bbs`
+- `-l`, `--local`: only the local `config.bbs`
 - `-t`, `--toolchain`: only `toolchain.bbs`
 
 Examples:
@@ -144,7 +156,7 @@ Examples:
 ```bat
 bbs cfg
 bbs cfg -m
-bbs cfg -p -u -l -t
+bbs cfg -p -g -l -t
 ```
 
 ## build
@@ -223,10 +235,16 @@ bbs run -t * -p *
 ## info
 
 ```txt
-bbs info <project|user|local|toolchain> [attribute] [-m] [--attr=path] [--filter=text] [--values-only]
+bbs info <project|config|global|local|toolchain> [attribute] [-m] [--attr=path] [--filter=text] [--values-only]
 ```
 
-Inspects the parsed config tree for one file.
+Inspects either the merged config view or one parsed global/local config file.
+
+Topic rules:
+
+- `bbs info config`: merged config view
+- `bbs info global`: global `config.bbs`
+- `bbs info local`: local `config.bbs`
 
 This is especially useful when:
 
@@ -246,7 +264,8 @@ Examples:
 ```bat
 bbs info project
 bbs info project targets.console.output
-bbs info user --filter=cmake
+bbs info config --filter=cmake
+bbs info global --filter=cmake
 bbs info toolchain --values-only
 ```
 
@@ -342,7 +361,7 @@ bbs bumpver user -t my_library
 
 - [3_PROJECT_FOLDER.md](./3_PROJECT_FOLDER.md)
 - [4_FILE_FORMAT.md](./4_FILE_FORMAT.md)
-- [6_USER_CONFIG.md](./6_USER_CONFIG.md)
+- [6_CONFIG.md](./6_CONFIG.md)
 - [7_PROJECT_CONFIG.md](./7_PROJECT_CONFIG.md)
 - [5_EXAMPLES.md](./5_EXAMPLES.md)
 - [11_PACKAGES.md](./11_PACKAGES.md)

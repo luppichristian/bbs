@@ -80,7 +80,7 @@ Move `bbs.exe` to a stable location, for example:
 C:\tools\bbs\bbs.exe
 ```
 
-`bbs` stores `user.bbs` and `toolchain.bbs` next to the executable, so pick a location you control.
+`bbs` stores `config.bbs` and `toolchain.bbs` next to the executable, so pick a location you control.
 
 ## Add bbs To PATH
 
@@ -217,14 +217,14 @@ bbs update --init-toolchain
 That will:
 
 - regenerate `toolchain.bbs`
-- reload `user.bbs` and `local.bbs`
+- reload the global and local config files
 - regenerate the derived backend files under the build directory
 
 ## Where Files Live
 
 - `project.bbs`: project root
-- `local.bbs`: project root
-- `user.bbs`: next to `bbs.exe`
+- local `config.bbs`: project root
+- global `config.bbs`: next to `bbs.exe`
 - `toolchain.bbs`: next to `bbs.exe`
 
 ## Next Reads

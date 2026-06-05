@@ -589,7 +589,7 @@ static void builders_fill_ctx(cmd c, cmd_ctx* cmdctx, toolchain* tc, bool hotbui
   g_builder_session.ctx.hotbuild_mode = hotbuild_mode;
   g_builder_session.ctx.flags = hotbuild_mode ? BBS_CTXF_HOTBUILD_MODE : 0u;
   g_builder_session.ctx.project_cfg_path = cmdctx ? cmdctx->cfg_paths[CFG_PROJECT] : NULL;
-  g_builder_session.ctx.user_cfg_path = cmdctx ? cmdctx->cfg_paths[CFG_USER] : NULL;
+  g_builder_session.ctx.global_cfg_path = cmdctx ? cmdctx->cfg_paths[CFG_GLOBAL] : NULL;
   g_builder_session.ctx.local_cfg_path = cmdctx ? cmdctx->cfg_paths[CFG_LOCAL] : NULL;
   g_builder_session.ctx.toolchain_cfg_path = cmdctx ? cmdctx->cfg_paths[CFG_TOOLCHAIN] : NULL;
   g_builder_session.ctx.command_name = bbs_cmd_name(c);

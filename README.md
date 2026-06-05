@@ -56,7 +56,7 @@ What `bbs` gives you:
 - simple platform selection with ids like `windows-x86_64` and `linux-arm64`
 - file watching with automatic rebuilds through `bbs auto`
 - a distribution flow with staging and optional archive creation
-- shared user defaults in `user.bbs` and local per-project overrides in `local.bbs`
+- global config in `config.bbs` next to `bbs`, with local config overrides in `config.bbs`
 - helper generators such as `.gitignore` and GitHub workflows
 - metacompilation through `builders(...)`, so projects can inject dynamic prebuild/post-command logic without forking `bbs`
 
@@ -105,7 +105,7 @@ my_project/
   src/
   include/
   assets/
-  local.bbs
+  config.bbs
   build/
   dist/
 ```
@@ -114,13 +114,13 @@ What these mean:
 
 - `project.bbs`: main project definition
 - `src/`, `include/`, `assets/`: project-owned files and folders
-- `local.bbs`: optional machine-local override file for this project
+- `config.bbs`: optional machine-local override file for this project
 - `build/`: generated backend and build output directory
 - `dist/`: generated distribution staging and archive output directory
 
 Related files outside the project root:
 
-- `user.bbs`: shared defaults next to the `bbs` executable
+- global `config.bbs`: defaults next to the `bbs` executable
 - `toolchain.bbs`: generated toolchain cache next to the `bbs` executable
 - `packages/`: shared fetched package cache next to the `bbs` executable
 
@@ -235,18 +235,18 @@ bbs dist
 ## Core Concepts
 
 - `project.bbs`: shared project definition in the project root
-- `user.bbs`: user-wide defaults next to the `bbs` executable
-- `local.bbs`: machine-local overrides in one project
+- global `config.bbs`: defaults next to the `bbs` executable
+- local `config.bbs`: machine-local override config in one project
 - `toolchain.bbs`: generated cache of discovered tools, SDKs, and environments
 - `build/`: generated backend files and build outputs by default
 - `dist/`: staged distribution outputs by default
 - `builders(...)`: optional project-local metacompilation modules compiled and loaded by `bbs`
 
-For shared default-style settings, precedence is:
+For default-style settings, precedence is:
 
 1. built-in defaults
-2. `user.bbs`
-3. `local.bbs`
+2. global `config.bbs`
+3. local `config.bbs`
 4. project and target values in `project.bbs`
 
 ## Main Commands
@@ -261,6 +261,12 @@ For shared default-style settings, precedence is:
 - `bbs info`: inspect parsed config data
 - `bbs gen`: generate helper files
 
+Config command model:
+
+- `config`: merged global + local view
+- `global`: `config.bbs` next to `bbs`
+- `local`: `config.bbs` in the project root
+
 Run `bbs help` for the full reference.
 
 ## Documentation
@@ -273,7 +279,7 @@ The numbered docs are meant to be read in roughly this order:
 - [docs/3_PROJECT_FOLDER.md](./docs/3_PROJECT_FOLDER.md)
 - [docs/4_FILE_FORMAT.md](./docs/4_FILE_FORMAT.md)
 - [docs/5_EXAMPLES.md](./docs/5_EXAMPLES.md)
-- [docs/6_USER_CONFIG.md](./docs/6_USER_CONFIG.md)
+- [docs/6_CONFIG.md](./docs/6_CONFIG.md)
 - [docs/7_PROJECT_CONFIG.md](./docs/7_PROJECT_CONFIG.md)
 - [docs/8_CROSSBUILD.md](./docs/8_CROSSBUILD.md)
 - [docs/9_TOOLCHAIN.md](./docs/9_TOOLCHAIN.md)

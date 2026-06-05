@@ -330,7 +330,7 @@ What this demonstrates:
 
 ## 7. Local Machine Overrides
 
-`user.bbs`
+global `config.bbs`
 
 ```txt
 builddir("build")
@@ -339,7 +339,7 @@ distdir("dist")
 ctest_args("--output-on-failure")
 ```
 
-`local.bbs`
+local `config.bbs`
 
 ```txt
 cmake_args("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
@@ -348,9 +348,9 @@ auto_debounce_ms(750)
 
 Why split them:
 
-- `user.bbs` is shared across your projects
-- `local.bbs` is specific to one project on one machine
-- `local.bbs` overrides `user.bbs`
+- global `config.bbs` is reused across your projects
+- local `config.bbs` is specific to one project on one machine
+- local `config.bbs` overrides global `config.bbs`
 
 ## 8. Pre/Post Build Hooks
 
@@ -378,7 +378,7 @@ See [10_EXPANSION_TOKENS.md](./10_EXPANSION_TOKENS.md) for the full token list.
 
 ## 9. Distribution Archive
 
-`user.bbs`
+global `config.bbs`
 
 ```txt
 dist_archive_format(zip)
@@ -412,13 +412,13 @@ bbs dist
 
 What this demonstrates:
 
-- user config can define default archive format and naming
+- global config can define default archive format and naming
 - a target can override the dist archive name
 - the dist flow has its own hooks and staging directory
 
 ## 10. Custom Generator
 
-`user.bbs`
+global `config.bbs`
 
 ```txt
 gen(
