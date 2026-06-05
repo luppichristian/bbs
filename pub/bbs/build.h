@@ -100,6 +100,10 @@ typedef struct {
 
   Generic signals wrap the full command.
   Command-specific signals expose important phases such as build/run/dist.
+
+  Signals tied to a loaded project are dispatched once per resolved target.
+  For those callbacks, `tgt` points at the current target being visited.
+  `BBS_SIG_INIT` and `BBS_SIG_QUIT` are process-scoped and use `tgt == NULL`.
 */
 typedef enum {
   BBS_SIG_INIT = 0,
@@ -1320,7 +1324,14 @@ BBS_SERVICE_API bool bbs_save_user(const bbs_ctx* ctx, const bbs_proj* proj);
 BBS_SERVICE_API bool bbs_save_local(const bbs_ctx* ctx, const bbs_proj* proj);
 BBS_SERVICE_API bool bbs_save_project(const bbs_ctx* ctx, const bbs_proj* proj);
 
-/* Required export implemented by every builder module. */
+/*
+  Required export implemented by every builder module.
+
+  When `prj` is non-NULL, command lifecycle signals are delivered once for each
+  target in `prj->targets`, and `tgt` identifies the current target.
+  If a project has no targets, or the signal is process-scoped (`init`/`quit`),
+  `tgt` is NULL.
+*/
 BBS_USER_API bool bbs_callback(
     bbs_sig signal,
     bbs_ctx* ctx,

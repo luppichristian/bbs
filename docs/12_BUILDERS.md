@@ -111,6 +111,13 @@ bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt);
 
 `signal` tells the builder what phase is happening.
 
+Dispatch model:
+
+- `BBS_SIG_INIT` and `BBS_SIG_QUIT` are emitted once with `prj == NULL` and `tgt == NULL`
+- every signal tied to a loaded project is emitted once per resolved target in `prj->targets`
+- for those project-bound callbacks, `tgt` is the current target being visited
+- if a loaded project has no targets, the signal is emitted once with `tgt == NULL`
+
 Common signals:
 
 - `BBS_SIG_INIT`
@@ -144,6 +151,8 @@ That means a builder can inspect and modify:
 - selected command info through `bbs_ctx`
 - project-wide config through `bbs_proj`
 - target settings through `bbs_tgt`
+
+Because project-bound signals are target-scoped, most target mutations should work directly with `tgt` instead of iterating `prj->targets` manually.
 
 Typical dynamic changes include:
 
@@ -222,19 +231,15 @@ Example pattern:
 
 bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
   (void)ctx;
-  (void)tgt;
 
-  if (signal != BBS_SIG_PRE_BUILD || !prj)
+  if (signal != BBS_SIG_PRE_BUILD || !prj || !tgt)
     return true;
 
-  for (int i = 0; i < prj->target_c; ++i) {
-    bbs_tgt* current = &prj->targets[i];
-    if (!bbs_target_has_dependency(current, "preprocessor"))
-      continue;
+  if (!bbs_target_has_dependency(tgt, "preprocessor"))
+    return true;
 
-    if (!bbs_target_set_text(current, BBS_TARGET_TEXT_DEFINES, "MY_DEFINE"))
-      return false;
-  }
+  if (!bbs_target_set_text(tgt, BBS_TARGET_TEXT_DEFINES, "MY_DEFINE"))
+    return false;
 
   return true;
 }
@@ -247,19 +252,15 @@ The repository example uses the same pattern with a real define check:
 
 bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
   (void)ctx;
-  (void)tgt;
 
-  if (signal != BBS_SIG_PRE_BUILD || !prj)
+  if (signal != BBS_SIG_PRE_BUILD || !prj || !tgt)
     return true;
 
-  for (int i = 0; i < prj->target_c; ++i) {
-    bbs_tgt* current = &prj->targets[i];
-    if (!bbs_target_has_dependency(current, "preprocessor"))
-      continue;
+  if (!bbs_target_has_dependency(tgt, "preprocessor"))
+    return true;
 
-    if (!bbs_target_set_text(current, BBS_TARGET_TEXT_DEFINES, "PREPROCESSOR_ACTIVE"))
-      return false;
-  }
+  if (!bbs_target_set_text(tgt, BBS_TARGET_TEXT_DEFINES, "PREPROCESSOR_ACTIVE"))
+    return false;
 
   return true;
 }

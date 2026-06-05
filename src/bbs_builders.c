@@ -202,6 +202,17 @@ static bool builders_dispatch_signal(bbs_sig signal, project* proj, target* tgt)
   return true;
 }
 
+static bool builders_dispatch_project_signal(bbs_sig signal, project* proj) {
+  if (!proj || !proj->targets || proj->target_c <= 0)
+    return builders_dispatch_signal(signal, proj, NULL);
+
+  for (int i = 0; i < proj->target_c; ++i)
+    if (!builders_dispatch_signal(signal, proj, &proj->targets[i]))
+      return false;
+
+  return true;
+}
+
 static const char* builders_module_ext(void) {
 #if defined(_WIN32)
   return ".dll";
@@ -624,22 +635,24 @@ static bool builders_project_loaded(project* proj) {
 
   g_builder_session.ctx.selected_config = proj->active_config;
   g_builder_session.ctx.workdir = proj->root_dir ? proj->root_dir : g_builder_session.ctx.cwd;
-  if (!builders_dispatch_signal(BBS_SIG_PRE_CMD, proj, NULL))
+  if (!builders_dispatch_project_signal(BBS_SIG_PRE_CMD, proj))
     return false;
   if (builders_command_has_build_phase(g_builder_session.command) && g_builder_session.command != CMD_BUILD)
-    if (!builders_dispatch_signal(BBS_SIG_PRE_BUILD, proj, NULL))
+    if (!builders_dispatch_project_signal(BBS_SIG_PRE_BUILD, proj))
       return false;
-  return builders_dispatch_signal(builders_specific_signal(g_builder_session.command, false), proj, NULL);
+  return builders_dispatch_project_signal(builders_specific_signal(g_builder_session.command, false), proj);
 }
 
 static void builders_project_finished(project* proj, target* tgt, bool ok) {
+  (void)tgt;
+
   if (!g_builder_session.active || !g_builder_session.loaded || g_builder_session.builder_c <= 0)
     return;
   g_builder_session.ctx.command_failed = !ok;
-  builders_dispatch_signal(builders_specific_signal(g_builder_session.command, true), proj, tgt);
+  builders_dispatch_project_signal(builders_specific_signal(g_builder_session.command, true), proj);
   if (builders_command_has_build_phase(g_builder_session.command) && g_builder_session.command != CMD_BUILD)
-    builders_dispatch_signal(BBS_SIG_POST_BUILD, proj, tgt);
-  builders_dispatch_signal(BBS_SIG_POST_CMD, proj, tgt);
+    builders_dispatch_project_signal(BBS_SIG_POST_BUILD, proj);
+  builders_dispatch_project_signal(BBS_SIG_POST_CMD, proj);
 }
 
 static int builders_end(int rc) {
