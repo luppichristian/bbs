@@ -212,10 +212,12 @@ bbs auto -t app --debounce 750
 ## run
 
 ```txt
-bbs run [-t target|*] [-p platform|*] [-c config|*] [program args...]
+bbs run [-t target|*] [-p platform|*] [-c config|*] [-a|--args ...]
 ```
 
 Builds the selected runnable target if needed, then executes it.
+
+Use `-a` or `--args` to forward all following arguments to the program.
 
 Important rule:
 
@@ -227,7 +229,7 @@ Examples:
 ```bat
 bbs run
 bbs run -t app
-bbs run -t app sample.txt
+bbs run -t app -a sample.txt
 bbs run -p windows-x86_64
 bbs run -t * -p *
 ```

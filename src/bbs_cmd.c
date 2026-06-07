@@ -279,6 +279,7 @@ enum {
 
 static bool cmd_run_build_matrix(const char* target, const char* platform, const char* config, toolchain* tc);
 static const char* cmdline_extract_option_value(cmdline* cl, const char* short_name, const char* long_name);
+static cmdline cmdline_extract_tail_option(cmdline* cl, const char* short_name, const char* long_name);
 
 static bool cmdopt_is_star(const char* value) {
   return value && strcmp(value, "*") == 0;
@@ -712,7 +713,7 @@ static bool cmd_run_build_matrix(const char* target, const char* platform, const
   return runs > 0 && failures == 0;
 }
 
-static bool cmd_run_run_matrix(const char* target, const char* platform, const char* config, toolchain* tc) {
+static bool cmd_run_run_matrix(const char* target, const char* platform, const char* config, toolchain* tc, const cmdline* run_args) {
   const char** configs = NULL;
   int config_c = 0;
   if (!cmd_collect_configs(config, &configs, &config_c))
@@ -747,7 +748,7 @@ static bool cmd_run_run_matrix(const char* target, const char* platform, const c
           ++matched;
           ++runs;
           builders_set_selection(proj.targets[ti].meta.id, p, cfg);
-          if (!project_run(proj.targets[ti].meta.id, p, cfg, tc))
+          if (!project_run(proj.targets[ti].meta.id, p, cfg, tc, run_args))
             ++failures;
         }
         if (matched == 0) {
@@ -757,7 +758,7 @@ static bool cmd_run_run_matrix(const char* target, const char* platform, const c
       } else {
         ++runs;
         builders_set_selection(target, p, cfg);
-        if (!project_run(target, p, cfg, tc))
+        if (!project_run(target, p, cfg, tc, run_args))
           ++failures;
       }
     }
@@ -913,6 +914,34 @@ static const char* cmdline_extract_option_value(cmdline* cl, const char* short_n
 
   cl->argc = wi;
   return value;
+}
+
+static cmdline cmdline_extract_tail_option(cmdline* cl, const char* short_name, const char* long_name) {
+  cmdline tail = {0};
+  if (!cl || cl->argc <= 0)
+    return tail;
+
+  for (int i = 0; i < cl->argc; ++i) {
+    const char* arg = cl->argv[i];
+    if (!arg)
+      continue;
+
+    if (short_name && strlen(arg) == 2 && arg[0] == '-' && arg[1] == short_name[0]) {
+      tail.argv = &cl->argv[i + 1];
+      tail.argc = cl->argc - i - 1;
+      cl->argc = i;
+      return tail;
+    }
+
+    if (long_name && strcmp(arg, "--") != 0 && cmdline_is_longopt(arg) && strcmp(arg + 2, long_name) == 0) {
+      tail.argv = &cl->argv[i + 1];
+      tail.argc = cl->argc - i - 1;
+      cl->argc = i;
+      return tail;
+    }
+  }
+
+  return tail;
 }
 
 static int run_cmd_cfg(cmd_ctx* cmdctx) {
@@ -1937,6 +1966,7 @@ static int run_cmd_build(cmd_ctx* cmdctx) {
 }
 
 static int run_cmd_run(cmd_ctx* cmdctx) {
+  cmdline run_args = cmdline_extract_tail_option(cmdctx->cl, "a", "args");
   const char* target = cmdline_extract_option_value(cmdctx->cl, "t", "target");
   const char* platform = cmdline_extract_option_value(cmdctx->cl, "p", "platform");
   const char* config = cmdline_extract_option_value(cmdctx->cl, "c", "config");
@@ -1957,13 +1987,13 @@ static int run_cmd_run(cmd_ctx* cmdctx) {
   toolchain* tc = toolchain_init(cmdctx_cfg_path(cmdctx, CFG_TOOLCHAIN), false, cmdctx);
   builders_begin(CMD_RUN, cmdctx, tc, false);
   if (cmdopt_is_star(target) || cmdopt_is_star(platform) || cmdopt_is_star(config)) {
-    if (!cmd_run_run_matrix(target, platform, config, tc))
+    if (!cmd_run_run_matrix(target, platform, config, tc, &run_args))
       return builders_end(error_code(CMD_RUN, 0));
     return builders_end(0);
   }
 
   builders_set_selection(target, platform, config);
-  if (!project_run(target, platform, config, tc))
+  if (!project_run(target, platform, config, tc, &run_args))
     return builders_end(error_code(CMD_RUN, 0));
   return builders_end(0);
 }

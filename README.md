@@ -93,6 +93,7 @@ Build and run:
 
 ```bat
 bbs run
+bbs run -a sample.txt
 ```
 
 ## Project Layout Overview
@@ -252,7 +253,7 @@ For default-style settings, precedence is:
 ## Main Commands
 
 - `bbs build`: build selected targets
-- `bbs run`: build if needed, then run a runnable target
+- `bbs run`: build if needed, then run a runnable target; use `-a` or `--args` to forward program arguments
 - `bbs test`: run project tests
 - `bbs dist`: stage outputs for distribution and optionally archive them
 - `bbs auto`: watch files and rebuild automatically

@@ -4907,7 +4907,27 @@ static bool project_run_ctest_preset(toolchain* tc, const project* proj, const c
   return toolchain_run_bash(tc, build_root, script) == 0;
 }
 
-static bool project_run_execute(const project* proj, const target* tgt, const char* platform, toolchain* tc) {
+static char* project_quote_bash_arg(const char* arg) {
+  const char* src = arg ? arg : "";
+  size_t len = strlen(src);
+  char* out = (char*)malloc(len * 2 + 3);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  out[wi++] = '"';
+  for (size_t i = 0; i < len; ++i) {
+    char ch = src[i];
+    if (ch == '\\' || ch == '"' || ch == '$' || ch == '`')
+      out[wi++] = '\\';
+    out[wi++] = ch;
+  }
+  out[wi++] = '"';
+  out[wi] = '\0';
+  return out;
+}
+
+static bool project_run_execute(const project* proj, const target* tgt, const char* platform, toolchain* tc, const cmdline* run_args) {
   if (!proj || !tgt || !tc)
     return false;
 
@@ -4922,10 +4942,45 @@ static bool project_run_execute(const project* proj, const target* tgt, const ch
     return false;
   }
 
-  char script[4096] = {0};
-  snprintf(script, sizeof(script), "\"%s\"", exe_path);
-  if (toolchain_run_bash(tc, NULL, script) != 0)
+  char* quoted_exe = project_quote_bash_arg(exe_path);
+  if (!quoted_exe)
     return false;
+
+  size_t script_len = strlen(quoted_exe) + 1;
+  for (int i = 0; run_args && i < run_args->argc; ++i) {
+    char* quoted_arg = project_quote_bash_arg(run_args->argv[i]);
+    if (!quoted_arg) {
+      free(quoted_exe);
+      return false;
+    }
+    script_len += 1 + strlen(quoted_arg);
+    free(quoted_arg);
+  }
+
+  char* script = (char*)malloc(script_len);
+  if (!script) {
+    free(quoted_exe);
+    return false;
+  }
+
+  size_t wi = 0;
+  wi += snprintf(script + wi, script_len - wi, "%s", quoted_exe);
+  free(quoted_exe);
+  for (int i = 0; run_args && i < run_args->argc; ++i) {
+    char* quoted_arg = project_quote_bash_arg(run_args->argv[i]);
+    if (!quoted_arg) {
+      free(script);
+      return false;
+    }
+    wi += snprintf(script + wi, script_len - wi, " %s", quoted_arg);
+    free(quoted_arg);
+  }
+
+  if (toolchain_run_bash(tc, NULL, script) != 0) {
+    free(script);
+    return false;
+  }
+  free(script);
 
   const char** post_run_cmds = target_hook_cmds(tgt, TARGET_HOOK_POST_RUN);
   for (int i = 0; i < target_hook_cmd_count(tgt, TARGET_HOOK_POST_RUN); ++i)
@@ -5246,7 +5301,7 @@ done:
   return ok;
 }
 
-static bool project_run(const char* target_name, const char* platform, const char* config, toolchain* tc) {
+static bool project_run(const char* target_name, const char* platform, const char* config, toolchain* tc, const cmdline* run_args) {
   project proj = {0};
   bool ok = false;
   target* event_tgt = NULL;
@@ -5305,7 +5360,7 @@ static bool project_run(const char* target_name, const char* platform, const cha
     goto done;
   if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
     goto done;
-  ok = project_run_execute(&proj, &proj.targets[idx], platform_id, tc);
+  ok = project_run_execute(&proj, &proj.targets[idx], platform_id, tc, run_args);
 
 done:
   builders_project_finished(&proj, event_tgt, ok);
