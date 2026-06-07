@@ -19,6 +19,7 @@ static const char* project_current_workdir(void);
 static const char* project_path_parent(const char* path);
 static bool project_prepare_packages(project* proj, toolchain* tc, const char* platform, bool refresh);
 static bool project_generate_cmakelists(const project* proj, toolchain* tc, const char* platform_id, bool* changed);
+static bool project_target_needs_build_for_execution(const project* proj, const target* tgt, const char* platform);
 
 typedef struct {
   const char* source;
@@ -4803,29 +4804,47 @@ static bool project_prepare_backend(project* proj, toolchain* tc, const char* pl
   return true;
 }
 
+static platform_timestamp project_configured_timestamp(const project* proj, const char* platform) {
+  if (!proj)
+    return 0;
+
+  const char* build_dir = project_build_binary_dir_abs(proj, proj->active_config, platform);
+  const char* cache_path = toolchain_join2(build_dir, "CMakeCache.txt");
+  const char* check_cache_path = toolchain_join2(toolchain_join2(build_dir, "CMakeFiles"), "cmake.check_cache");
+  platform_timestamp cache_ts = file_timestamp(cache_path);
+  platform_timestamp check_cache_ts = file_timestamp(check_cache_path);
+  return check_cache_ts > cache_ts ? check_cache_ts : cache_ts;
+}
+
+static platform_timestamp project_backend_timestamp(const project* proj) {
+  if (!proj)
+    return 0;
+
+  platform_timestamp ts = file_timestamp(project_build_file_abs(proj, "CMakeLists.txt"));
+  platform_timestamp presets_ts = file_timestamp(project_build_file_abs(proj, "CMakePresets.json"));
+  platform_timestamp toolchain_ts = file_timestamp(project_build_file_abs(proj, "bbs-toolchain.cmake"));
+  if (presets_ts > ts)
+    ts = presets_ts;
+  if (toolchain_ts > ts)
+    ts = toolchain_ts;
+  return ts;
+}
+
 static bool project_needs_configure(const project* proj, const char* platform, bool backend_changed) {
   if (!proj)
     return true;
   if (backend_changed)
     return true;
 
-  const char* build_dir = project_build_binary_dir_abs(proj, proj->active_config, platform);
-  const char* cache_path = toolchain_join2(build_dir, "CMakeCache.txt");
-  if (!file_exists(cache_path))
+  platform_timestamp configured_ts = project_configured_timestamp(proj, platform);
+  if (configured_ts == 0)
     return true;
 
-  platform_timestamp cache_ts = file_timestamp(cache_path);
-  if (cache_ts == 0)
+  if (file_timestamp(project_build_file_abs(proj, "CMakeLists.txt")) > configured_ts)
     return true;
-
-  const char* project_path = get_path_cwd("project.bbs");
-  if (file_timestamp(project_path) > cache_ts)
+  if (file_timestamp(project_build_file_abs(proj, "CMakePresets.json")) > configured_ts)
     return true;
-  if (file_timestamp(project_build_file_abs(proj, "CMakeLists.txt")) > cache_ts)
-    return true;
-  if (file_timestamp(project_build_file_abs(proj, "CMakePresets.json")) > cache_ts)
-    return true;
-  if (file_timestamp(project_build_file_abs(proj, "bbs-toolchain.cmake")) > cache_ts)
+  if (file_timestamp(project_build_file_abs(proj, "bbs-toolchain.cmake")) > configured_ts)
     return true;
   return false;
 }
@@ -5016,6 +5035,98 @@ static const char* project_target_executable_abs(const project* proj, const targ
   if (file_exists(config_path))
     return config_path;
   return toolchain_join2(bin_dir, file_name);
+}
+
+static const char* project_target_artifact_abs(const project* proj, const target* tgt, const char* platform) {
+  if (!proj || !tgt)
+    return NULL;
+  if (project_target_is_runnable(tgt))
+    return project_target_executable_abs(proj, tgt, platform);
+  if (tgt->type != TARGET_TYPE_STATIC_LIB && tgt->type != TARGET_TYPE_DYN_LIB)
+    return NULL;
+
+  const char* build_dir = project_build_binary_dir_abs(proj, proj->active_config, platform);
+  const char* config_name = project_cmake_config_name(proj->active_config);
+  os target_os = OS_MAX;
+  arch target_arch = ARCH_MAX;
+  if (!project_parse_platform_id(platform, &target_os, &target_arch))
+    return NULL;
+
+  bool runtime_dir = tgt->type == TARGET_TYPE_DYN_LIB && target_os == OS_WINDOWS;
+  const char* out_dir = toolchain_join2(build_dir, runtime_dir ? "bin" : "lib");
+  const char* config_dir = toolchain_join2(out_dir, config_name);
+  const char* base_name = tgt->output ? tgt->output : tgt->meta.id;
+  char file_name[512] = {0};
+  if (!base_name || !base_name[0])
+    return NULL;
+
+  if (tgt->type == TARGET_TYPE_STATIC_LIB)
+    snprintf(file_name, sizeof(file_name), "%s%s%s", target_os == OS_WINDOWS ? "" : "lib", base_name, target_os == OS_WINDOWS ? ".lib" : ".a");
+  else if (target_os == OS_WINDOWS)
+    snprintf(file_name, sizeof(file_name), "%s.dll", base_name);
+  else if (target_os == OS_MACOS)
+    snprintf(file_name, sizeof(file_name), "lib%s.dylib", base_name);
+  else
+    snprintf(file_name, sizeof(file_name), "lib%s.so", base_name);
+
+  const char* config_path = toolchain_join2(config_dir, file_name);
+  if (file_exists(config_path))
+    return config_path;
+  return toolchain_join2(out_dir, file_name);
+}
+
+static bool project_target_inputs_newer_than(const project* proj, const target* tgt, const char* platform, platform_timestamp output_ts) {
+  if (!proj || !tgt || output_ts == 0)
+    return true;
+  if (target_hook_cmd_count(tgt, TARGET_HOOK_PRE_BUILD) > 0 || target_hook_cmd_count(tgt, TARGET_HOOK_POST_BUILD) > 0)
+    return true;
+
+  for (int i = 0; i < tgt->unit_c; ++i) {
+    const char* unit = tgt->units[i];
+    if (!unit || !unit[0])
+      continue;
+    if (project_text_has_wildcards(unit))
+      return true;
+    const char* unit_path = project_resolve_path_from_root(project_root_dir(proj), unit);
+    if (file_timestamp(unit_path) > output_ts)
+      return true;
+  }
+
+  for (int i = 0; i < tgt->dependency_c; ++i) {
+    const char* dep_name = tgt->dependencies[i];
+    if (!dep_name || !dep_name[0])
+      continue;
+    if (project_find_builder_index(proj, dep_name) >= 0)
+      return true;
+    int dep_idx = project_find_target_index(proj, dep_name);
+    if (dep_idx < 0)
+      return true;
+
+    const target* dep = &proj->targets[dep_idx];
+    if (project_target_is_package(dep))
+      return true;
+
+    const char* dep_artifact = project_target_artifact_abs(proj, dep, platform);
+    if (dep_artifact && file_timestamp(dep_artifact) > output_ts)
+      return true;
+    if (project_target_inputs_newer_than(proj, dep, platform, output_ts))
+      return true;
+  }
+
+  return false;
+}
+
+static bool project_target_needs_build_for_execution(const project* proj, const target* tgt, const char* platform) {
+  const char* exe_path = project_target_executable_abs(proj, tgt, platform);
+  platform_timestamp exe_ts = file_timestamp(exe_path);
+  if (exe_ts == 0)
+    return true;
+
+  platform_timestamp backend_ts = project_backend_timestamp(proj);
+  if (backend_ts == 0 || backend_ts > exe_ts)
+    return true;
+
+  return project_target_inputs_newer_than(proj, tgt, platform, exe_ts);
 }
 
 static int project_find_target_index(const project* proj, const char* name) {
@@ -5358,7 +5469,8 @@ static bool project_run(const char* target_name, const char* platform, const cha
   project_print_target_line("Run", &proj.targets[idx]);
   if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
     goto done;
-  if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
+  if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
+      !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
     goto done;
   ok = project_run_execute(&proj, &proj.targets[idx], platform_id, tc, run_args);
 
@@ -5412,7 +5524,8 @@ static bool project_test(const char* test_name, const char* target_name, const c
     project_print_target_line("Test", &proj.targets[idx]);
     if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
       goto done;
-    if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
+    if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
+        !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
       goto done;
     ok = project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
     goto done;
@@ -5432,7 +5545,8 @@ static bool project_test(const char* test_name, const char* target_name, const c
   project_print_target_line("Test", &proj.targets[idx]);
   if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
     goto done;
-  if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
+  if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
+      !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
     goto done;
   ok = project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
 
