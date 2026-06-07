@@ -1,0 +1,642 @@
+# LLM Guide For `bbs`
+
+Purpose: enable an LLM to generate valid, minimal, idiomatic `bbs` projects and commands without relying on generic CMake assumptions.
+
+Scope: `bbs` is a build frontend for C/C++ projects. It parses `project.bbs`, discovers toolchains, resolves packages, generates a CMake backend, and exposes one CLI for build/run/test/dist/package/update/auto.
+
+Source basis: `README.md`, `docs/2_COMMAND_GUIDE.md`, `docs/3_PROJECT_FOLDER.md`, `docs/4_FILE_FORMAT.md`, `docs/5_EXAMPLES.md`, `docs/6_CONFIG.md`, `docs/7_PROJECT_CONFIG.md`, `docs/10_EXPANSION_TOKENS.md`, `docs/11_PACKAGES.md`, `docs/12_BUILDERS.md`, `pub/bbs/build.h`.
+
+## 1. High-Priority Facts
+
+- Project root = directory containing `project.bbs`.
+- Relative paths in `project.bbs` resolve from the project root.
+- `bbs` writes a generated CMake backend; users do not need to author CMake for normal local targets.
+- Main user file: `project.bbs`.
+- Optional project-local overrides: `config.bbs` in the project root.
+- Shared/global defaults: `config.bbs` next to the `bbs` executable.
+- Generated toolchain cache: `toolchain.bbs` next to the `bbs` executable.
+- Default generated/output dirs inside project root: `build/`, `dist/`.
+- Default asset dir inside project root: `assets/`.
+- Main commands: `bbs build`, `bbs run`, `bbs test`, `bbs dist`, `bbs auto`, `bbs update`, `bbs package`, `bbs gen`, `bbs info`, `bbs cfg`.
+
+## 2. Generation Rules
+
+When asked to create a `bbs` project, prefer these rules unless the prompt says otherwise.
+
+1. Create `project.bbs` in the project root.
+2. Use the direct top-level form, not `project(...)`, unless wrapping is explicitly desired.
+3. Always include at least `id(...)` and `targets(...)`.
+4. For runnable apps, use `console(...)` unless a GUI/no-console app is explicitly requested, then use `consoleless(...)`.
+5. Put source files under `src/` by default.
+6. Use `output(...)` when the desired binary name matters.
+7. Use `include_dirs(...)` only when headers are outside the source file directory or a shared include root exists.
+8. Use `dependencies(...)` for links to other `bbs` targets.
+9. Use `link_libs(...)` only for external/system libraries by basename.
+10. Use `defines(...)`, `stdver(...)`, `warning_level(...)`, `opt_level(...)`, `runtime(...)` before falling back to raw flag strings.
+11. Use `additional_compile_args(...)` and `additional_link_args(...)` only as escape hatches.
+12. For config-specific behavior, use `configs(...)` plus `filter(...)`; do not duplicate entire targets.
+13. For third-party dependencies, model them as package-backed targets inside `targets(...)`.
+14. For dynamic build-time logic, use `builders(...)`, not ad hoc custom CMake.
+15. Do not invent unsupported keys.
+
+## 3. `.bbs` Syntax Model
+
+Core syntax:
+
+```txt
+name(value)
+name(
+  child(value)
+  child2(
+    nested(value)
+  )
+)
+```
+
+Parsing rules:
+
+- Named nodes use `name(...)`.
+- Indentation is cosmetic only.
+- Commas are optional and ignored.
+- Comments: `# ...` and `// ...`.
+- Strings use double quotes.
+- Bare words are identifiers.
+- Booleans accepted: `true`, `false`, `on`, `off`.
+- Versions: `1.2.3` or `1.2.3.4`.
+- Lists are sections containing repeated scalar children.
+
+Canonical style:
+
+```txt
+id(my_app)
+name("My App")
+ver(0.1.0)
+
+targets(
+  console(
+    output(my_app)
+    units(
+      src/main.c
+    )
+  )
+)
+```
+
+## 4. Minimal Valid Shapes
+
+Smallest useful runnable app:
+
+```txt
+id(my_app)
+
+targets(
+  console(
+    units(src/main.c)
+  )
+)
+```
+
+Recommended minimal app:
+
+```txt
+id(my_app)
+name("My App")
+ver(0.1.0)
+
+targets(
+  console(
+    output(my_app)
+    units(
+      src/main.c
+    )
+  )
+)
+```
+
+## 5. Target Types
+
+Valid target section names:
+
+- `console`
+- `consoleless`
+- `header_lib`
+- `static_lib`
+- `dyn_lib`
+- `obj_lib`
+- `test`
+- `driver`
+
+Useful aliases accepted by `bbs` include: `gui`, `header-lib`, `headerlib`, `static-lib`, `staticlib`, `dyn-lib`, `shared_lib`, `shared-lib`, `obj-lib`, `object_lib`, `object-lib`.
+
+Default recommendation:
+
+- executable CLI app -> `console`
+- reusable compiled library -> `static_lib`
+- header-only library -> `header_lib`
+- tests -> `test`
+
+## 6. Common Target Fields
+
+Use only valid fields.
+
+Metadata:
+
+- `id`
+- `name`
+- `authors`
+- `ver`
+- `license(type(...), file(...))`
+
+Build identity:
+
+- `lang(c|cpp|c++)`
+- `output`
+- `stdver`
+
+Source/dependency fields:
+
+- `units(...)`
+- `include_dirs(...)`
+- `link_dirs(...)`
+- `dependencies(...)`
+- `link_libs(...)`
+- `defines(...)`
+
+Compiler/link tuning:
+
+- `additional_compile_args("...")`
+- `additional_link_args("...")`
+- `warning_level(default|none|low|medium|high|pedantic)`
+- `opt_level(default|none|debug|size|speed_1|speed_2|speed_3|aggressive)`
+- `stack_size(<int>)`
+- `warnings_as_errors(true|false)`
+- `runtime(none|dynamic|static)`
+
+Testing:
+
+- `testing(true|false)`
+- `test_args(...)`
+
+Hooks:
+
+- `pre_build_cmds(...)`
+- `post_build_cmds(...)`
+- `pre_run_cmds(...)`
+- `post_run_cmds(...)`
+- `pre_dist_cmds(...)`
+- `post_dist_cmds(...)`
+
+Config-specific override:
+
+- `filter(config_name ...)`
+
+Distribution section:
+
+- `dist(...)`
+
+Package source fields:
+
+- `path("...")`
+- `subdir("...")`
+- `cmake_target(name)`
+- `repo(link(...), tag(...)|commit(...))`
+- `archive(link(...), strip_prefix(...))`
+
+## 7. Project-Level Fields
+
+Common top-level `project.bbs` fields:
+
+- `id`
+- `name`
+- `authors`
+- `repo`
+- `ver`
+- `license(...)`
+- `configs(...)`
+- `filter(...)`
+- `targets(...)`
+- `builders(...)`
+- `find_tool(...)`
+- `find_sdk(...)`
+
+Project-level `filter(...)` applies target-style overrides to all targets for one config.
+
+## 8. Config Pattern
+
+When the user wants debug/release behavior, generate this pattern:
+
+```txt
+id(my_app)
+
+configs(
+  debug
+  release
+)
+
+targets(
+  console(
+    output(my_app)
+    units(src/main.c)
+
+    filter(
+      debug
+      defines(DEBUG)
+      opt_level(debug)
+      warning_level(high)
+    )
+
+    filter(
+      release
+      opt_level(speed_3)
+      warnings_as_errors(true)
+    )
+  )
+)
+```
+
+Rules:
+
+- `default` always exists even if not listed.
+- Config names may contain letters, digits, `_`, `-`, `.`.
+- Do not reference undefined config names in `filter(...)`.
+
+## 9. Package Pattern
+
+Package-backed targets are still declared inside `targets(...)`.
+
+Path package:
+
+```txt
+static_lib(
+  id(my_dep)
+  path("../third_party/my_dep")
+  cmake_target(my_dep)
+)
+```
+
+Repo package:
+
+```txt
+static_lib(
+  id(raylib_pkg)
+  repo(
+    link("https://github.com/raysan5/raylib.git")
+    tag("5.5")
+  )
+  cmake_target(raylib)
+)
+```
+
+Archive package:
+
+```txt
+static_lib(
+  id(my_dep)
+  archive(
+    link("https://example.com/my_dep.zip")
+    strip_prefix("my_dep-1.0.0")
+  )
+  cmake_target(my_dep)
+)
+```
+
+Consumer target pattern:
+
+```txt
+console(
+  output(app)
+  dependencies(
+    my_dep
+  )
+  units(src/main.c)
+)
+```
+
+Package invariants:
+
+- Exactly one source mode per package target: `path`, `repo(...)`, or `archive(...)`.
+- Resolved package directory must contain either `CMakeLists.txt` or `project.bbs`.
+- If both exist, `bbs` prefers `CMakeLists.txt`.
+- `cmake_target(...)` must match the package backend's exported target name.
+
+## 10. Builder Pattern
+
+Use builders only for dynamic command-time logic.
+
+`project.bbs`:
+
+```txt
+id(my_app)
+
+targets(
+  console(
+    id(my_app)
+    units(src/main.c)
+    dependencies(
+      preprocessor
+    )
+  )
+)
+
+builders(
+  id(preprocessor)
+  units(
+    src/builder.c
+  )
+)
+```
+
+Builder source:
+
+```c
+#include <bbs/build.h>
+
+bool bbs_callback(bbs_sig signal, bbs_ctx* ctx, bbs_proj* prj, bbs_tgt* tgt) {
+  (void)ctx;
+
+  if (signal != BBS_SIG_PRE_BUILD || !prj || !tgt)
+    return true;
+
+  if (!bbs_target_has_dependency(tgt, "preprocessor"))
+    return true;
+
+  if (!bbs_target_set_text(tgt, BBS_TARGET_TEXT_DEFINES, "PREPROCESSOR_ACTIVE"))
+    return false;
+
+  return true;
+}
+```
+
+Builder facts:
+
+- Entry point must export `bbs_callback(bbs_sig, bbs_ctx*, bbs_proj*, bbs_tgt*)`.
+- Builder source includes `#include <bbs/build.h>`.
+- Builder ids are referenced from target `dependencies(...)`.
+- Builders participate in `build`, `run`, `test`, `dist`, `auto`, `update`.
+- Mutations are command-local by default.
+- Return `false` to fail the command.
+
+Prefer builder mutations through typed APIs like:
+
+- `bbs_target_set_text(...)`
+- `bbs_target_append_text(...)`
+- `bbs_project_set_text(...)`
+- `bbs_ctx_set_text(...)`
+
+## 11. Dist Pattern
+
+Canonical dist section:
+
+```txt
+dist(
+  name("$OUT-$CFG-$OS-$ARC")
+  archive(true)
+  copy_assets(true)
+  exclude_assets("dev")
+  exclude_assets("raw/*.psd")
+  precommand("cp README.md '$DGEN/'")
+)
+```
+
+Supported `dist(...)` children:
+
+- `name`
+- `archive`
+- `copy_assets`
+- repeated `exclude_assets(...)`
+- repeated `precommand(...)`
+- repeated `postcommand(...)`
+
+Notes:
+
+- `assetsdir(...)` defaults to `assets` and is created automatically.
+- `copy_assets(true)` recursively copies the assets dir into the staged dist payload.
+- `exclude_assets(...)` entries are relative to the assets root.
+
+## 12. Token Expansion
+
+Token-aware contexts include hook commands, dist names, `cmake_args`, `cmake_build_args`, `ctest_args`.
+
+Important tokens:
+
+- `$CFG` active config
+- `$PLT` platform id, e.g. `windows-x86_64`
+- `$OS` OS part
+- `$ARC` arch part
+- `$TARGET` target id
+- `$OUT` target output
+- `$VER` resolved version
+- `$EXE` absolute executable path when available
+- `$DBUILD` resolved build output dir
+- `$DASSETS` assets dir
+- `$DDIST` resolved dist dir
+- `$DGEN` staged dist payload dir
+- `$PROJECT(id)` project attribute lookup
+- `$CONFIG(path.to.field)` merged config lookup
+- `$TOOLCHAIN(path.to.field)` toolchain lookup
+- `$$` literal `$`
+
+Example:
+
+```txt
+dist_archive_name("$PROJECT(id)-$CFG-$OS-$ARC-$VER")
+```
+
+## 13. Commands LLMs Should Emit
+
+Normal workflow:
+
+```bat
+bbs build
+bbs run
+bbs test
+bbs dist
+```
+
+Useful explicit forms:
+
+```bat
+bbs build -t app -c debug -p windows-x86_64
+bbs build -t * -p * -c *
+bbs run -t app sample.txt
+bbs auto -t app --debounce 750
+bbs update
+bbs update --init-toolchain
+bbs update --refresh-packages
+bbs package list
+bbs package my_dep
+bbs package refresh my_dep
+bbs gen gitignore
+bbs info project
+bbs cfg
+```
+
+Command facts:
+
+- Working directory should be the project root.
+- Platform ids use `<os>-<arch>`.
+- `run` only executes host-native outputs.
+- Backend initialization is automatic.
+- `-t`, `-p`, `-c` can accept `*` on matrix-capable commands.
+
+## 14. Default Layout To Generate
+
+If the user just says “set up a `bbs` project”, prefer:
+
+```txt
+project_root/
+  project.bbs
+  src/
+    main.c
+  include/
+  assets/
+```
+
+Notes:
+
+- `assets/` is a good default because `bbs` expects it conceptually and can copy it into dist payloads.
+- `build/` and `dist/` are generated; do not hand-author them.
+- Local `config.bbs` is optional and usually not committed.
+
+## 15. Canonical Recipes
+
+Single executable:
+
+```txt
+id(app)
+name("App")
+ver(0.1.0)
+
+targets(
+  console(
+    output(app)
+    units(src/main.c)
+  )
+)
+```
+
+Static library plus app:
+
+```txt
+id(example)
+
+targets(
+  static_lib(
+    id(core)
+    include_dirs(src)
+    units(src/core.c)
+  )
+
+  console(
+    output(example)
+    include_dirs(src)
+    dependencies(
+      core
+    )
+    units(src/main.c)
+  )
+)
+```
+
+Test target:
+
+```txt
+targets(
+  static_lib(
+    id(core)
+    units(src/core.c)
+  )
+
+  test(
+    output(core_tests)
+    dependencies(
+      core
+    )
+    units(tests/test_main.c)
+  )
+)
+```
+
+## 16. Error-Avoidance Rules
+
+Do not do these:
+
+- Do not assume users must write `CMakeLists.txt` for ordinary local targets.
+- Do not invent JSON, YAML, or TOML syntax; `bbs` uses `.bbs` tree syntax.
+- Do not use commas as if they matter.
+- Do not use single quotes for `.bbs` strings.
+- Do not place `repo(...)` as a top-level project metadata section when defining a package target; package `repo(...)` belongs inside a target.
+- Do not declare multiple package source modes on one target.
+- Do not use raw system libraries in `dependencies(...)`; use `link_libs(...)` for those.
+- Do not expect `bbs run` to execute cross-built binaries locally.
+- Do not use builders for static always-on settings that fit directly in target fields.
+- Do not invent target types beyond the supported list.
+- Do not assume hook commands are CMD/PowerShell; docs define them as Bash commands.
+
+## 17. Best-Guess Defaults
+
+If the prompt is underspecified, choose:
+
+- target type: `console`
+- language: `c`
+- version: `0.1.0`
+- source path: `src/main.c`
+- output name: same as project `id`
+- config list: omit unless debug/release behavior is requested
+- runtime: omit unless static runtime behavior is explicitly needed
+- warnings/optimization: omit unless requested
+- dist: omit unless packaging/distribution is requested
+- builders: omit unless dynamic metacompilation is requested
+
+## 18. Fast Decision Table
+
+- Want an app binary -> `console(...)`
+- Want a GUI/no-console binary -> `consoleless(...)`
+- Want reusable compiled code -> `static_lib(...)`
+- Want tests -> `test(...)`
+- Want config-specific flags -> `configs(...)` + `filter(...)`
+- Want external dependency -> package-backed target + `dependencies(...)`
+- Want dynamic prebuild mutation -> `builders(...)`
+- Want staged release payload/archive -> `dist(...)` + `bbs dist`
+- Want generated ignore/workflow file -> `bbs gen ...`
+
+## 19. LLM Output Template
+
+When generating a new `bbs` project, emit this shape unless task constraints require more:
+
+```txt
+id(<project_id>)
+name("<Project Name>")
+ver(0.1.0)
+
+targets(
+  console(
+    output(<project_id>)
+    units(
+      src/main.c
+    )
+  )
+)
+```
+
+Then instruct execution with:
+
+```bat
+bbs build
+bbs run
+```
+
+## 20. Validation Checklist
+
+Before considering generated `bbs` content done, verify mentally:
+
+1. `project.bbs` exists in project root.
+2. There is at least one target inside `targets(...)`.
+3. Every target uses a supported target type.
+4. Every local target has `units(...)` unless it is package-backed or header-only.
+5. `dependencies(...)` names `bbs` targets or builder ids, not system libs.
+6. Package targets define exactly one of `path`, `repo(...)`, `archive(...)`.
+7. Package targets include `cmake_target(...)`.
+8. All config names used in `filter(...)` are valid.
+9. Hook strings that need spaces use double-quoted `.bbs` strings.
+10. Suggested commands are valid `bbs` commands.

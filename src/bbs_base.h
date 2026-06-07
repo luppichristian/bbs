@@ -3,9 +3,6 @@
 #include "../pub/bbs/build.h"
 #include "bbs_platform.h"
 
-#define VER_MAJOR 0
-#define VER_MINOR 2
-
 #define ARENA_DIM (1024 * 1024 * 4)  // 4 megabytes, sizeof each block
 
 #include <ctype.h>

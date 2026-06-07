@@ -173,7 +173,7 @@ static void print_cmd_detailed_help(cmd command) {
 }
 
 static void print_usage(void) {
-  print(ANSI_BOLD "Better Build System v%u.%u" ANSI_RESET, VER_MAJOR, VER_MINOR);
+  print(ANSI_BOLD "Better Build System v%u.%u" ANSI_RESET, BBS_VERSION_MAJOR, BBS_VERSION_MINOR);
   print("Minimal build tooling for C/C++ projects.");
 
   print_section("Usage");
@@ -212,7 +212,7 @@ static void print_help(int argc, char** argv) {
       warn("'bbs help %s' is not a recognized command or config. Showing general help instead", argv[2]);
   }
 
-  print(ANSI_BOLD "Better Build System v%u.%u" ANSI_RESET, VER_MAJOR, VER_MINOR);
+  print(ANSI_BOLD "Better Build System v%u.%u" ANSI_RESET, BBS_VERSION_MAJOR, BBS_VERSION_MINOR);
   if (help_page != CMD_MAX)
     switch (help_page) {
       case CMD_HELP:
@@ -1008,8 +1008,8 @@ static int run_cmd_update(cmd_ctx* cmdctx) {
   };
 
   cmdopt opts[] = {
-      [INFO] = { "i",           "info"},
-      [INIT_TOOLCHAIN] = {NULL, "init-toolchain"},
+      [INFO] = { "i",             "info"},
+      [INIT_TOOLCHAIN] = {NULL,   "init-toolchain"},
       [REFRESH_PACKAGES] = {NULL, "refresh-packages"},
   };
 
