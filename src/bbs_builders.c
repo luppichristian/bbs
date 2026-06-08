@@ -548,6 +548,7 @@ static const char** builders_target_text_slot(bbs_tgt* tgt, bbs_target_text_fiel
     case BBS_TARGET_TEXT_ADDITIONAL_COMPILE_ARGS: return &tgt->additional_compile_args;
     case BBS_TARGET_TEXT_ADDITIONAL_LINK_ARGS: return &tgt->additional_link_args;
     case BBS_TARGET_TEXT_STDVER: return &tgt->stdver;
+    case BBS_TARGET_TEXT_CUDA_ARCHITECTURES: return &tgt->cuda_architectures;
     case BBS_TARGET_TEXT_DIST_ARCHIVE_NAME: return &tgt->dist.archive_name;
     default: return NULL;
   }

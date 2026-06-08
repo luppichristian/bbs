@@ -102,6 +102,7 @@ Minimal CUDA `project.bbs`:
 id(cuda_app)
 name("CUDA App")
 ver(0.1.0)
+cuda_architectures(75 89)
 
 targets(
   console(
@@ -117,6 +118,7 @@ targets(
 Notes:
 
 - `lang(cuda)` enables CMake CUDA generation
+- `cuda_architectures(...)` maps to CMake `CUDA_ARCHITECTURES` and can be set per project or per target
 - `units(src/main.c)` works even when the source file is not named `.cu`
 - run `bbs update --init-toolchain` if you just installed CUDA and want to refresh discovery
 

@@ -301,6 +301,21 @@ Examples:
 
 For CUDA targets, `stdver(...)` is forwarded as `CUDA_STANDARD` in the generated CMake backend.
 
+## `cuda_architectures`
+
+Optional CUDA architecture list forwarded into generated CMake as `CUDA_ARCHITECTURES`.
+
+Examples:
+
+- `cuda_architectures(75)`
+- `cuda_architectures(75 89)`
+
+Notes:
+
+- this can be set at project scope to provide a default for all targets
+- targets and filters may override it with their own `cuda_architectures(...)`
+- `bbs` normalizes the list to the semicolon-separated form CMake expects
+
 ## Source And Dependency Fields
 
 ## `units(...)`
@@ -408,7 +423,7 @@ Notes:
 
 - for C and C++ targets, `bbs` treats this as Clang/GCC-style input and translates a supported subset for MSVC when generating the backend
 - for CUDA targets, `bbs` normalizes a small common subset for `nvcc`, including standard selection, warning flags, optimization flags, and host-compiler forwarding
-- use this field for CUDA-specific flags that do not already have a dedicated property
+- use this field for CUDA-specific flags that do not already have a dedicated property such as `cuda_architectures(...)`
 
 ## `additional_link_args`
 

@@ -6,6 +6,7 @@
 
 static bool project_parse_string_list(node* list_n, const char*** out_items, int* out_count);
 static const char* project_join_scalar_list(node* list_n, int* out_count);
+static const char* project_join_scalar_list_with_sep(node* list_n, int* out_count, char separator);
 static bool project_apply_unity_node(node* unity_n, target* out, const char* target_label);
 static bool project_apply_target_attr_node_with_mode(node* attr_n, target* out, const char* target_label, bool reset_package_sources);
 static bool project_parse_builder_node(node* builders_n, builder* out);
@@ -768,7 +769,7 @@ static bool project_apply_dist_node(node* dist_n, target* out, const char* targe
   return true;
 }
 
-static const char* project_join_scalar_list(node* list_n, int* out_count) {
+static const char* project_join_scalar_list_with_sep(node* list_n, int* out_count, char separator) {
   if (out_count)
     *out_count = 0;
   if (!list_n)
@@ -820,7 +821,7 @@ static const char* project_join_scalar_list(node* list_n, int* out_count) {
     if (!text)
       continue;
     if (wi > 0)
-      out[wi++] = ' ';
+      out[wi++] = separator;
     size_t len = strlen(text);
     memcpy(out + wi, text, len);
     wi += len;
@@ -828,6 +829,10 @@ static const char* project_join_scalar_list(node* list_n, int* out_count) {
 
   out[wi] = '\0';
   return out;
+}
+
+static const char* project_join_scalar_list(node* list_n, int* out_count) {
+  return project_join_scalar_list_with_sep(list_n, out_count, ' ');
 }
 
 static bool project_parse_meta_fields(node* scope, meta* out) {
@@ -1088,6 +1093,11 @@ static bool project_apply_target_attr_node_with_mode(node* attr_n, target* out, 
     out->stdver = text;
     return true;
   }
+  if (_stricmp(attr_n->name, "cuda_architectures") == 0) {
+    int count = 0;
+    out->cuda_architectures = project_join_scalar_list_with_sep(attr_n, &count, ';');
+    return count >= 0;
+  }
   if (_stricmp(attr_n->name, "testing") == 0) {
     if (attr_n->type != NODE_TYPE_BOL) {
       error("Attribute 'testing' must be a boolean.");
@@ -1328,6 +1338,9 @@ static void project_apply_defaults(project* proj) {
     target* tgt = &proj->targets[i];
 
     project_apply_meta_defaults(&tgt->meta, &proj->meta, proj->target_c == 1);
+
+    if (!tgt->cuda_architectures)
+      tgt->cuda_architectures = proj->cuda_architectures;
 
     if (!tgt->meta.id)
       tgt->meta.id = tgt->output ? tgt->output : project_make_default_target_id(tgt->type, i);
@@ -1903,6 +1916,8 @@ static void project_print(const project* proj) {
     print("Testing: %s", tgt->testing ? "true" : "false");
     if (tgt->stdver)
       print("Std Version: %s", tgt->stdver);
+    if (tgt->cuda_architectures)
+      print("CUDA Architectures: %s", tgt->cuda_architectures);
     if (tgt->defines)
       print("Defines: %s", tgt->defines);
     if (tgt->additional_compile_args)
@@ -1950,6 +1965,13 @@ static bool project_parse_project_node(node* project_n, const char* selected_con
   }
   if (!project_parse_meta_fields(project_n, &out->meta))
     return false;
+  {
+    int count = 0;
+    node* cuda_arch_n = node_get_child(project_n, "cuda_architectures");
+    out->cuda_architectures = project_join_scalar_list_with_sep(cuda_arch_n, &count, ';');
+    if (count < 0)
+      return false;
+  }
 
   node* targets_n = node_get_child(project_n, "targets");
   if (targets_n) {
@@ -4319,6 +4341,13 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
     if (std)
       if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES CUDA_STANDARD %s CUDA_STANDARD_REQUIRED ON CUDA_EXTENSIONS OFF)\n", target_name, std))
         return false;
+  }
+  if (tgt->lang == LANG_CUDA && tgt->type != TARGET_TYPE_HEADER_LIB && tgt->cuda_architectures && tgt->cuda_architectures[0]) {
+    const char* archs = project_escape_cmake_string(tgt->cuda_architectures);
+    if (!archs)
+      return false;
+    if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES CUDA_ARCHITECTURES \"%s\")\n", target_name, archs))
+      return false;
   }
 
   if (tgt->type != TARGET_TYPE_HEADER_LIB && tgt->runtime != STDLIB_NONE) {

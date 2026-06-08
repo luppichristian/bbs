@@ -358,6 +358,7 @@ typedef enum {
   BBS_TARGET_TEXT_ADDITIONAL_COMPILE_ARGS,
   BBS_TARGET_TEXT_ADDITIONAL_LINK_ARGS,
   BBS_TARGET_TEXT_STDVER,
+  BBS_TARGET_TEXT_CUDA_ARCHITECTURES,
   BBS_TARGET_TEXT_DIST_ARCHIVE_NAME,
   BBS_TARGET_TEXT_MAX,
 } bbs_target_text_field;
@@ -665,8 +666,8 @@ static const bbs_project_cmake_config_alias BBS_PROJECT_CMAKE_CONFIG_ALIASES[] =
 static const bbs_project_attr_info BBS_PROJECT_LICENSE_ATTR_INFOS[] = {{.name = "type"}, {.name = "file"}};
 static const bbs_project_attr_info BBS_PROJECT_UNITY_ATTR_INFOS[] = {{.name = "enabled"}, {.name = "batch_size"}, {.name = "batch"}};
 static const bbs_project_attr_info BBS_PROJECT_TARGET_META_ATTR_INFOS[] = {{.name = "id"}, {.name = "name"}, {.name = "authors"}, {.name = "ver"}, {.name = "license"}};
-static const bbs_project_attr_info BBS_PROJECT_TARGET_ATTR_INFOS[] = {{.name = "lang"}, {.name = "output"}, {.name = "path"}, {.name = "subdir"}, {.name = "cmake_target"}, {.name = "repo"}, {.name = "archive"}, {.name = "units"}, {.name = "include_dirs"}, {.name = "link_dirs"}, {.name = "dependencies"}, {.name = "link_libs"}, {.name = "defines"}, {.name = "additional_compile_args"}, {.name = "additional_link_args"}, {.name = "warning_level"}, {.name = "opt_level"}, {.name = "stack_size"}, {.name = "warnings_as_errors"}, {.name = "runtime"}, {.name = "stdver"}, {.name = "testing"}, {.name = "test_args"}, {.name = "post_build_cmds"}, {.name = "pre_build_cmds"}, {.name = "pre_run_cmds"}, {.name = "post_run_cmds"}, {.name = "pre_dist_cmds"}, {.name = "post_dist_cmds"}, {.name = "dist"}, {.name = "unity"}};
-static const bbs_project_attr_info BBS_PROJECT_PROJECT_ATTR_INFOS[] = {{.name = "id"}, {.name = "name"}, {.name = "authors"}, {.name = "repo"}, {.name = "ver"}, {.name = "license"}, {.name = "configs"}, {.name = "filter"}, {.name = "targets"}, {.name = "builders"}};
+static const bbs_project_attr_info BBS_PROJECT_TARGET_ATTR_INFOS[] = {{.name = "lang"}, {.name = "output"}, {.name = "path"}, {.name = "subdir"}, {.name = "cmake_target"}, {.name = "repo"}, {.name = "archive"}, {.name = "units"}, {.name = "include_dirs"}, {.name = "link_dirs"}, {.name = "dependencies"}, {.name = "link_libs"}, {.name = "defines"}, {.name = "additional_compile_args"}, {.name = "additional_link_args"}, {.name = "warning_level"}, {.name = "opt_level"}, {.name = "stack_size"}, {.name = "warnings_as_errors"}, {.name = "runtime"}, {.name = "stdver"}, {.name = "cuda_architectures"}, {.name = "testing"}, {.name = "test_args"}, {.name = "post_build_cmds"}, {.name = "pre_build_cmds"}, {.name = "pre_run_cmds"}, {.name = "post_run_cmds"}, {.name = "pre_dist_cmds"}, {.name = "post_dist_cmds"}, {.name = "dist"}, {.name = "unity"}};
+static const bbs_project_attr_info BBS_PROJECT_PROJECT_ATTR_INFOS[] = {{.name = "id"}, {.name = "name"}, {.name = "authors"}, {.name = "repo"}, {.name = "ver"}, {.name = "license"}, {.name = "configs"}, {.name = "filter"}, {.name = "targets"}, {.name = "builders"}, {.name = "cuda_architectures"}};
 
 static const bbs_toolchain_attr_info BBS_TOOLCHAIN_HOST_ATTR_INFOS[] = {
     {.name = "arch", .kind = BBS_TOOLCHAIN_ATTR_IDENTIFIER, .required = false},
@@ -945,6 +946,7 @@ typedef struct bbs_tgt {
   /* Language/runtime/test settings. */
   bbs_stdlib runtime;
   const char* stdver;
+  const char* cuda_architectures;
   bool testing;
   const char** test_args;
   int test_arg_c;
@@ -1065,6 +1067,7 @@ typedef struct {
   const char* cmake_args;
   const char* cmake_build_args;
   const char* ctest_args;
+  const char* cuda_architectures;
   unsigned int auto_debounce_ms;
   unsigned int auto_retry_count;
   unsigned int auto_retry_delay_ms;
