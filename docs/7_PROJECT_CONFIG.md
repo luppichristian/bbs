@@ -273,8 +273,15 @@ Allowed values:
 - `c`
 - `cpp`
 - `c++`
+- `cuda`
+- `cu`
 
 Default is `c`.
+
+Notes:
+
+- `lang(cuda)` enables generated CMake CUDA support for the target
+- CUDA targets may still list units such as `src/main.c`; `bbs` marks those sources as CUDA in the generated backend
 
 ## `output`
 
@@ -289,6 +296,10 @@ Examples:
 - `c11`
 - `gnu11`
 - `c++20`
+- `cuda17`
+- `cuda20`
+
+For CUDA targets, `stdver(...)` is forwarded as `CUDA_STANDARD` in the generated CMake backend.
 
 ## Source And Dependency Fields
 
@@ -393,6 +404,12 @@ defines(
 
 Extra compile flags as a single string.
 
+Notes:
+
+- for C and C++ targets, `bbs` treats this as Clang/GCC-style input and translates a supported subset for MSVC when generating the backend
+- for CUDA targets, `bbs` normalizes a small common subset for `nvcc`, including standard selection, warning flags, optimization flags, and host-compiler forwarding
+- use this field for CUDA-specific flags that do not already have a dedicated property
+
 ## `additional_link_args`
 
 Extra link flags as a single string.
@@ -410,6 +427,8 @@ Allowed values:
 
 Accepted aliases include `off`, `minimal`, `normal`, `all`, and `extra`.
 
+This setting currently applies to C and C++ backend emission. Use `additional_compile_args` for CUDA-specific warning flags.
+
 ## `opt_level`
 
 Allowed values:
@@ -424,6 +443,8 @@ Allowed values:
 - `aggressive`
 
 Accepted aliases include `o0`, `og`, `os`, `oz`, `o1`, `o2`, `o3`, `fast`, and `ofast`.
+
+This setting currently applies to C and C++ backend emission. Use `additional_compile_args` for CUDA-specific optimization flags.
 
 ## `stack_size`
 

@@ -1,0 +1,17 @@
+configs(
+  debug
+)
+
+id(cuda_console)
+name("CUDA Console Example")
+ver(0.1.0)
+
+targets(
+  console(
+    output(cuda_console)
+    lang(cuda)
+    units(
+      src/main.c
+    )
+  )
+)

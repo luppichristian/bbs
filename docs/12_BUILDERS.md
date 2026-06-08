@@ -79,7 +79,9 @@ Notes:
 - `id(...)` is required
 - `units(...)` is required
 - `lang(...)` defaults to `c`
+- `lang(...)` accepts `c`, `cpp`, `c++`, `cuda`, and `cu`
 - `output(...)` defaults to the builder id
+- `output(...)` accepts either an identifier like `output(my_builder)` or a string like `output("Example Output Name")`
 
 ## How Builders Are Used
 
@@ -172,8 +174,9 @@ Examples:
 
 Use `additional_compile_args` only as an escape hatch for flags that do not already have a dedicated property.
 
-Current compiler support is centered on MSVC, Clang, and GCC.
-When extra compile args are emitted into the backend, `bbs` treats them as Clang/GCC-style input and translates supported subsets for MSVC.
+Current compiler support is centered on MSVC, Clang, GCC, and CUDA through `nvcc`.
+When extra compile args are emitted into the backend, `bbs` treats them as Clang/GCC-style input and translates supported subsets for MSVC on C and C++ targets.
+For CUDA builders, `bbs` also normalizes a small common subset for `nvcc` and forwards host-only flags through the active host compiler.
 
 By default these mutations are temporary.
 

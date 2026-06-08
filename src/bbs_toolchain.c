@@ -1234,6 +1234,8 @@ static const char* toolchain_expand_token(const char* token) {
     return getenv("ProgramFiles(x86)");
   if (_stricmp(token, "{local_app_data}") == 0)
     return getenv("LOCALAPPDATA");
+  if (_stricmp(token, "{cuda_path}") == 0)
+    return getenv("CUDA_PATH");
   if (_stricmp(token, "{llvm_root}") == 0)
     return getenv("LLVM_ROOT");
   if (_stricmp(token, "{msys2_root}") == 0)

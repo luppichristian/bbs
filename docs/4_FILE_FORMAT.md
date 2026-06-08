@@ -64,6 +64,12 @@ lang(c)
 runtime(static)
 ```
 
+Another valid language example:
+
+```txt
+lang(cuda)
+```
+
 Identifiers are commonly used for symbolic values such as names, modes, or enum-like options.
 
 ### Integer
@@ -242,6 +248,19 @@ ver(0.1.0)
 targets(
   console(
     output(my_app)
+    units(
+      src/main.c
+    )
+  )
+)
+```
+
+Scalar text fields also accept quoted strings when you want spaces or a display-style name:
+
+```txt
+targets(
+  console(
+    output("Example Output Name")
     units(
       src/main.c
     )

@@ -237,9 +237,10 @@ static bool builders_write_cmakelists(const project* proj, const builder* bld, c
 
   project_textbuf buf = {0};
   bool has_cpp = bld->lang == LANG_CPP;
+  bool has_cuda = bld->lang == LANG_CUDA;
   if (!project_textbuf_append(&buf, "cmake_minimum_required(VERSION 3.20)\n\n"))
     return false;
-  if (!project_textbuf_appendf(&buf, "project(bbs_builder_%s LANGUAGES C%s)\n\n", target_name, has_cpp ? " CXX" : ""))
+  if (!project_textbuf_appendf(&buf, "project(bbs_builder_%s LANGUAGES C%s%s)\n\n", target_name, has_cpp ? " CXX" : "", has_cuda ? " CUDA" : ""))
     return false;
   if (!project_textbuf_appendf(&buf, "add_library(%s SHARED\n", target_name))
     return false;
@@ -250,6 +251,16 @@ static bool builders_write_cmakelists(const project* proj, const builder* bld, c
   }
   if (!project_textbuf_append(&buf, ")\n\n"))
     return false;
+
+  if (bld->lang == LANG_CUDA) {
+    for (int i = 0; i < bld->unit_c; ++i) {
+      const char* unit = project_resolve_path_from_root(proj->root_dir, bld->units[i]);
+      if (!project_textbuf_appendf(&buf, "set_source_files_properties(\"%s\" PROPERTIES LANGUAGE CUDA)\n", project_escape_cmake_string(unit ? unit : bld->units[i])))
+        return false;
+    }
+    if (!project_textbuf_append(&buf, "\n"))
+      return false;
+  }
 
   if (!project_textbuf_appendf(&buf, "target_include_directories(%s PRIVATE \"%s\" \"%s\"", target_name,
                                 project_escape_cmake_string(toolchain_norm_path(toolchain_join2(project_path_parent(get_path_exe("bbs.exe")), "..\\pub"))),
@@ -271,11 +282,31 @@ static bool builders_write_cmakelists(const project* proj, const builder* bld, c
       return false;
   }
   if (bld->additional_compile_args && bld->additional_compile_args[0]) {
+    const char* nvcc_args_src = compiler_args_translate_nvcc(bld->additional_compile_args, false, NULL);
+    const char* nvcc_args_msvc_src = compiler_args_translate_nvcc(bld->additional_compile_args, true, NULL);
     const char* esc = project_escape_cmake_string(bld->additional_compile_args);
-    if (!project_textbuf_appendf(&buf, "separate_arguments(BBS_BUILDER_COMPILE_ARGS NATIVE_COMMAND \"%s\")\n", esc))
-      return false;
-    if (!project_textbuf_appendf(&buf, "target_compile_options(%s PRIVATE ${BBS_BUILDER_COMPILE_ARGS})\n", target_name))
-      return false;
+    const char* nvcc_esc = project_escape_cmake_string(nvcc_args_src ? nvcc_args_src : "");
+    const char* nvcc_msvc_esc = project_escape_cmake_string(nvcc_args_msvc_src ? nvcc_args_msvc_src : "");
+    if (bld->lang == LANG_CUDA) {
+      if (!project_textbuf_appendf(&buf,
+                                   "separate_arguments(BBS_BUILDER_COMPILE_ARGS NATIVE_COMMAND \"%s\")\n"
+                                   "separate_arguments(BBS_BUILDER_COMPILE_ARGS_MSVC NATIVE_COMMAND \"%s\")\n"
+                                   "if(MSVC)\n"
+                                   "  target_compile_options(%s PRIVATE ${BBS_BUILDER_COMPILE_ARGS_MSVC})\n"
+                                   "else()\n"
+                                   "  target_compile_options(%s PRIVATE ${BBS_BUILDER_COMPILE_ARGS})\n"
+                                   "endif()\n",
+                                   nvcc_esc,
+                                   nvcc_msvc_esc,
+                                   target_name,
+                                   target_name))
+        return false;
+    } else {
+      if (!project_textbuf_appendf(&buf, "separate_arguments(BBS_BUILDER_COMPILE_ARGS NATIVE_COMMAND \"%s\")\n", esc))
+        return false;
+      if (!project_textbuf_appendf(&buf, "target_compile_options(%s PRIVATE ${BBS_BUILDER_COMPILE_ARGS})\n", target_name))
+        return false;
+    }
   }
   if (bld->additional_link_args && bld->additional_link_args[0]) {
     const char* esc = project_escape_cmake_string(bld->additional_link_args);
@@ -290,7 +321,9 @@ static bool builders_write_cmakelists(const project* proj, const builder* bld, c
                                 project_escape_cmake_string(out_dir),
                                 project_escape_cmake_string(out_dir)))
     return false;
-  if (bld->lang == LANG_CPP && !project_textbuf_appendf(&buf, "set_target_properties(%s PROPERTIES LINKER_LANGUAGE CXX)\n", target_name))
+  if ((bld->lang == LANG_CPP || bld->lang == LANG_CUDA) && !project_textbuf_appendf(&buf, "set_target_properties(%s PROPERTIES LINKER_LANGUAGE %s)\n", target_name, bld->lang == LANG_CUDA ? "CUDA" : "CXX"))
+    return false;
+  if (bld->lang == LANG_CUDA && !project_textbuf_appendf(&buf, "set_target_properties(%s PROPERTIES CUDA_SEPARABLE_COMPILATION ON)\n", target_name))
     return false;
   if (!project_textbuf_append(&buf, "if(WIN32)\n"))
     return false;

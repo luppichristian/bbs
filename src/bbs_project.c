@@ -904,7 +904,7 @@ static bool project_apply_target_attr_node_with_mode(node* attr_n, target* out, 
       error("Attribute 'lang' must be a string or identifier.");
       return false;
     }
-    if (_stricmp(text, "c") != 0 && _stricmp(text, "cpp") != 0 && _stricmp(text, "c++") != 0) {
+    if (_stricmp(text, "c") != 0 && _stricmp(text, "cpp") != 0 && _stricmp(text, "c++") != 0 && _stricmp(text, "cuda") != 0 && _stricmp(text, "cu") != 0) {
       error("Unknown lang '%s' for target '%s'.", text, target_label ? target_label : "");
       return false;
     }
@@ -1218,7 +1218,7 @@ static bool project_parse_builder_node(node* builders_n, builder* out) {
         error("Builder attribute 'lang' must be a string or identifier.");
         return false;
       }
-      if (_stricmp(text, "c") != 0 && _stricmp(text, "cpp") != 0 && _stricmp(text, "c++") != 0) {
+      if (_stricmp(text, "c") != 0 && _stricmp(text, "cpp") != 0 && _stricmp(text, "c++") != 0 && _stricmp(text, "cuda") != 0 && _stricmp(text, "cu") != 0) {
         error("Unknown builder lang '%s'.", text);
         return false;
       }
@@ -1722,7 +1722,14 @@ static bool project_validate_project_shape(node* project_n) {
 }
 
 static const char* project_lang_name(lang value) {
-  return value == LANG_CPP ? "cpp" : "c";
+  switch (value) {
+    case LANG_CPP:
+      return "cpp";
+    case LANG_CUDA:
+      return "cuda";
+    default:
+      return "c";
+  }
 }
 
 static const char* project_runtime_name(stdlib value) {
@@ -2451,6 +2458,24 @@ static const char* project_cmake_cpp_standard(const char* stdver) {
   if (_stricmp(stdver, "c++20") == 0 || _stricmp(stdver, "cpp20") == 0)
     return "20";
   if (_stricmp(stdver, "c++23") == 0 || _stricmp(stdver, "cpp23") == 0)
+    return "23";
+  return NULL;
+}
+
+static const char* project_cmake_cuda_standard(const char* stdver) {
+  if (!stdver || !stdver[0])
+    return NULL;
+  if (_stricmp(stdver, "c++03") == 0 || _stricmp(stdver, "cpp03") == 0 || _stricmp(stdver, "cuda03") == 0)
+    return "03";
+  if (_stricmp(stdver, "c++11") == 0 || _stricmp(stdver, "cpp11") == 0 || _stricmp(stdver, "cuda11") == 0)
+    return "11";
+  if (_stricmp(stdver, "c++14") == 0 || _stricmp(stdver, "cpp14") == 0 || _stricmp(stdver, "cuda14") == 0)
+    return "14";
+  if (_stricmp(stdver, "c++17") == 0 || _stricmp(stdver, "cpp17") == 0 || _stricmp(stdver, "cuda17") == 0)
+    return "17";
+  if (_stricmp(stdver, "c++20") == 0 || _stricmp(stdver, "cpp20") == 0 || _stricmp(stdver, "cuda20") == 0)
+    return "20";
+  if (_stricmp(stdver, "c++23") == 0 || _stricmp(stdver, "cpp23") == 0 || _stricmp(stdver, "cuda23") == 0)
     return "23";
   return NULL;
 }
@@ -3958,7 +3983,7 @@ static bool project_append_cmake_manual_unity(project_textbuf* buf, const target
   if (!buf || !tgt || !var_name || tgt->unity_batch_c <= 0)
     return false;
 
-  const char* unity_ext = tgt->lang == LANG_CPP ? "cpp" : "c";
+  const char* unity_ext = tgt->lang == LANG_CPP ? "cpp" : tgt->lang == LANG_CUDA ? "cu" : "c";
   const char* unity_file_prefix = project_cmake_var_name(tgt->meta.id);
   const char* target_id = project_escape_cmake_string(tgt->meta.id ? tgt->meta.id : "target");
   if (!unity_ext || !unity_file_prefix || !target_id)
@@ -4263,8 +4288,17 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
       return false;
   }
 
-  if (tgt->lang == LANG_CPP) {
-    if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES LINKER_LANGUAGE CXX)\n", target_name))
+  if (tgt->lang == LANG_CPP || tgt->lang == LANG_CUDA) {
+    if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES LINKER_LANGUAGE %s)\n", target_name, tgt->lang == LANG_CUDA ? "CUDA" : "CXX"))
+      return false;
+  }
+
+  if (tgt->lang == LANG_CUDA && tgt->type != TARGET_TYPE_HEADER_LIB) {
+    if (!project_textbuf_appendf(buf,
+                                 "set_source_files_properties(${BBS_%s_SOURCES} PROPERTIES LANGUAGE CUDA)\n"
+                                 "set_target_properties(%s PROPERTIES CUDA_SEPARABLE_COMPILATION ON)\n",
+                                 var_name,
+                                 target_name))
       return false;
   }
 
@@ -4278,6 +4312,12 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
     const char* std = project_cmake_cpp_standard(tgt->stdver);
     if (std)
       if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES CXX_STANDARD %s CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)\n", target_name, std))
+        return false;
+  }
+  if (tgt->lang == LANG_CUDA && tgt->stdver) {
+    const char* std = project_cmake_cuda_standard(tgt->stdver);
+    if (std)
+      if (!project_textbuf_appendf(buf, "set_target_properties(%s PROPERTIES CUDA_STANDARD %s CUDA_STANDARD_REQUIRED ON CUDA_EXTENSIONS OFF)\n", target_name, std))
         return false;
   }
 
@@ -4353,36 +4393,67 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
   }
 
   if (tgt->additional_compile_args && tgt->additional_compile_args[0]) {
-    const char* msvc_args_src = compiler_args_translate_msvc(tgt->additional_compile_args, tgt->lang == LANG_CPP, NULL);
+    const char* msvc_args_src = compiler_args_translate_msvc(tgt->additional_compile_args, tgt->lang == LANG_CPP || tgt->lang == LANG_CUDA, NULL);
+    const char* nvcc_args_src = compiler_args_translate_nvcc(tgt->additional_compile_args, false, NULL);
+    const char* nvcc_args_msvc_src = compiler_args_translate_nvcc(tgt->additional_compile_args, true, NULL);
     const char* args = project_escape_cmake_string(tgt->additional_compile_args);
     const char* msvc_args = project_escape_cmake_string(msvc_args_src ? msvc_args_src : "");
-    if (!args || !msvc_args)
+    const char* nvcc_args = project_escape_cmake_string(nvcc_args_src ? nvcc_args_src : "");
+    const char* nvcc_args_msvc = project_escape_cmake_string(nvcc_args_msvc_src ? nvcc_args_msvc_src : "");
+    if (!args || !msvc_args || !nvcc_args || !nvcc_args_msvc)
       return false;
-    if (!project_textbuf_appendf(buf,
-                                  "set(BBS_%s_COMPILE_ARGS \"%s\")\n"
-                                  "set(BBS_%s_COMPILE_ARGS_MSVC \"%s\")\n"
-                                  "separate_arguments(BBS_%s_COMPILE_ARGS NATIVE_COMMAND \"${BBS_%s_COMPILE_ARGS}\")\n"
-                                  "separate_arguments(BBS_%s_COMPILE_ARGS_MSVC NATIVE_COMMAND \"${BBS_%s_COMPILE_ARGS_MSVC}\")\n"
-                                  "if(MSVC)\n"
-                                  "  target_compile_options(%s %s ${BBS_%s_COMPILE_ARGS_MSVC})\n"
-                                  "else()\n"
-                                  "  target_compile_options(%s %s ${BBS_%s_COMPILE_ARGS})\n"
-                                  "endif()\n",
-                                  var_name,
-                                  args,
-                                  var_name,
-                                  msvc_args,
-                                  var_name,
-                                  var_name,
-                                  var_name,
-                                  var_name,
-                                  target_name,
-                                  tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE",
-                                  var_name,
-                                  target_name,
-                                  tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE",
-                                  var_name,
-                                  var_name))
+    if (tgt->lang == LANG_CUDA) {
+      if (!project_textbuf_appendf(buf,
+                                    "set(BBS_%s_COMPILE_ARGS \"%s\")\n"
+                                    "set(BBS_%s_COMPILE_ARGS_MSVC \"%s\")\n"
+                                    "separate_arguments(BBS_%s_COMPILE_ARGS NATIVE_COMMAND \"${BBS_%s_COMPILE_ARGS}\")\n"
+                                    "separate_arguments(BBS_%s_COMPILE_ARGS_MSVC NATIVE_COMMAND \"${BBS_%s_COMPILE_ARGS_MSVC}\")\n"
+                                    "if(MSVC)\n"
+                                    "  target_compile_options(%s %s ${BBS_%s_COMPILE_ARGS_MSVC})\n"
+                                    "else()\n"
+                                    "  target_compile_options(%s %s ${BBS_%s_COMPILE_ARGS})\n"
+                                    "endif()\n",
+                                    var_name,
+                                    nvcc_args,
+                                    var_name,
+                                    nvcc_args_msvc,
+                                    var_name,
+                                    var_name,
+                                    var_name,
+                                    var_name,
+                                    target_name,
+                                    tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE",
+                                    var_name,
+                                    target_name,
+                                    tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE",
+                                    var_name,
+                                    var_name))
+        return false;
+    } else if (!project_textbuf_appendf(buf,
+                                        "set(BBS_%s_COMPILE_ARGS \"%s\")\n"
+                                        "set(BBS_%s_COMPILE_ARGS_MSVC \"%s\")\n"
+                                        "separate_arguments(BBS_%s_COMPILE_ARGS NATIVE_COMMAND \"${BBS_%s_COMPILE_ARGS}\")\n"
+                                        "separate_arguments(BBS_%s_COMPILE_ARGS_MSVC NATIVE_COMMAND \"${BBS_%s_COMPILE_ARGS_MSVC}\")\n"
+                                        "if(MSVC)\n"
+                                        "  target_compile_options(%s %s ${BBS_%s_COMPILE_ARGS_MSVC})\n"
+                                        "else()\n"
+                                        "  target_compile_options(%s %s ${BBS_%s_COMPILE_ARGS})\n"
+                                        "endif()\n",
+                                        var_name,
+                                        args,
+                                        var_name,
+                                        msvc_args,
+                                        var_name,
+                                        var_name,
+                                        var_name,
+                                        var_name,
+                                        target_name,
+                                        tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE",
+                                        var_name,
+                                        target_name,
+                                        tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE",
+                                        var_name,
+                                        var_name))
       return false;
   }
 
@@ -4403,7 +4474,7 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
       return false;
   }
 
-  if (tgt->warnings_as_errors)
+  if (tgt->warnings_as_errors && tgt->lang != LANG_CUDA)
     if (!project_textbuf_appendf(buf,
                                  "target_compile_options(%s %s "
                                  "$<$<C_COMPILER_ID:MSVC>:/WX> $<$<CXX_COMPILER_ID:MSVC>:/WX> "
@@ -4412,9 +4483,9 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
                                  tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE"))
       return false;
 
-  if (!project_append_cmake_warning_level(buf, target_name, tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE", tgt->warning_level))
+  if (tgt->lang != LANG_CUDA && !project_append_cmake_warning_level(buf, target_name, tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE", tgt->warning_level))
     return false;
-  if (!project_append_cmake_opt_level(buf, target_name, tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE", tgt->opt_level))
+  if (tgt->lang != LANG_CUDA && !project_append_cmake_opt_level(buf, target_name, tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE", tgt->opt_level))
     return false;
 
   if (tgt->stack_size > 0 && tgt->type != TARGET_TYPE_HEADER_LIB)
@@ -4495,13 +4566,16 @@ static bool project_generate_cmakelists(const project* proj, toolchain* tc, cons
 
   project_textbuf buf = {0};
   bool has_cpp = false;
+  bool has_cuda = false;
   for (int i = 0; i < proj->target_c; ++i)
     if (proj->targets[i].lang == LANG_CPP)
       has_cpp = true;
+    else if (proj->targets[i].lang == LANG_CUDA)
+      has_cuda = true;
 
   if (!project_textbuf_append(&buf, "cmake_minimum_required(VERSION 3.20)\n\n"))
     return false;
-  if (!project_textbuf_appendf(&buf, "project(%s LANGUAGES C%s)\n\n", proj_id, has_cpp ? " CXX" : ""))
+  if (!project_textbuf_appendf(&buf, "project(%s LANGUAGES C%s%s)\n\n", proj_id, has_cpp ? " CXX" : "", has_cuda ? " CUDA" : ""))
     return false;
   const char* project_root = project_cmake_path_text(project_root_dir(proj));
   if (!project_root)
@@ -4583,11 +4657,20 @@ static bool project_generate_toolchain_file(const project* proj, toolchain* tc, 
       if (name && _stricmp(name, "vulkan_sdk") == 0)
         if (!project_append_cmake_toolchain_kv(&buf, "VULKAN_SDK", env->sdks[i].base_path))
           return false;
+      if (name && _stricmp(name, "cuda_toolkit") == 0)
+        if (!project_append_cmake_toolchain_kv(&buf, "CUDAToolkit_ROOT", env->sdks[i].base_path))
+          return false;
       if (name && _stricmp(name, "windows_sdk") == 0)
         if (!project_append_cmake_toolchain_kv(&buf, "CMAKE_WINDOWS_KITS_10_DIR", env->sdks[i].base_path))
           return false;
     }
   }
+
+  if (!project_textbuf_append(&buf,
+                              "if(DEFINED BBS_TOOL_NVCC AND NOT DEFINED CMAKE_CUDA_COMPILER)\n"
+                              "  set(CMAKE_CUDA_COMPILER \"${BBS_TOOL_NVCC}\")\n"
+                              "endif()\n\n"))
+    return false;
 
   if (!project_write_file_if_changed(path, buf.data ? buf.data : "", changed)) {
     error("Failed to write toolchain file: %s", path);

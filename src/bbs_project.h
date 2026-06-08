@@ -37,6 +37,7 @@ typedef bbs_proj project;
 
 #define LANG_C BBS_LANG_C
 #define LANG_CPP BBS_LANG_CPP
+#define LANG_CUDA BBS_LANG_CUDA
 
 #define STDLIB_NONE BBS_STDLIB_NONE
 #define STDLIB_DYNAMIC BBS_STDLIB_DYNAMIC

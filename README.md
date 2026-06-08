@@ -1,12 +1,12 @@
 # bbs (my Better Build System)
 
-`bbs` is a build frontend for C and C++ projects.
+`bbs` is a build frontend for C, C++, and CUDA projects.
 
 It uses a small `.bbs` configuration format, discovers your local toolchain, generates the CMake backend files for you, and gives you one CLI for build, run, test, packaging, and distribution.
 
 It also supports project-local metacompilation through `builders`: small dynamically loaded modules that can modify targets, flags, and command behavior before and after build phases.
 
-Current compiler support: `MSVC`, `Clang`, and `GCC`.
+Current compiler support: `MSVC`, `Clang`, `GCC`, and `NVCC` for CUDA targets.
 
 Current supported target platforms: `windows`, `linux`, `macos`
 
@@ -48,7 +48,7 @@ If you already like CMake as a backend but do not want to hand-author a full CMa
 
 What `bbs` gives you:
 
-- a smaller project format for common C/C++ layouts
+- a smaller project format for common C/C++/CUDA layouts
 - target definitions focused on source files, dependencies, flags, and package sources
 - optional unity build batching, including explicit directory-based batches
 - automatic generation of the CMake backend files needed to build
@@ -95,6 +95,32 @@ Build and run:
 bbs run
 bbs run -a sample.txt
 ```
+
+Minimal CUDA `project.bbs`:
+
+```txt
+id(cuda_app)
+name("CUDA App")
+ver(0.1.0)
+
+targets(
+  console(
+    output(cuda_app)
+    lang(cuda)
+    units(
+      src/main.c
+    )
+  )
+)
+```
+
+Notes:
+
+- `lang(cuda)` enables CMake CUDA generation
+- `units(src/main.c)` works even when the source file is not named `.cu`
+- run `bbs update --init-toolchain` if you just installed CUDA and want to refresh discovery
+
+See `examples/cuda_console/` and [docs/5_EXAMPLES.md](./docs/5_EXAMPLES.md) for a working sample.
 
 ## Project Layout Overview
 
@@ -221,8 +247,9 @@ cmake --build build-cmake
 2. Put `bbs.exe` in a stable folder.
 3. Add that folder to `PATH`.
 4. Install `cmake`.
-5. Create a project folder with `project.bbs`.
-6. Run `bbs build` or `bbs run`.
+5. Install the language toolchain you want to use, such as a C/C++ compiler or the CUDA toolkit.
+6. Create a project folder with `project.bbs`.
+7. Run `bbs build` or `bbs run`.
 
 Common first commands:
 

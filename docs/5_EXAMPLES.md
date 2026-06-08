@@ -80,7 +80,41 @@ What this demonstrates:
 - `configs(...)` declares selectable build configs
 - `filter(...)` applies config-specific overrides
 
-## 3. Static Library Plus App
+## 3. CUDA Console App
+
+This follows `examples/cuda_console/project.bbs`.
+
+```txt
+id(cuda_console)
+name("CUDA Console Example")
+ver(0.1.0)
+
+targets(
+  console(
+    output(cuda_console)
+    lang(cuda)
+    units(
+      src/main.c
+    )
+  )
+)
+```
+
+Useful commands:
+
+```bat
+bbs update --init-toolchain
+bbs build
+bbs run
+```
+
+What this demonstrates:
+
+- `lang(cuda)` switches the generated backend to CMake CUDA mode
+- `units(src/main.c)` still works even though the file extension is `.c`
+- normal target kinds like `console`, `static_lib`, and `dyn_lib` can now use CUDA the same way
+
+## 4. Static Library Plus App
 
 This follows `examples/static_lib/project.bbs`.
 
@@ -126,7 +160,7 @@ Why it is useful:
 - the app links it through `dependencies(...)`
 - you keep library and executable structure inside one project file
 
-## 4. Test Target
+## 5. Test Target
 
 ```txt
 targets(
@@ -155,7 +189,7 @@ bbs test
 
 This is the simplest pattern for keeping reusable code in one target and test code in another.
 
-## 5. Package From Git Repository
+## 6. Package From Git Repository
 
 This follows `examples/raylib_example/project.bbs`.
 
@@ -201,7 +235,7 @@ What this demonstrates:
 - package targets can come from a repository
 - the package target still behaves like a normal dependency for your own targets
 
-## 6. Package From Another `project.bbs`
+## 7. Package From Another `project.bbs`
 
 This follows `examples/bbs_package_consumer/project.bbs` and `examples/bbs_package_dep/project.bbs`.
 

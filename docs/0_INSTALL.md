@@ -34,6 +34,7 @@ Examples:
 - Windows native builds: MSVC + Windows SDK
 - macOS native builds: Xcode or Command Line Tools
 - Linux native builds: host compiler toolchain with CMake available
+- CUDA builds: NVIDIA CUDA toolkit with `nvcc` available
 - Windows-to-Linux workflows: WSL and/or Docker Buildx
 
 ## Build Or Download bbs
@@ -146,6 +147,7 @@ The current tool discovery list includes:
 - `docker`
 - `bash`
 - `git`
+- `nvcc`
 - `wsl` on Windows
 - `vcvarsall.bat` on Windows
 
@@ -155,6 +157,7 @@ The current SDK discovery list includes:
 - `ucrt_sdk`
 - `msvc`
 - `xcode`
+- `cuda_toolkit`
 - `vulkan_sdk`
 - `android_ndk`
 - `emsdk`
@@ -166,6 +169,12 @@ Important:
 - `bbs` discovers these tools
 - `bbs` does not download them
 - `toolchain.bbs` is only a cache of what was found
+
+CUDA notes:
+
+- `bbs` looks for `nvcc` as a tool and the CUDA toolkit root as `cuda_toolkit`
+- common environment variables such as `CUDA_PATH`, `CUDA_HOME`, `CUDA_ROOT`, and `CUDAToolkit_ROOT` are used during discovery
+- after installing or changing CUDA, run `bbs update --init-toolchain`
 
 ## First Run In A Project
 
@@ -195,6 +204,28 @@ Or:
 
 ```bat
 bbs run
+```
+
+Minimal CUDA example:
+
+```txt
+id(cuda_app)
+
+targets(
+  console(
+    lang(cuda)
+    units(
+      src/main.c
+    )
+  )
+)
+```
+
+Then refresh discovery if needed and build:
+
+```bat
+bbs update --init-toolchain
+bbs build
 ```
 
 Those commands initialize the backend automatically if needed.

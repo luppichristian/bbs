@@ -54,6 +54,7 @@ Current tool discovery includes:
 - `docker`
 - `bash`
 - `git`
+- `nvcc`
 - `wsl`
 - `vcvarsall`
 
@@ -65,6 +66,7 @@ Current SDK discovery includes:
 - `ucrt_sdk`
 - `msvc`
 - `xcode`
+- `cuda_toolkit`
 - `vulkan_sdk`
 - `android_ndk`
 - `emsdk`
@@ -75,6 +77,13 @@ Important:
 
 - discovery means “found on your machine”
 - `bbs` does not install these tools for you
+
+CUDA-specific notes:
+
+- `nvcc` is discovered as a normal host tool
+- the CUDA toolkit root is discovered as `cuda_toolkit`
+- environment variables such as `CUDA_PATH`, `CUDA_HOME`, `CUDA_ROOT`, and `CUDAToolkit_ROOT` are checked during SDK discovery
+- generated `bbs-toolchain.cmake` exports `CMAKE_CUDA_COMPILER` and `CUDAToolkit_ROOT` when those values are available
 
 ## Custom Discovery Declarations
 
