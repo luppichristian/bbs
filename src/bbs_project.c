@@ -5199,6 +5199,47 @@ static bool project_target_inputs_newer_than(const project* proj, const target* 
   return false;
 }
 
+static bool project_target_inputs_newer_than_without_packages(const project* proj, const target* tgt, const char* platform, platform_timestamp output_ts) {
+  if (!proj || !tgt || output_ts == 0)
+    return true;
+  if (target_hook_cmd_count(tgt, TARGET_HOOK_PRE_BUILD) > 0 || target_hook_cmd_count(tgt, TARGET_HOOK_POST_BUILD) > 0)
+    return true;
+
+  for (int i = 0; i < tgt->unit_c; ++i) {
+    const char* unit = tgt->units[i];
+    if (!unit || !unit[0])
+      continue;
+    if (project_text_has_wildcards(unit))
+      return true;
+    const char* unit_path = project_resolve_path_from_root(project_root_dir(proj), unit);
+    if (file_timestamp(unit_path) > output_ts)
+      return true;
+  }
+
+  for (int i = 0; i < tgt->dependency_c; ++i) {
+    const char* dep_name = tgt->dependencies[i];
+    if (!dep_name || !dep_name[0])
+      continue;
+    if (project_find_builder_index(proj, dep_name) >= 0)
+      return true;
+    int dep_idx = project_find_target_index(proj, dep_name);
+    if (dep_idx < 0)
+      return true;
+
+    const target* dep = &proj->targets[dep_idx];
+    if (project_target_is_package(dep))
+      continue;
+
+    const char* dep_artifact = project_target_artifact_abs(proj, dep, platform);
+    if (dep_artifact && file_timestamp(dep_artifact) > output_ts)
+      return true;
+    if (project_target_inputs_newer_than_without_packages(proj, dep, platform, output_ts))
+      return true;
+  }
+
+  return false;
+}
+
 static bool project_target_needs_build_for_execution(const project* proj, const target* tgt, const char* platform) {
   const char* exe_path = project_target_executable_abs(proj, tgt, platform);
   platform_timestamp exe_ts = file_timestamp(exe_path);
@@ -5210,6 +5251,34 @@ static bool project_target_needs_build_for_execution(const project* proj, const 
     return true;
 
   return project_target_inputs_newer_than(proj, tgt, platform, exe_ts);
+}
+
+static bool project_run_needs_build_prep(const project* proj, const target* tgt, const char* platform, const toolchain* tc) {
+  if (!proj || !tgt)
+    return true;
+
+  const char* exe_path = project_target_executable_abs(proj, tgt, platform);
+  platform_timestamp exe_ts = file_timestamp(exe_path);
+  if (exe_ts == 0)
+    return true;
+
+  const char* project_cfg = proj->config_path ? proj->config_path : get_path_cwd("project.bbs");
+  if (file_timestamp(project_cfg) > exe_ts)
+    return true;
+  if (proj->local_cfg_path && file_exists(proj->local_cfg_path) && file_timestamp(proj->local_cfg_path) > exe_ts)
+    return true;
+  if (tc && tc->toolchain_cfg_path && file_exists(tc->toolchain_cfg_path) && file_timestamp(tc->toolchain_cfg_path) > exe_ts)
+    return true;
+  if (tc && tc->global_cfg_path && file_exists(tc->global_cfg_path) && file_timestamp(tc->global_cfg_path) > exe_ts)
+    return true;
+  if (tc && tc->local_cfg_path && file_exists(tc->local_cfg_path) && file_timestamp(tc->local_cfg_path) > exe_ts)
+    return true;
+
+  platform_timestamp backend_ts = project_backend_timestamp(proj);
+  if (backend_ts == 0 || backend_ts > exe_ts)
+    return true;
+
+  return project_target_inputs_newer_than_without_packages(proj, tgt, platform, exe_ts);
 }
 
 static int project_find_target_index(const project* proj, const char* name) {
@@ -5516,12 +5585,6 @@ static bool project_run(const char* target_name, const char* platform, const cha
     goto done;
   }
 
-  bool backend_changed = false;
-  if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
-    goto done;
-
-  const char* preset = project_build_dir_name(proj.active_config, platform_id);
-
   project_print_action_header("Run", &proj, platform_id);
   int idx = -1;
   if (target_name && target_name[0]) {
@@ -5550,11 +5613,20 @@ static bool project_run(const char* target_name, const char* platform, const cha
 
   event_tgt = &proj.targets[idx];
   project_print_target_line("Run", &proj.targets[idx]);
-  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
-    goto done;
-  if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
-      !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
-    goto done;
+
+  if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
+    bool backend_changed = false;
+    if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
+      goto done;
+
+    const char* preset = project_build_dir_name(proj.active_config, platform_id);
+    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
+      goto done;
+    if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
+        !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
+      goto done;
+  }
+
   ok = project_run_execute(&proj, &proj.targets[idx], platform_id, tc, run_args);
 
 done:
@@ -5579,12 +5651,6 @@ static bool project_test(const char* test_name, const char* target_name, const c
   const char* platform_id = project_resolve_platform_id(platform, tc);
   if (!platform_id)
     goto done;
-  bool backend_changed = false;
-  if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
-    goto done;
-
-  const char* preset = project_build_dir_name(proj.active_config, platform_id);
-
   project_print_action_header("Test", &proj, platform_id);
   const char* build_dir = project_resolved_dir(config_text(&proj.config, CONFIG_TEXT_BUILDDIR), proj.active_config, platform_id);
   project_print_field("Directory", build_dir);
@@ -5605,11 +5671,18 @@ static bool project_test(const char* test_name, const char* target_name, const c
     }
     event_tgt = &proj.targets[idx];
     project_print_target_line("Test", &proj.targets[idx]);
-    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
-      goto done;
-    if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
-        !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
-      goto done;
+    if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
+      bool backend_changed = false;
+      if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
+        goto done;
+
+      const char* preset = project_build_dir_name(proj.active_config, platform_id);
+      if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
+        goto done;
+      if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
+          !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
+        goto done;
+    }
     ok = project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
     goto done;
   }
@@ -5626,11 +5699,18 @@ static bool project_test(const char* test_name, const char* target_name, const c
 
   event_tgt = &proj.targets[idx];
   project_print_target_line("Test", &proj.targets[idx]);
-  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
-    goto done;
-  if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
-      !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
-    goto done;
+  if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
+    bool backend_changed = false;
+    if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
+      goto done;
+
+    const char* preset = project_build_dir_name(proj.active_config, platform_id);
+    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
+      goto done;
+    if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
+        !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
+      goto done;
+  }
   ok = project_test_execute(&proj, &proj.targets[idx], test_name, platform_id, tc);
 
 done:
@@ -5656,9 +5736,6 @@ static bool project_dist(const char* target_name, const char* platform, const ch
   const char* platform_id = project_resolve_platform_id(platform, tc);
   if (!platform_id)
     goto done;
-  bool backend_changed = false;
-  if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
-    goto done;
 
   project_print_action_header("Dist", &proj, platform_id);
   project_print_field("Directory", project_resolved_dir(config_text(&proj.config, CONFIG_TEXT_DISTDIR), proj.active_config, platform_id));
@@ -5677,11 +5754,17 @@ static bool project_dist(const char* target_name, const char* platform, const ch
       goto done;
     }
 
-    const char* preset = project_build_dir_name(proj.active_config, platform_id);
-    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
-      goto done;
-    if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
-      goto done;
+    if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
+      bool backend_changed = false;
+      if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
+        goto done;
+
+      const char* preset = project_build_dir_name(proj.active_config, platform_id);
+      if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
+        goto done;
+      if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
+        goto done;
+    }
 
     target* tgt = &proj.targets[idx];
     const char* dist_root = project_dist_root_abs(&proj);
