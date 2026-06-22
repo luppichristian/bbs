@@ -162,6 +162,24 @@ static const project_cmake_config_alias* project_find_cmake_config_alias(const c
   return NULL;
 }
 
+static bool project_config_name_has_token(const char* name, const char* token) {
+  if (!name || !name[0] || !token || !token[0])
+    return false;
+
+  size_t token_len = strlen(token);
+  for (const char* p = name; *p; ++p) {
+    if (p != name && isalnum((unsigned char)p[-1]))
+      continue;
+    if (_strnicmp(p, token, token_len) != 0)
+      continue;
+    if (p[token_len] != '\0' && isalnum((unsigned char)p[token_len]))
+      continue;
+    return true;
+  }
+
+  return false;
+}
+
 static const target_hook_info* project_find_target_hook_info(const char* attr_name) {
   if (!attr_name || !attr_name[0])
     return NULL;
@@ -2436,6 +2454,19 @@ static const char* project_cmake_config_name(const char* config) {
   const project_cmake_config_alias* alias = project_find_cmake_config_alias(config);
   if (alias)
     return alias->cmake_name;
+
+  /* Map custom bbs config names onto the closest built-in multi-config preset.
+     Visual Studio/MSBuild only understands the native CMake configurations,
+     so composite names like 'release-profile' must classify by their semantic
+     tokens instead of falling back to Debug. */
+  if (project_config_name_has_token(config, "debug"))
+    return "Debug";
+  if (project_config_name_has_token(config, "relwithdebinfo") || project_config_name_has_token(config, "profile"))
+    return "RelWithDebInfo";
+  if (project_config_name_has_token(config, "minsizerel") || project_config_name_has_token(config, "minsize"))
+    return "MinSizeRel";
+  if (project_config_name_has_token(config, "release") || project_config_name_has_token(config, "dist") || project_config_name_has_token(config, "shipping"))
+    return "Release";
   return "Debug";
 }
 
@@ -2549,39 +2580,69 @@ static bool project_append_cmake_opt_level(project_textbuf* buf, const char* tar
   switch (level) {
     case OPT_LEVEL_NONE:
       return project_textbuf_appendf(buf,
-                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/Od> $<$<CXX_COMPILER_ID:MSVC>:/Od> "
-                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-O0> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O0>)\n",
+                                     "if(MSVC)\n"
+                                     "  target_compile_options(%s %s /Od)\n"
+                                     "else()\n"
+                                     "  target_compile_options(%s %s -O0)\n"
+                                     "endif()\n",
+                                     target_name,
+                                     scope,
                                      target_name,
                                      scope);
     case OPT_LEVEL_DEBUG:
       return project_textbuf_appendf(buf,
-                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/Od> $<$<CXX_COMPILER_ID:MSVC>:/Od> "
-                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Og> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Og>)\n",
+                                     "if(MSVC)\n"
+                                     "  target_compile_options(%s %s /Od)\n"
+                                     "else()\n"
+                                     "  target_compile_options(%s %s -Og)\n"
+                                     "endif()\n",
+                                     target_name,
+                                     scope,
                                      target_name,
                                      scope);
     case OPT_LEVEL_SIZE:
       return project_textbuf_appendf(buf,
-                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/O1> $<$<CXX_COMPILER_ID:MSVC>:/O1> "
-                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Os> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Os>)\n",
+                                     "if(MSVC)\n"
+                                     "  target_compile_options(%s %s /O1)\n"
+                                     "else()\n"
+                                     "  target_compile_options(%s %s -Os)\n"
+                                     "endif()\n",
+                                     target_name,
+                                     scope,
                                      target_name,
                                      scope);
     case OPT_LEVEL_SPEED_1:
       return project_textbuf_appendf(buf,
-                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/O1> $<$<CXX_COMPILER_ID:MSVC>:/O1> "
-                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-O1> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O1>)\n",
+                                     "if(MSVC)\n"
+                                     "  target_compile_options(%s %s /O1)\n"
+                                     "else()\n"
+                                     "  target_compile_options(%s %s -O1)\n"
+                                     "endif()\n",
+                                     target_name,
+                                     scope,
                                      target_name,
                                      scope);
     case OPT_LEVEL_SPEED_2:
       return project_textbuf_appendf(buf,
-                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/O2> $<$<CXX_COMPILER_ID:MSVC>:/O2> "
-                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-O2> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O2>)\n",
+                                     "if(MSVC)\n"
+                                     "  target_compile_options(%s %s /O2)\n"
+                                     "else()\n"
+                                     "  target_compile_options(%s %s -O2)\n"
+                                     "endif()\n",
+                                     target_name,
+                                     scope,
                                      target_name,
                                      scope);
     case OPT_LEVEL_SPEED_3:
     case OPT_LEVEL_AGGRESSIVE:
       return project_textbuf_appendf(buf,
-                                     "target_compile_options(%s %s $<$<C_COMPILER_ID:MSVC>:/Ox> $<$<CXX_COMPILER_ID:MSVC>:/Ox> "
-                                     "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-O3> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O3>)\n",
+                                     "if(MSVC)\n"
+                                     "  target_compile_options(%s %s /Ox)\n"
+                                     "else()\n"
+                                     "  target_compile_options(%s %s -O3)\n"
+                                     "endif()\n",
+                                     target_name,
+                                     scope,
                                      target_name,
                                      scope);
     default:
@@ -5556,8 +5617,7 @@ static bool project_build(const char* target_name, const char* platform, const c
   const char* platform_id = project_resolve_platform_id(platform, tc);
   if (!platform_id)
     goto done;
-  bool backend_changed = false;
-  if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
+  if (!project_prepare_backend(&proj, tc, platform_id, true, false, NULL))
     goto done;
 
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
@@ -5584,7 +5644,7 @@ static bool project_build(const char* target_name, const char* platform, const c
       print("  - %s (%s)", proj.targets[i].meta.id ? proj.targets[i].meta.id : "", project_target_type_name(proj.targets[i].type));
   }
 
-  if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
+  if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
     goto done;
   ok = project_run_cmake_build(tc, &proj, preset, NULL, platform_id);
 
@@ -5644,12 +5704,11 @@ static bool project_run(const char* target_name, const char* platform, const cha
   project_print_target_line("Run", &proj.targets[idx]);
 
   if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
-    bool backend_changed = false;
-    if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
+    if (!project_prepare_backend(&proj, tc, platform_id, true, false, NULL))
       goto done;
 
     const char* preset = project_build_dir_name(proj.active_config, platform_id);
-    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
+    if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
       goto done;
     if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
         !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
@@ -5701,12 +5760,11 @@ static bool project_test(const char* test_name, const char* target_name, const c
     event_tgt = &proj.targets[idx];
     project_print_target_line("Test", &proj.targets[idx]);
     if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
-      bool backend_changed = false;
-      if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
+      if (!project_prepare_backend(&proj, tc, platform_id, true, false, NULL))
         goto done;
 
       const char* preset = project_build_dir_name(proj.active_config, platform_id);
-      if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
+      if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
         goto done;
       if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
           !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
@@ -5729,12 +5787,11 @@ static bool project_test(const char* test_name, const char* target_name, const c
   event_tgt = &proj.targets[idx];
   project_print_target_line("Test", &proj.targets[idx]);
   if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
-    bool backend_changed = false;
-    if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
+    if (!project_prepare_backend(&proj, tc, platform_id, true, false, NULL))
       goto done;
 
     const char* preset = project_build_dir_name(proj.active_config, platform_id);
-    if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
+    if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
       goto done;
     if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
         !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
@@ -5784,12 +5841,11 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     }
 
     if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
-      bool backend_changed = false;
-      if (!project_prepare_backend(&proj, tc, platform_id, true, false, &backend_changed))
+      if (!project_prepare_backend(&proj, tc, platform_id, true, false, NULL))
         goto done;
 
       const char* preset = project_build_dir_name(proj.active_config, platform_id);
-      if (project_needs_configure(&proj, platform_id, backend_changed) && !project_run_cmake_preset(tc, &proj, preset, platform_id))
+      if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
         goto done;
       if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
         goto done;
