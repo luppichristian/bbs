@@ -345,6 +345,21 @@ The numbered docs are meant to be read in roughly this order:
 - custom asset compilation and pipeline support
 - deeper metaprogramming features built around the Clang AST
 
+## AI Skills
+
+This repository includes project-local skills for both Codex and Claude so they can work with `bbs` without defaulting to generic CMake assumptions.
+
+- Codex skill: [`.codex/skills/bbs-build-system/`](./.codex/skills/bbs-build-system/)
+- Claude skill: [`.claude/skills/bbs-build-system/`](./.claude/skills/bbs-build-system/)
+
+These skills teach the assistants how to:
+
+- write and edit valid `project.bbs` files
+- choose supported target types and fields
+- emit the right `bbs` commands
+- model package-backed targets and `builders(...)`
+- respect this repository's `bbs` source layout when editing the tool itself
+
 ## License
 
 MIT License.

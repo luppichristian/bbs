@@ -1,0 +1,4 @@
+interface:
+  display_name: "BBS Build System"
+  short_description: "Create and edit bbs build projects"
+  default_prompt: "Use $bbs-build-system to create, explain, or fix a project.bbs setup and the commands around it."
