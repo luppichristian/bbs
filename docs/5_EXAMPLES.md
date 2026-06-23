@@ -206,7 +206,9 @@ targets(
       link("https://github.com/raysan5/raylib.git")
       tag("5.5")
     )
-    cmake_target(raylib)
+    cmake(
+      target(raylib)
+    )
   )
 
   console(
@@ -250,7 +252,9 @@ targets(
   static_lib(
     id(greeter_pkg)
     path("../bbs_package_dep")
-    cmake_target(bbs_greeter)
+    cmake(
+      target(bbs_greeter)
+    )
   )
 
   console(
@@ -360,7 +364,7 @@ What this demonstrates:
 
 - a package target can point at a directory that has its own `project.bbs`
 - `bbs` generates an embedded backend for that nested package project automatically
-- `cmake_target(...)` still names the exported target that the parent project links
+- `cmake(target(...))` still names the exported target that the parent project links
 
 ## 7. Local Machine Overrides
 

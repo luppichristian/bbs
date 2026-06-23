@@ -71,6 +71,7 @@ Current builder attributes:
 - `units(...)`
 - `include_dirs(...)`
 - `defines(...)`
+- `undefines(...)`
 - `additional_compile_args(...)`
 - `additional_link_args(...)`
 
@@ -169,6 +170,7 @@ Prefer dedicated properties over raw compiler flags when possible.
 Examples:
 
 - use `BBS_TARGET_TEXT_DEFINES` for preprocessor macros
+- use `BBS_TARGET_TEXT_UNDEFINES` for macros that should be removed during compilation
 - use `BBS_TARGET_TEXT_STDVER` for language standard changes
 - use `BBS_TARGET_TEXT_OUTPUT` for output naming
 

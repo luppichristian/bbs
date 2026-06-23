@@ -6,7 +6,9 @@ targets(
   static_lib(
     id(greeter_pkg)
     path("../bbs_package_dep")
-    cmake_target(bbs_greeter)
+    cmake(
+      target(bbs_greeter)
+    )
   )
 
   console(

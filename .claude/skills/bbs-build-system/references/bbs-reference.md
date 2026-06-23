@@ -97,6 +97,7 @@ Sources and relationships:
 - `dependencies(...)`
 - `link_libs(...)`
 - `defines(...)`
+- `undefines(...)`
 
 Compiler and linker tuning:
 
@@ -188,7 +189,9 @@ Path package:
 static_lib(
   id(my_dep)
   path("../third_party/my_dep")
-  cmake_target(my_dep)
+  cmake(
+    target(my_dep)
+  )
 )
 ```
 
@@ -201,7 +204,9 @@ static_lib(
     link("https://github.com/raysan5/raylib.git")
     tag("5.5")
   )
-  cmake_target(raylib)
+  cmake(
+    target(raylib)
+  )
 )
 ```
 
@@ -214,7 +219,9 @@ static_lib(
     link("https://example.com/my_dep.zip")
     strip_prefix("my_dep-1.0.0")
   )
-  cmake_target(my_dep)
+  cmake(
+    target(my_dep)
+  )
 )
 ```
 
@@ -234,7 +241,7 @@ Package invariants:
 
 - exactly one of `path`, `repo(...)`, or `archive(...)`
 - the resolved package directory must contain `CMakeLists.txt` or `project.bbs`
-- `cmake_target(...)` must match the exported backend target name
+- `cmake(target(...))` must match the exported backend target name
 
 ## Builder Pattern
 
@@ -407,7 +414,7 @@ Before finalizing generated `bbs` content, confirm:
 4. Local non-header-only targets have `units(...)` unless package-backed.
 5. `dependencies(...)` references `bbs` targets or builder ids.
 6. Each package target defines exactly one source mode.
-7. Package targets include `cmake_target(...)`.
+7. Package targets include `cmake(target(...))`.
 8. Config names used in `filter(...)` are valid.
 9. Strings that need spaces use double quotes.
 10. Suggested commands are valid `bbs` commands.

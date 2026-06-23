@@ -12,7 +12,7 @@ Current supported target platforms: `windows`, `linux`, `macos`
 
 Current supported target architectures: `x86_64`, `x86`, `arm64`
 
-For escape-hatch flags, `bbs` treats `additional_compile_args` as Clang/GCC-style input and translates supported subsets to MSVC when generating the backend.
+For escape-hatch flags, `bbs` treats `additional_compile_args` as Clang/GCC-style input and translates supported subsets to MSVC when generating the backend. Use dedicated fields such as `undefines(...)` when they exist instead of spelling those through raw compile args.
 
 ## Why Add Another Layer On Top Of CMake
 

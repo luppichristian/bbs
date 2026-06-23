@@ -14,7 +14,7 @@ extern "C" {
 /* Public builder API version, not the built project's version. */
 #define BBS_VERSION_MAJOR     0u
 #define BBS_VERSION_MINOR     5u
-#define BBS_BUILD_API_VERSION 1u
+#define BBS_BUILD_API_VERSION 2u
 
 #if defined(_WIN32) || defined(__CYGWIN__)
 #  define BBS_EXPORT __declspec(dllexport)
@@ -360,6 +360,7 @@ typedef enum {
   BBS_TARGET_TEXT_STDVER,
   BBS_TARGET_TEXT_CUDA_ARCHITECTURES,
   BBS_TARGET_TEXT_DIST_ARCHIVE_NAME,
+  BBS_TARGET_TEXT_UNDEFINES,
   BBS_TARGET_TEXT_MAX,
 } bbs_target_text_field;
 
@@ -666,7 +667,7 @@ static const bbs_project_cmake_config_alias BBS_PROJECT_CMAKE_CONFIG_ALIASES[] =
 static const bbs_project_attr_info BBS_PROJECT_LICENSE_ATTR_INFOS[] = {{.name = "type"}, {.name = "file"}};
 static const bbs_project_attr_info BBS_PROJECT_UNITY_ATTR_INFOS[] = {{.name = "enabled"}, {.name = "batch_size"}, {.name = "batch"}};
 static const bbs_project_attr_info BBS_PROJECT_TARGET_META_ATTR_INFOS[] = {{.name = "id"}, {.name = "name"}, {.name = "authors"}, {.name = "ver"}, {.name = "license"}};
-static const bbs_project_attr_info BBS_PROJECT_TARGET_ATTR_INFOS[] = {{.name = "lang"}, {.name = "output"}, {.name = "path"}, {.name = "subdir"}, {.name = "cmake_target"}, {.name = "repo"}, {.name = "archive"}, {.name = "units"}, {.name = "include_dirs"}, {.name = "link_dirs"}, {.name = "dependencies"}, {.name = "link_libs"}, {.name = "defines"}, {.name = "additional_compile_args"}, {.name = "additional_link_args"}, {.name = "warning_level"}, {.name = "opt_level"}, {.name = "stack_size"}, {.name = "warnings_as_errors"}, {.name = "runtime"}, {.name = "stdver"}, {.name = "cuda_architectures"}, {.name = "testing"}, {.name = "test_args"}, {.name = "post_build_cmds"}, {.name = "pre_build_cmds"}, {.name = "pre_run_cmds"}, {.name = "post_run_cmds"}, {.name = "pre_dist_cmds"}, {.name = "post_dist_cmds"}, {.name = "dist"}, {.name = "unity"}};
+static const bbs_project_attr_info BBS_PROJECT_TARGET_ATTR_INFOS[] = {{.name = "lang"}, {.name = "output"}, {.name = "path"}, {.name = "subdir"}, {.name = "cmake_target"}, {.name = "cmake_args"}, {.name = "cmake_option"}, {.name = "cmake"}, {.name = "repo"}, {.name = "archive"}, {.name = "units"}, {.name = "include_dirs"}, {.name = "link_dirs"}, {.name = "dependencies"}, {.name = "link_libs"}, {.name = "defines"}, {.name = "undefines"}, {.name = "additional_compile_args"}, {.name = "additional_link_args"}, {.name = "warning_level"}, {.name = "opt_level"}, {.name = "stack_size"}, {.name = "warnings_as_errors"}, {.name = "runtime"}, {.name = "stdver"}, {.name = "cuda_architectures"}, {.name = "testing"}, {.name = "test_args"}, {.name = "post_build_cmds"}, {.name = "pre_build_cmds"}, {.name = "pre_run_cmds"}, {.name = "post_run_cmds"}, {.name = "pre_dist_cmds"}, {.name = "post_dist_cmds"}, {.name = "dist"}, {.name = "unity"}};
 static const bbs_project_attr_info BBS_PROJECT_PROJECT_ATTR_INFOS[] = {{.name = "id"}, {.name = "name"}, {.name = "authors"}, {.name = "repo"}, {.name = "ver"}, {.name = "license"}, {.name = "configs"}, {.name = "filter"}, {.name = "targets"}, {.name = "builders"}, {.name = "cuda_architectures"}};
 
 static const bbs_toolchain_attr_info BBS_TOOLCHAIN_HOST_ATTR_INFOS[] = {
@@ -906,6 +907,10 @@ typedef struct bbs_tgt {
   const char* package_repo_commit;
   bbs_package_backend package_backend;
   const char* package_cmake_target;
+  const char** package_cmake_args;
+  int package_cmake_arg_c;
+  const char** package_cmake_options;
+  int package_cmake_option_c;
   const char* package_archive_link;
   const char* package_archive_strip_prefix;
   const char* package_project_cfg_path;
@@ -932,6 +937,8 @@ typedef struct bbs_tgt {
   int dependency_c;
   const char* defines;
   int define_c;
+  const char* undefines;
+  int undefine_c;
   const char** link_libs;
   int link_libs_count;
 

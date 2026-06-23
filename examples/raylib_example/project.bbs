@@ -14,7 +14,9 @@ targets(
       link("https://github.com/raysan5/raylib.git")
       tag("5.5")
     )
-    cmake_target(raylib)
+    cmake(
+      target(raylib)
+    )
   )
 
   console(

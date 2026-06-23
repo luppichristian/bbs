@@ -17,7 +17,7 @@ Once resolved, `bbs` expects the package to provide either:
 - a native `CMakeLists.txt`, or
 - a `project.bbs` file that `bbs` can translate into an embedded CMake backend
 
-In both cases, `bbs` links the package into the generated backend with the configured `cmake_target`.
+In both cases, `bbs` links the package into the generated backend with the configured `cmake.target`.
 
 ## Why Packages Exist
 
@@ -49,7 +49,9 @@ Example:
 static_lib(
   id(my_dep)
   path("../third_party/my_dep")
-  cmake_target(my_dep)
+  cmake(
+    target(my_dep)
+  )
 )
 ```
 
@@ -64,7 +66,9 @@ static_lib(
   id(my_dep)
   path("../third_party/my_dep")
   subdir("src")
-  cmake_target(my_dep)
+  cmake(
+    target(my_dep)
+  )
 )
 ```
 
@@ -87,7 +91,9 @@ static_lib(
     link("https://github.com/raysan5/raylib.git")
     tag("5.5")
   )
-  cmake_target(raylib)
+  cmake(
+    target(raylib)
+  )
 )
 ```
 
@@ -123,7 +129,9 @@ static_lib(
     link("https://example.com/my_dep.zip")
     strip_prefix("my_dep-1.0.0")
   )
-  cmake_target(my_dep)
+  cmake(
+    target(my_dep)
+  )
 )
 ```
 
@@ -152,21 +160,33 @@ If only `project.bbs` is present, `bbs` loads that package as its own `bbs` proj
 
 Nested `project.bbs` packages use their own default package config. They do not inherit the parent project's selected `bbs` config name.
 
-## `cmake_target`
+## `cmake(...)`
 
-`cmake_target` is the expected target name exported by the package backend.
+`cmake.target` is the expected target name exported by the package backend.
 
 Example:
 
 ```txt
-cmake_target(raylib)
+cmake(
+  target(raylib)
+)
 ```
+
+Optional children:
+
+- `target(...)`
+- `args(...)`
+- `option(...)`
+
+`args(...)` lets you predefine CMake variables such as `-DNAME=VALUE` or `NAME=VALUE` before the package subdirectory is added.
+
+`option(...)` is a boolean-focused shorthand. Each entry may be `NAME` or `NAME=ON/OFF`.
 
 Why it matters:
 
 - for native CMake packages, `bbs` adds the package directory as a CMake subdirectory
 - for `project.bbs` packages, `bbs` generates an internal CMake backend first and then adds that generated directory as a subdirectory
-- then it expects that package backend to define the target named by `cmake_target`
+- then it expects that package backend to define the target named by `cmake.target`
 - if that target does not exist, the build fails
 
 ## Package Cache
@@ -220,7 +240,9 @@ targets(
       link("https://github.com/raysan5/raylib.git")
       tag("5.5")
     )
-    cmake_target(raylib)
+    cmake(
+      target(raylib)
+    )
   )
 
   console(
@@ -310,7 +332,7 @@ Typical package problems are:
 - bad repo/archive URL
 - invalid `tag` or `commit`
 - missing both `CMakeLists.txt` and `project.bbs` in the resolved package directory
-- wrong `cmake_target`
+- wrong `cmake.target`
 - wrong `strip_prefix`
 
 If a package fails to resolve, inspect it with:

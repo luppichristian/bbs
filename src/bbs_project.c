@@ -4,10 +4,13 @@
 #include "bbs_toolchain.c"
 #include "bbs_config.c"
 
+typedef struct project_textbuf project_textbuf;
+
 static bool project_parse_string_list(node* list_n, const char*** out_items, int* out_count);
 static const char* project_join_scalar_list(node* list_n, int* out_count);
 static const char* project_join_scalar_list_with_sep(node* list_n, int* out_count, char separator);
 static bool project_apply_unity_node(node* unity_n, target* out, const char* target_label);
+static bool project_apply_cmake_node(node* cmake_n, target* out, const char* target_label);
 static bool project_apply_target_attr_node_with_mode(node* attr_n, target* out, const char* target_label, bool reset_package_sources);
 static bool project_parse_builder_node(node* builders_n, builder* out);
 static int project_find_builder_index(const project* proj, const char* name);
@@ -21,6 +24,12 @@ static const char* project_path_parent(const char* path);
 static bool project_prepare_packages(project* proj, toolchain* tc, const char* platform, bool refresh);
 static bool project_generate_cmakelists(const project* proj, toolchain* tc, const char* platform_id, bool* changed);
 static bool project_target_needs_build_for_execution(const project* proj, const target* tgt, const char* platform);
+static const char* project_escape_cmake_string(const char* text);
+static bool project_textbuf_appendf(project_textbuf* buf, const char* fmt, ...);
+static const char* project_compiler_undefines_args(const char* text, const char* prefix);
+static bool project_append_cmake_target_undefines(project_textbuf* buf, const target* tgt, const char* target_name, const char* var_name, const char* scope);
+static bool project_append_cmake_package_vars(project_textbuf* buf, const target* tgt, const char* var_name);
+static bool project_append_cmake_package_runtime_stage_commands(project_textbuf* buf, const project* proj, const target* tgt, const char* target_name);
 
 typedef struct {
   const char* source;
@@ -853,6 +862,455 @@ static const char* project_join_scalar_list(node* list_n, int* out_count) {
   return project_join_scalar_list_with_sep(list_n, out_count, ' ');
 }
 
+static const char* project_scalar_word_list_with_sep(const char* text, char separator) {
+  if (!text || !text[0])
+    return NULL;
+
+  size_t total = 0;
+  int count = 0;
+  const char* p = text;
+  while (*p) {
+    while (*p && isspace((unsigned char)*p))
+      ++p;
+    if (!*p)
+      break;
+
+    const char* start = p;
+    while (*p && !isspace((unsigned char)*p))
+      ++p;
+    size_t len = (size_t)(p - start);
+    if (len == 0)
+      continue;
+
+    total += len + (count > 0 ? 1u : 0u);
+    ++count;
+  }
+
+  if (count == 0)
+    return NULL;
+
+  char* out = push(total + 1);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  p = text;
+  while (*p) {
+    while (*p && isspace((unsigned char)*p))
+      ++p;
+    if (!*p)
+      break;
+
+    const char* start = p;
+    while (*p && !isspace((unsigned char)*p))
+      ++p;
+    size_t len = (size_t)(p - start);
+    if (len == 0)
+      continue;
+
+    if (wi > 0)
+      out[wi++] = separator;
+    memcpy(out + wi, start, len);
+    wi += len;
+  }
+
+  out[wi] = '\0';
+  return out;
+}
+
+static int project_count_scalar_words(const char* text) {
+  if (!text || !text[0])
+    return 0;
+
+  int count = 0;
+  const char* p = text;
+  while (*p) {
+    while (*p && isspace((unsigned char)*p))
+      ++p;
+    if (!*p)
+      break;
+    while (*p && !isspace((unsigned char)*p))
+      ++p;
+    ++count;
+  }
+
+  return count;
+}
+
+static bool project_scalar_words_contains(const char* text, const char* word, size_t word_len) {
+  if (!text || !text[0] || !word || word_len == 0)
+    return false;
+
+  const char* p = text;
+  while (*p) {
+    while (*p && isspace((unsigned char)*p))
+      ++p;
+    if (!*p)
+      break;
+
+    const char* start = p;
+    while (*p && !isspace((unsigned char)*p))
+      ++p;
+    size_t len = (size_t)(p - start);
+    if (len == word_len && memcmp(start, word, word_len) == 0)
+      return true;
+  }
+
+  return false;
+}
+
+static const char* project_merge_scalar_word_lists_unique(const char* base, const char* extra, int* out_count) {
+  int total_count = project_count_scalar_words(base);
+  if (!extra || !extra[0]) {
+    if (out_count)
+      *out_count = total_count;
+    return base;
+  }
+  if (!base || !base[0]) {
+    if (out_count)
+      *out_count = project_count_scalar_words(extra);
+    return extra;
+  }
+
+  size_t total_len = strlen(base);
+  const char* p = extra;
+  while (*p) {
+    while (*p && isspace((unsigned char)*p))
+      ++p;
+    if (!*p)
+      break;
+
+    const char* start = p;
+    while (*p && !isspace((unsigned char)*p))
+      ++p;
+    size_t len = (size_t)(p - start);
+    if (len == 0)
+      continue;
+    if (project_scalar_words_contains(base, start, len))
+      continue;
+
+    total_len += 1 + len;
+    ++total_count;
+  }
+
+  char* out = push(total_len + 1);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  size_t base_len = strlen(base);
+  memcpy(out + wi, base, base_len);
+  wi += base_len;
+
+  p = extra;
+  while (*p) {
+    while (*p && isspace((unsigned char)*p))
+      ++p;
+    if (!*p)
+      break;
+
+    const char* start = p;
+    while (*p && !isspace((unsigned char)*p))
+      ++p;
+    size_t len = (size_t)(p - start);
+    if (len == 0)
+      continue;
+    if (project_scalar_words_contains(base, start, len) || project_scalar_words_contains(out, start, len))
+      continue;
+
+    out[wi++] = ' ';
+    memcpy(out + wi, start, len);
+    wi += len;
+  }
+
+  out[wi] = '\0';
+  if (out_count)
+    *out_count = total_count;
+  return out;
+}
+
+static bool project_apply_cmake_node(node* cmake_n, target* out, const char* target_label) {
+  if (!cmake_n || !out)
+    return false;
+  if (cmake_n->type != NODE_TYPE_DEF) {
+    error("Attribute 'cmake' must be a section for target '%s'.", target_label ? target_label : "");
+    return false;
+  }
+
+  if (!project_read_text_child(cmake_n, "target", &out->package_cmake_target))
+    return false;
+  if (!project_parse_string_list(node_get_child(cmake_n, "args"), &out->package_cmake_args, &out->package_cmake_arg_c))
+    return false;
+  if (!project_parse_string_list(node_get_child(cmake_n, "option"), &out->package_cmake_options, &out->package_cmake_option_c))
+    return false;
+
+  return true;
+}
+
+static bool project_text_is_cmake_var_name(const char* text) {
+  if (!text || !text[0])
+    return false;
+  if (!(isalpha((unsigned char)text[0]) || text[0] == '_'))
+    return false;
+
+  for (const char* p = text + 1; *p; ++p) {
+    if (!(isalnum((unsigned char)*p) || *p == '_'))
+      return false;
+  }
+
+  return true;
+}
+
+static bool project_text_is_cmake_bool_literal(const char* text) {
+  if (!text || !text[0])
+    return false;
+
+  return _stricmp(text, "1") == 0 ||
+         _stricmp(text, "0") == 0 ||
+         _stricmp(text, "ON") == 0 ||
+         _stricmp(text, "OFF") == 0 ||
+         _stricmp(text, "TRUE") == 0 ||
+         _stricmp(text, "FALSE") == 0 ||
+         _stricmp(text, "YES") == 0 ||
+         _stricmp(text, "NO") == 0 ||
+         _stricmp(text, "Y") == 0 ||
+         _stricmp(text, "N") == 0;
+}
+
+static bool project_parse_cmake_assignment(const char* raw, bool option_mode, const char** out_name, const char** out_value) {
+  if (out_name)
+    *out_name = NULL;
+  if (out_value)
+    *out_value = NULL;
+  if (!raw || !raw[0])
+    return false;
+
+  const char* text = raw;
+  if (!option_mode && text[0] == '-' && text[1] == 'D')
+    text += 2;
+  if (!text[0])
+    return false;
+
+  const char* eq = strchr(text, '=');
+  const char* name = eq ? arena_text(text, (size_t)(eq - text)) : text;
+  const char* value = eq ? eq + 1 : "ON";
+  if (!project_text_is_cmake_var_name(name))
+    return false;
+
+  if (out_name)
+    *out_name = name;
+  if (out_value)
+    *out_value = value;
+  return true;
+}
+
+static bool project_append_cmake_package_option_vars(project_textbuf* buf, const target* tgt, const char* var_name) {
+  if (!buf || !tgt || !var_name)
+    return false;
+
+  for (int i = 0; i < tgt->package_cmake_option_c; ++i) {
+    const char* name = NULL;
+    const char* value = NULL;
+    if (!project_parse_cmake_assignment(tgt->package_cmake_options[i], true, &name, &value)) {
+      error("Invalid cmake.option entry '%s' for target '%s'. Use NAME or NAME=ON/OFF.", tgt->package_cmake_options[i] ? tgt->package_cmake_options[i] : "", tgt->meta.id ? tgt->meta.id : "");
+      return false;
+    }
+
+    const char* value_esc = project_escape_cmake_string(value);
+    const char* cache_type = project_text_is_cmake_bool_literal(value) ? "BOOL" : "STRING";
+    if (!value_esc)
+      return false;
+    if (!project_textbuf_appendf(buf,
+                                 "if(DEFINED CACHE{%s})\n"
+                                 "  get_property(BBS_%s_PACKAGE_CMAKE_CACHE_%d_TYPE CACHE %s PROPERTY TYPE)\n"
+                                 "  get_property(BBS_%s_PACKAGE_CMAKE_CACHE_%d_VALUE CACHE %s PROPERTY VALUE)\n"
+                                 "  get_property(BBS_%s_PACKAGE_CMAKE_CACHE_%d_HELPSTRING CACHE %s PROPERTY HELPSTRING)\n"
+                                 "  set(BBS_%s_PACKAGE_CMAKE_CACHE_%d_WAS_DEFINED TRUE)\n"
+                                 "else()\n"
+                                 "  set(BBS_%s_PACKAGE_CMAKE_CACHE_%d_WAS_DEFINED FALSE)\n"
+                                 "endif()\n"
+                                 "set(%s \"%s\")\n"
+                                 "set(%s \"%s\" CACHE %s \"\" FORCE)\n",
+                                 name,
+                                 var_name,
+                                 i,
+                                 name,
+                                 var_name,
+                                 i,
+                                 name,
+                                 var_name,
+                                 i,
+                                 name,
+                                 var_name,
+                                 i,
+                                 var_name,
+                                 i,
+                                 name,
+                                 value_esc,
+                                 name,
+                                 value_esc,
+                                 cache_type))
+      return false;
+  }
+
+  return true;
+}
+
+static bool project_append_cmake_package_vars(project_textbuf* buf, const target* tgt, const char* var_name) {
+  if (!buf || !tgt || !var_name)
+    return false;
+
+  for (int i = 0; i < tgt->package_cmake_arg_c; ++i) {
+    const char* name = NULL;
+    const char* value = NULL;
+    if (!project_parse_cmake_assignment(tgt->package_cmake_args[i], false, &name, &value)) {
+      error("Invalid cmake.args entry '%s' for target '%s'. Use NAME=VALUE or -DNAME=VALUE.", tgt->package_cmake_args[i] ? tgt->package_cmake_args[i] : "", tgt->meta.id ? tgt->meta.id : "");
+      return false;
+    }
+
+    const char* value_esc = project_escape_cmake_string(value);
+    if (!value_esc)
+      return false;
+    if (!project_textbuf_appendf(buf,
+                                 "set(%s \"%s\")\n"
+                                 "list(APPEND BBS_%s_PACKAGE_CMAKE_VARS %s)\n",
+                                 name,
+                                 value_esc,
+                                 var_name,
+                                 name))
+      return false;
+  }
+
+  return true;
+}
+
+static const char* project_compiler_undefines_args(const char* text, const char* prefix) {
+  if (!text || !text[0] || !prefix || !prefix[0])
+    return NULL;
+
+  size_t prefix_len = strlen(prefix);
+  size_t total = 0;
+  int count = 0;
+  const char* p = text;
+  while (*p) {
+    while (*p && isspace((unsigned char)*p))
+      ++p;
+    if (!*p)
+      break;
+
+    const char* start = p;
+    while (*p && !isspace((unsigned char)*p))
+      ++p;
+    size_t len = (size_t)(p - start);
+    if (len == 0)
+      continue;
+
+    total += prefix_len + len + (count > 0 ? 1u : 0u);
+    ++count;
+  }
+
+  if (count == 0)
+    return NULL;
+
+  char* out = push(total + 1);
+  if (!out)
+    return NULL;
+
+  size_t wi = 0;
+  p = text;
+  while (*p) {
+    while (*p && isspace((unsigned char)*p))
+      ++p;
+    if (!*p)
+      break;
+
+    const char* start = p;
+    while (*p && !isspace((unsigned char)*p))
+      ++p;
+    size_t len = (size_t)(p - start);
+    if (len == 0)
+      continue;
+
+    if (wi > 0)
+      out[wi++] = ' ';
+    memcpy(out + wi, prefix, prefix_len);
+    wi += prefix_len;
+    memcpy(out + wi, start, len);
+    wi += len;
+  }
+
+  out[wi] = '\0';
+  return out;
+}
+
+static bool project_append_cmake_target_undefines(project_textbuf* buf, const target* tgt, const char* target_name, const char* var_name, const char* scope) {
+  if (!buf || !tgt || !target_name || !var_name || !scope || !tgt->undefines || !tgt->undefines[0])
+    return true;
+
+  const char* gcc_args_src = project_compiler_undefines_args(tgt->undefines, "-U");
+  const char* msvc_args_src = project_compiler_undefines_args(tgt->undefines, "/U");
+  const char* nvcc_args_src = compiler_args_translate_nvcc(gcc_args_src, false, NULL);
+  const char* nvcc_args_msvc_src = compiler_args_translate_nvcc(gcc_args_src, true, NULL);
+  const char* gcc_args = project_escape_cmake_string(gcc_args_src ? gcc_args_src : "");
+  const char* msvc_args = project_escape_cmake_string(msvc_args_src ? msvc_args_src : "");
+  const char* nvcc_args = project_escape_cmake_string(nvcc_args_src ? nvcc_args_src : "");
+  const char* nvcc_args_msvc = project_escape_cmake_string(nvcc_args_msvc_src ? nvcc_args_msvc_src : "");
+  if (!gcc_args || !msvc_args || !nvcc_args || !nvcc_args_msvc)
+    return false;
+
+  if (tgt->lang == LANG_CUDA) {
+    return project_textbuf_appendf(buf,
+                                   "set(BBS_%s_UNDEFINES \"%s\")\n"
+                                   "set(BBS_%s_UNDEFINES_MSVC \"%s\")\n"
+                                   "separate_arguments(BBS_%s_UNDEFINES NATIVE_COMMAND \"${BBS_%s_UNDEFINES}\")\n"
+                                   "separate_arguments(BBS_%s_UNDEFINES_MSVC NATIVE_COMMAND \"${BBS_%s_UNDEFINES_MSVC}\")\n"
+                                   "if(MSVC)\n"
+                                   "  target_compile_options(%s %s ${BBS_%s_UNDEFINES_MSVC})\n"
+                                   "else()\n"
+                                   "  target_compile_options(%s %s ${BBS_%s_UNDEFINES})\n"
+                                   "endif()\n",
+                                   var_name,
+                                   nvcc_args,
+                                   var_name,
+                                   nvcc_args_msvc,
+                                   var_name,
+                                   var_name,
+                                   var_name,
+                                   var_name,
+                                   target_name,
+                                   scope,
+                                   var_name,
+                                   target_name,
+                                   scope,
+                                   var_name);
+  }
+
+  return project_textbuf_appendf(buf,
+                                 "set(BBS_%s_UNDEFINES \"%s\")\n"
+                                 "set(BBS_%s_UNDEFINES_MSVC \"%s\")\n"
+                                 "separate_arguments(BBS_%s_UNDEFINES NATIVE_COMMAND \"${BBS_%s_UNDEFINES}\")\n"
+                                 "separate_arguments(BBS_%s_UNDEFINES_MSVC NATIVE_COMMAND \"${BBS_%s_UNDEFINES_MSVC}\")\n"
+                                 "if(MSVC)\n"
+                                 "  target_compile_options(%s %s ${BBS_%s_UNDEFINES_MSVC})\n"
+                                 "else()\n"
+                                 "  target_compile_options(%s %s ${BBS_%s_UNDEFINES})\n"
+                                 "endif()\n",
+                                 var_name,
+                                 gcc_args,
+                                 var_name,
+                                 msvc_args,
+                                 var_name,
+                                 var_name,
+                                 var_name,
+                                 var_name,
+                                 target_name,
+                                 scope,
+                                 var_name,
+                                 target_name,
+                                 scope,
+                                 var_name);
+}
+
 static bool project_parse_meta_fields(node* scope, meta* out) {
   if (!scope || !out)
     return false;
@@ -977,6 +1435,12 @@ static bool project_apply_target_attr_node_with_mode(node* attr_n, target* out, 
     out->package_cmake_target = text;
     return true;
   }
+  if (_stricmp(attr_n->name, "cmake_args") == 0)
+    return project_parse_string_list(attr_n, &out->package_cmake_args, &out->package_cmake_arg_c);
+  if (_stricmp(attr_n->name, "cmake_option") == 0)
+    return project_parse_string_list(attr_n, &out->package_cmake_options, &out->package_cmake_option_c);
+  if (_stricmp(attr_n->name, "cmake") == 0)
+    return project_apply_cmake_node(attr_n, out, target_label);
   if (_stricmp(attr_n->name, "repo") == 0) {
     if (attr_n->type != NODE_TYPE_DEF) {
       error("Attribute 'repo' must be a section.");
@@ -1025,6 +1489,10 @@ static bool project_apply_target_attr_node_with_mode(node* attr_n, target* out, 
   if (_stricmp(attr_n->name, "defines") == 0) {
     out->defines = project_join_scalar_list(attr_n, &out->define_c);
     return out->define_c >= 0;
+  }
+  if (_stricmp(attr_n->name, "undefines") == 0) {
+    out->undefines = project_join_scalar_list(attr_n, &out->undefine_c);
+    return out->undefine_c >= 0;
   }
   if (_stricmp(attr_n->name, "additional_compile_args") == 0) {
     text = project_scalar_text(attr_n);
@@ -1178,6 +1646,26 @@ static bool project_apply_filter_node(node* filter_n, target* out, const char* a
     node* child = children[i];
     if (!child || !child->name)
       continue;
+    if (_stricmp(child->name, "defines") == 0) {
+      int count = 0;
+      const char* joined = project_join_scalar_list(child, &count);
+      if (count < 0)
+        return false;
+      out->defines = project_merge_scalar_word_lists_unique(out->defines, joined, &out->define_c);
+      if (count > 0 && !out->defines)
+        return false;
+      continue;
+    }
+    if (_stricmp(child->name, "undefines") == 0) {
+      int count = 0;
+      const char* joined = project_join_scalar_list(child, &count);
+      if (count < 0)
+        return false;
+      out->undefines = project_merge_scalar_word_lists_unique(out->undefines, joined, &out->undefine_c);
+      if (count > 0 && !out->undefines)
+        return false;
+      continue;
+    }
     if (!project_apply_target_attr_node(child, out, target_label))
       return false;
   }
@@ -1916,6 +2404,10 @@ static void project_print(const project* proj) {
         print("Package Subdir: %s", tgt->package_subdir);
       if (tgt->package_cmake_target)
         print("Package CMake Target: %s", tgt->package_cmake_target);
+      if (tgt->package_cmake_arg_c > 0)
+        print("Package CMake Args: %d", tgt->package_cmake_arg_c);
+      if (tgt->package_cmake_option_c > 0)
+        print("Package CMake Options: %d", tgt->package_cmake_option_c);
       if (tgt->package_archive_link)
         print("Package Archive: %s", tgt->package_archive_link);
       if (tgt->package_archive_strip_prefix)
@@ -1938,6 +2430,8 @@ static void project_print(const project* proj) {
       print("CUDA Architectures: %s", tgt->cuda_architectures);
     if (tgt->defines)
       print("Defines: %s", tgt->defines);
+    if (tgt->undefines)
+      print("Undefines: %s", tgt->undefines);
     if (tgt->additional_compile_args)
       print("Additional Compile Args: %s", tgt->additional_compile_args);
     if (tgt->additional_link_args)
@@ -2171,6 +2665,20 @@ static bool project_target_is_runnable(const target* tgt) {
          tgt->type == TARGET_TYPE_TEST;
 }
 
+static bool project_target_has_runtime_output(const target* tgt) {
+  if (!tgt)
+    return false;
+  return project_target_is_runnable(tgt) ||
+         tgt->type == TARGET_TYPE_DYN_LIB ||
+         tgt->type == TARGET_TYPE_DRIVER;
+}
+
+static bool project_target_has_package_runtime_artifact(const target* tgt) {
+  if (!tgt || !project_target_is_package(tgt))
+    return false;
+  return tgt->type == TARGET_TYPE_DYN_LIB || tgt->type == TARGET_TYPE_DRIVER;
+}
+
 static bool project_target_is_test(const target* tgt) {
   return tgt && tgt->testing;
 }
@@ -2197,6 +2705,72 @@ static const char* project_target_build_target_name(const target* tgt) {
     return tgt->output ? tgt->output : tgt->meta.id;
   }
   return tgt->meta.id;
+}
+
+static bool project_collect_runtime_package_dep_indices(const project* proj, const target* tgt, bool* visited, bool* selected) {
+  if (!proj || !tgt || !visited || !selected)
+    return false;
+
+  int tgt_idx = project_find_target_index(proj, tgt->meta.id);
+  if (tgt_idx < 0)
+    return false;
+  if (visited[tgt_idx])
+    return true;
+  visited[tgt_idx] = true;
+
+  for (int i = 0; i < tgt->dependency_c; ++i) {
+    if (project_find_builder_index(proj, tgt->dependencies[i]) >= 0)
+      continue;
+
+    int dep_idx = project_find_target_index(proj, tgt->dependencies[i]);
+    if (dep_idx < 0)
+      return false;
+
+    const target* dep = &proj->targets[dep_idx];
+    if (project_target_has_package_runtime_artifact(dep))
+      selected[dep_idx] = true;
+    if (!project_collect_runtime_package_dep_indices(proj, dep, visited, selected))
+      return false;
+  }
+
+  return true;
+}
+
+static bool project_append_cmake_package_runtime_stage_commands(project_textbuf* buf, const project* proj, const target* tgt, const char* target_name) {
+  if (!buf || !proj || !tgt || !target_name)
+    return false;
+  if (!project_target_has_runtime_output(tgt))
+    return true;
+
+  bool* visited = push(sizeof(*visited) * (size_t)proj->target_c);
+  bool* selected = push(sizeof(*selected) * (size_t)proj->target_c);
+  if (!visited || !selected)
+    return false;
+  memset(visited, 0, sizeof(*visited) * (size_t)proj->target_c);
+  memset(selected, 0, sizeof(*selected) * (size_t)proj->target_c);
+
+  if (!project_collect_runtime_package_dep_indices(proj, tgt, visited, selected))
+    return false;
+
+  for (int i = 0; i < proj->target_c; ++i) {
+    if (!selected[i])
+      continue;
+
+    const target* dep = &proj->targets[i];
+    const char* dep_target_name = project_escape_cmake_string(project_target_build_target_name(dep));
+    if (!dep_target_name)
+      return false;
+
+    if (!project_textbuf_appendf(buf,
+                                 "  add_custom_command(TARGET %s POST_BUILD\n"
+                                 "    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:%s> $<TARGET_FILE_DIR:%s>)\n",
+                                 target_name,
+                                 dep_target_name,
+                                 target_name))
+      return false;
+  }
+
+  return true;
 }
 
 static const char* project_host_os_name(void) {
@@ -2231,11 +2805,11 @@ static const char* project_build_dir_name(const char* config, const char* platfo
   return arena_text(buf, strlen(buf));
 }
 
-typedef struct {
+struct project_textbuf {
   char* data;
   size_t len;
   size_t cap;
-} project_textbuf;
+};
 
 static bool project_textbuf_reserve(project_textbuf* buf, size_t extra) {
   if (!buf)
@@ -4189,13 +4763,22 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
     if (!package_dir || !ext_target_name)
       return false;
 
+    if (!project_textbuf_appendf(buf, "set(BBS_%s_PACKAGE_CMAKE_VARS)\n", var_name))
+      return false;
+    if (!project_append_cmake_package_vars(buf, tgt, var_name))
+      return false;
+    if (!project_append_cmake_package_option_vars(buf, tgt, var_name))
+      return false;
     if (!project_textbuf_appendf(buf,
                                  "add_subdirectory(\"%s\" \"${CMAKE_CURRENT_BINARY_DIR}/packages/%s\")\n"
                                  "if(NOT TARGET %s)\n"
                                  "  message(FATAL_ERROR \"Package '%s' did not define the expected CMake target '%s'.\")\n"
                                  "endif()\n"
                                  "add_library(%s INTERFACE)\n"
-                                 "target_link_libraries(%s INTERFACE %s)\n",
+                                 "target_link_libraries(%s INTERFACE %s)\n"
+                                 "foreach(BBS_PACKAGE_CMAKE_VAR ${BBS_%s_PACKAGE_CMAKE_VARS})\n"
+                                 "  unset(${BBS_PACKAGE_CMAKE_VAR})\n"
+                                 "endforeach()\n",
                                  package_dir,
                                  var_name,
                                  ext_target_name,
@@ -4203,8 +4786,37 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
                                  project_target_build_target_name(tgt) ? project_target_build_target_name(tgt) : "",
                                  usage_target_name,
                                  usage_target_name,
-                                 ext_target_name))
+                                 ext_target_name,
+                                 var_name))
       return false;
+    for (int i = 0; i < tgt->package_cmake_option_c; ++i) {
+      const char* name = NULL;
+      const char* value = NULL;
+      if (!project_parse_cmake_assignment(tgt->package_cmake_options[i], true, &name, &value)) {
+        error("Invalid cmake.option entry '%s' for target '%s'. Use NAME or NAME=ON/OFF.", tgt->package_cmake_options[i] ? tgt->package_cmake_options[i] : "", tgt->meta.id ? tgt->meta.id : "");
+        return false;
+      }
+
+      if (!project_textbuf_appendf(buf,
+                                   "if(BBS_%s_PACKAGE_CMAKE_CACHE_%d_WAS_DEFINED)\n"
+                                   "  set(%s \"${BBS_%s_PACKAGE_CMAKE_CACHE_%d_VALUE}\" CACHE \"${BBS_%s_PACKAGE_CMAKE_CACHE_%d_TYPE}\" \"${BBS_%s_PACKAGE_CMAKE_CACHE_%d_HELPSTRING}\" FORCE)\n"
+                                   "else()\n"
+                                   "  unset(%s CACHE)\n"
+                                   "endif()\n"
+                                   "unset(%s)\n",
+                                   var_name,
+                                   i,
+                                   name,
+                                   var_name,
+                                   i,
+                                   var_name,
+                                   i,
+                                   var_name,
+                                   i,
+                                   name,
+                                   name))
+        return false;
+    }
 
     for (int i = 0; i < tgt->include_dir_c; ++i) {
       const char* dir = project_cmake_path_text(tgt->include_dirs[i] ? tgt->include_dirs[i] : "");
@@ -4464,6 +5076,22 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
     }
   }
 
+  if (project_target_has_runtime_output(tgt)) {
+    if (!project_textbuf_appendf(buf,
+                                 "if(WIN32)\n"
+                                 "  add_custom_command(TARGET %s POST_BUILD\n"
+                                 "    COMMAND ${CMAKE_COMMAND} -E copy -t $<TARGET_FILE_DIR:%s> $<TARGET_RUNTIME_DLLS:%s>\n"
+                                 "    COMMAND_EXPAND_LISTS)\n",
+                                 target_name,
+                                 target_name,
+                                 target_name))
+      return false;
+    if (!project_append_cmake_package_runtime_stage_commands(buf, proj, tgt, target_name))
+      return false;
+    if (!project_textbuf_append(buf, "endif()\n"))
+      return false;
+  }
+
   if (tgt->defines && tgt->defines[0]) {
     const char* defs = project_escape_cmake_string(tgt->defines);
     if (!defs)
@@ -4480,7 +5108,25 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
                                   tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE",
                                   var_name))
       return false;
+    if (tgt->lang == LANG_CUDA && tgt->type != TARGET_TYPE_HEADER_LIB) {
+      const char* source_defs = project_scalar_word_list_with_sep(tgt->defines, ';');
+      const char* source_defs_esc = project_escape_cmake_string(source_defs ? source_defs : "");
+      if (!source_defs_esc)
+        return false;
+      if (!project_textbuf_appendf(buf,
+                                   "set_source_files_properties(${BBS_%s_SOURCES} PROPERTIES COMPILE_DEFINITIONS \"%s\")\n",
+                                   var_name,
+                                   source_defs_esc))
+        return false;
+    }
   }
+
+  if (!project_append_cmake_target_undefines(buf,
+                                             tgt,
+                                             target_name,
+                                             var_name,
+                                             tgt->type == TARGET_TYPE_HEADER_LIB ? "INTERFACE" : "PRIVATE"))
+    return false;
 
   if (tgt->additional_compile_args && tgt->additional_compile_args[0]) {
     const char* msvc_args_src = compiler_args_translate_msvc(tgt->additional_compile_args, tgt->lang == LANG_CPP || tgt->lang == LANG_CUDA, NULL);
@@ -4663,7 +5309,7 @@ static bool project_generate_cmakelists(const project* proj, toolchain* tc, cons
     else if (proj->targets[i].lang == LANG_CUDA)
       has_cuda = true;
 
-  if (!project_textbuf_append(&buf, "cmake_minimum_required(VERSION 3.20)\n\n"))
+  if (!project_textbuf_append(&buf, "cmake_minimum_required(VERSION 3.21)\n\n"))
     return false;
   if (!project_textbuf_appendf(&buf, "project(%s LANGUAGES C%s%s)\n\n", proj_id, has_cpp ? " CXX" : "", has_cuda ? " CUDA" : ""))
     return false;
@@ -5520,6 +6166,10 @@ static void project_print_package_summary(const target* tgt, toolchain* tc) {
     print("  Subdir: %s", copy.package_subdir);
   if (copy.package_cmake_target)
     print("  Declared CMake Target: %s", copy.package_cmake_target);
+  if (copy.package_cmake_arg_c > 0)
+    print("  CMake Args: %d", copy.package_cmake_arg_c);
+  if (copy.package_cmake_option_c > 0)
+    print("  CMake Options: %d", copy.package_cmake_option_c);
   if (copy.package_archive_link)
     print("  Archive: %s", copy.package_archive_link);
   if (copy.package_archive_strip_prefix)

@@ -413,6 +413,18 @@ defines(
 )
 ```
 
+## `undefines(...)`
+
+Preprocessor macros to explicitly undefine during compilation.
+
+Example:
+
+```txt
+undefines(
+  TRACY_ENABLE
+)
+```
+
 ## Compiler And Linker Tuning
 
 ## `additional_compile_args`
@@ -423,7 +435,7 @@ Notes:
 
 - for C and C++ targets, `bbs` treats this as Clang/GCC-style input and translates a supported subset for MSVC when generating the backend
 - for CUDA targets, `bbs` normalizes a small common subset for `nvcc`, including standard selection, warning flags, optimization flags, and host-compiler forwarding
-- use this field for CUDA-specific flags that do not already have a dedicated property such as `cuda_architectures(...)`
+- use this field for CUDA-specific flags that do not already have a dedicated property such as `cuda_architectures(...)` or `undefines(...)`
 
 ## `additional_link_args`
 
@@ -550,7 +562,7 @@ Fields:
 
 - `path`
 - `subdir`
-- `cmake_target`
+- `cmake(...)`
 
 The resolved package directory may provide either `CMakeLists.txt` or `project.bbs`.
 
@@ -563,7 +575,9 @@ static_lib(
   id(my_dep)
   path("../third_party/my_dep")
   subdir("src")
-  cmake_target(my_dep)
+  cmake(
+    target(my_dep)
+  )
 )
 ```
 
@@ -576,7 +590,9 @@ static_lib(
     link("https://example.com/my_dep.git")
     tag("1.0.0")
   )
-  cmake_target(my_dep)
+  cmake(
+    target(my_dep)
+  )
 )
 ```
 
@@ -595,7 +611,9 @@ static_lib(
     link("https://example.com/my_dep.zip")
     strip_prefix("my_dep-1.0.0")
   )
-  cmake_target(my_dep)
+  cmake(
+    target(my_dep)
+  )
 )
 ```
 
@@ -604,11 +622,17 @@ Supported `archive(...)` fields:
 - `link`
 - `strip_prefix`
 
+`cmake(...)` supports:
+
+- `target(...)`: exported CMake target name
+- `args(...)`: generic CMake variable assignments such as `-DNAME=VALUE` or `NAME=VALUE`
+- `option(...)`: boolean-friendly entries such as `TRACY_ENABLE` or `TRACY_ENABLE=OFF`
+
 Important package rule:
 
 - only one package source mode should be active at a time
 - setting `path`, `repo(...)`, or `archive(...)` replaces the other package-source settings for that target
-- `cmake_target` names the target that the package backend exports, whether that backend comes from native CMake or from a nested `project.bbs`
+- `cmake.target` names the target that the package backend exports, whether that backend comes from native CMake or from a nested `project.bbs`
 
 ## Config Filters
 
