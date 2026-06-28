@@ -325,6 +325,12 @@ static bool builders_write_cmakelists(const project* proj, const builder* bld, c
     return false;
   if (bld->lang == LANG_CUDA && !project_textbuf_appendf(&buf, "set_target_properties(%s PROPERTIES CUDA_SEPARABLE_COMPILATION ON)\n", target_name))
     return false;
+  if (!project_textbuf_append(&buf, "if(APPLE)\n"))
+    return false;
+  if (!project_textbuf_appendf(&buf, "  target_link_options(%s PRIVATE \"-undefined\" \"dynamic_lookup\")\n", target_name))
+    return false;
+  if (!project_textbuf_append(&buf, "endif()\n"))
+    return false;
   if (!project_textbuf_append(&buf, "if(WIN32)\n"))
     return false;
   if (!project_textbuf_appendf(&buf, "  target_link_libraries(%s PRIVATE \"%s\")\n", target_name, project_escape_cmake_string(import_lib ? import_lib : "")))
