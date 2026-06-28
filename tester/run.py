@@ -217,6 +217,8 @@ class Harness:
             "could not find cuda",
             "no cuda toolset found",
             "cudatoolkit",
+            "cuda compiler identification is unknown",
+            "failed to detect a default cuda architecture",
             "enable_language",
             "unsupported toolchain",
             "kernel launch failed",

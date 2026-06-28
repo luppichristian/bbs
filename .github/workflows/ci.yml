@@ -43,7 +43,8 @@ jobs:
             libxi-dev \
             libxinerama-dev \
             libxkbcommon-dev \
-            libxrandr-dev
+            libxrandr-dev \
+            zip
 
       - name: Build bbs (Windows)
         if: runner.os == 'Windows'
