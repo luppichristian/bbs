@@ -69,7 +69,29 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          python tester/run.py --bbs build/ci-bbs/bbs --show-log-paths
+          set -o pipefail
+          python tester/run.py --bbs build/ci-bbs/bbs --show-log-paths 2>&1 | tee tester-output.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            fail_line=$(grep '^\[FAIL\]' tester-output.log | tail -n 1 || true)
+            if [ -n "$fail_line" ]; then
+              echo "::error title=isolated tester failure::$fail_line"
+            fi
+
+            fail_log=$(printf '%s\n' "$fail_line" | sed -n 's/.*See \(.*\)$/\1/p')
+            if [ -n "$fail_log" ] && [ -f "$fail_log" ]; then
+              echo "::group::failing tester log"
+              tail -n 200 "$fail_log"
+              echo "::endgroup::"
+
+              fail_summary=$(tail -n 40 "$fail_log" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-180)
+              if [ -n "$fail_summary" ]; then
+                echo "::error title=failing tester log tail::$fail_summary"
+              fi
+            fi
+
+            exit "$status"
+          fi
 
       - name: Upload tester logs
         if: always()
