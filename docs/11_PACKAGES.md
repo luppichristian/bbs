@@ -320,9 +320,11 @@ That means you can often just run:
 bbs build
 ```
 
-and let `bbs` resolve packages automatically.
+and let `bbs` resolve missing packages automatically.
 
-Use `bbs package ...` when you want to inspect or refresh packages explicitly.
+Normal `bbs build`, `bbs run`, `bbs test`, and `bbs dist` do not probe repo remotes for freshness on every invocation. They only fetch repo/archive packages when the local cache is missing.
+
+Use `bbs package ...` when you want to inspect package status or refresh packages explicitly.
 
 ## Common Failure Cases
 

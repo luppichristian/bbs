@@ -57,7 +57,7 @@ What `bbs` gives you:
 - file watching with automatic rebuilds through `bbs auto`
 - a distribution flow with staging and optional archive creation
 - global config in `config.bbs` next to `bbs`, with local config overrides in `config.bbs`
-- helper generators such as `.gitignore` and GitHub workflows
+- helper generators such as `.gitignore`, VSCode workspace files, and GitHub workflows
 - metacompilation through `builders(...)`, so projects can inject dynamic prebuild/post-command logic without forking `bbs`
 
 In short:

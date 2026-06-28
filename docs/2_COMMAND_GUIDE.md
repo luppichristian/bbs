@@ -110,6 +110,7 @@ Built-in formats:
 
 - `gitignore`
 - `github`
+- `vscode`
 
 Custom formats can be defined in the global or local `config.bbs` with `gen(...)` entries.
 
@@ -124,6 +125,7 @@ Examples:
 bbs gen gitignore
 bbs gen github
 bbs gen github -p windows-x86_64,linux-x86_64
+bbs gen vscode
 bbs gen .clang-format
 ```
 
@@ -287,6 +289,8 @@ Forms:
 - `bbs package <package_name>`: inspect one package target
 
 `--refresh` refreshes repo-backed packages before printing package info.
+
+Normal `bbs build`, `bbs run`, `bbs test`, and `bbs dist` only resolve missing package caches. They do not probe remotes for freshness on every invocation.
 
 Examples:
 

@@ -1202,6 +1202,32 @@ static int gen_copy_output_file(const char* src, const char* dst, bool override_
   return 0;
 }
 
+static bool gen_build_vscode_settings_text(const project* proj, project_textbuf* buf) {
+  if (!proj || !buf)
+    return false;
+
+  const char* build_root = project_build_root_abs(proj);
+  if (!build_root || !build_root[0])
+    return false;
+
+  return project_textbuf_appendf(buf,
+                                 "{\n"
+                                 "  \"cmake.useCMakePresets\": \"always\",\n"
+                                 "  \"cmake.sourceDirectory\": \"%s\",\n"
+                                 "  \"C_Cpp.default.configurationProvider\": \"ms-vscode.cmake-tools\"\n"
+                                 "}\n",
+                                 build_root);
+}
+
+static const char* gen_vscode_extensions_text(void) {
+  return "{\n"
+         "  \"recommendations\": [\n"
+         "    \"ms-vscode.cmake-tools\",\n"
+         "    \"ms-vscode.cpptools\"\n"
+         "  ]\n"
+         "}\n";
+}
+
 static bool gen_append_github_command_steps(project_textbuf* buf, const char* title, const char* windows_cmd, const char* unix_cmd) {
   return project_textbuf_appendf(buf,
                                  "      - name: %s (Windows)\n"
@@ -1890,7 +1916,7 @@ static int run_cmd_gen(cmd_ctx* cmdctx) {
 
   if (!format || !format[0]) {
     error("Missing generator format.");
-    print("Use 'bbs gen gitignore', 'bbs gen github', or a configured custom generator name.");
+    print("Use 'bbs gen gitignore', 'bbs gen github', 'bbs gen vscode', or a configured custom generator name.");
     return error_code(CMD_GEN, 0);
   }
 
@@ -1940,6 +1966,27 @@ static int run_cmd_gen(cmd_ctx* cmdctx) {
     return rc;
   }
 
+  if (_stricmp(format, "vscode") == 0) {
+    project proj = {0};
+    if (!project_load(&proj))
+      return error_code(CMD_GEN, 26);
+
+    project_textbuf settings_buf = {0};
+    if (!gen_build_vscode_settings_text(&proj, &settings_buf)) {
+      if (settings_buf.data)
+        free(settings_buf.data);
+      error("Failed to build VSCode settings content.");
+      return error_code(CMD_GEN, 27);
+    }
+
+    int rc = gen_write_text_file(get_path_cwd(".vscode/settings.json"), settings_buf.data ? settings_buf.data : "", opts[OVERRIDE].present, CMD_GEN, 28);
+    if (rc == 0)
+      rc = gen_write_text_file(get_path_cwd(".vscode/extensions.json"), gen_vscode_extensions_text(), opts[OVERRIDE].present, CMD_GEN, 29);
+    if (settings_buf.data)
+      free(settings_buf.data);
+    return rc;
+  }
+
   user* u = user_init(cmdctx);
   if (!u)
     return error_code(CMD_GEN, 30);
@@ -1949,7 +1996,7 @@ static int run_cmd_gen(cmd_ctx* cmdctx) {
     return gen_copy_output_file(custom->copyfile, get_path_cwd(custom->name), opts[OVERRIDE].present, CMD_GEN, 31);
   } else {
     error("Unknown generator format '%s'.", format);
-    print("Supported built-in formats: gitignore, github");
+    print("Supported built-in formats: gitignore, github, vscode");
     return error_code(CMD_GEN, 1);
   }
 }

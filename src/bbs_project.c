@@ -3614,7 +3614,7 @@ static const char* project_package_status_label(const project_package_info* info
   return info && info->status ? info->status : "unknown";
 }
 
-static bool project_package_query(const target* tgt, toolchain* tc, project_package_info* out) {
+static bool project_package_query(const target* tgt, toolchain* tc, bool check_remote, project_package_info* out) {
   if (!out)
     return false;
   memset(out, 0, sizeof(*out));
@@ -3639,8 +3639,8 @@ static bool project_package_query(const target* tgt, toolchain* tc, project_pack
     out->backend = project_package_backend_detect(out->source, NULL);
     out->has_cmakelists = out->backend == PACKAGE_BACKEND_CMAKE;
     out->has_project_config = out->backend == PACKAGE_BACKEND_BBS;
-    out->local_ref = dir_exists(out->cache_dir) ? project_git_resolve_local_head(tc, out->cache_dir) : NULL;
-    out->remote_ref = project_git_resolve_remote_ref(tc, tgt->package_repo_link, tgt->package_repo_tag, tgt->package_repo_commit);
+    out->local_ref = check_remote && dir_exists(out->cache_dir) ? project_git_resolve_local_head(tc, out->cache_dir) : NULL;
+    out->remote_ref = check_remote ? project_git_resolve_remote_ref(tc, tgt->package_repo_link, tgt->package_repo_tag, tgt->package_repo_commit) : NULL;
     if (!dir_exists(out->cache_dir))
       out->status = "missing";
     else if (out->local_ref && out->remote_ref)
@@ -3703,7 +3703,7 @@ static bool project_fetch_repo_package(target* tgt, toolchain* tc, bool refresh)
     return true;
 
   project_package_info info = {0};
-  if (!project_package_query(tgt, tc, &info))
+  if (!project_package_query(tgt, tc, false, &info))
     return false;
 
   const char* packages_root = toolchain_norm_path(project_package_root_abs());
@@ -3786,7 +3786,7 @@ static bool project_fetch_archive_package(target* tgt, toolchain* tc, bool refre
     return true;
 
   project_package_info info = {0};
-  if (!project_package_query(tgt, tc, &info))
+  if (!project_package_query(tgt, tc, false, &info))
     return false;
 
   const char* packages_root = toolchain_norm_path(project_package_root_abs());
@@ -6128,7 +6128,7 @@ static void project_print_package_list_row(const target* tgt, toolchain* tc) {
                         (copy.package_repo_link && copy.package_repo_link[0] ? PACKAGE_SOURCE_REPO :
                          (copy.package_archive_link && copy.package_archive_link[0] ? PACKAGE_SOURCE_ARCHIVE : PACKAGE_SOURCE_NONE));
   project_package_info info = {0};
-  project_package_query(&copy, tc, &info);
+  project_package_query(&copy, tc, true, &info);
   const char* location = copy.package_path ? copy.package_path : (copy.package_repo_link ? copy.package_repo_link : (copy.package_archive_link ? copy.package_archive_link : ""));
   print("  %-16s %-8s %-12s %-18s %s",
         copy.meta.id ? copy.meta.id : "",
@@ -6147,7 +6147,7 @@ static void project_print_package_summary(const target* tgt, toolchain* tc) {
                         (copy.package_repo_link && copy.package_repo_link[0] ? PACKAGE_SOURCE_REPO :
                          (copy.package_archive_link && copy.package_archive_link[0] ? PACKAGE_SOURCE_ARCHIVE : PACKAGE_SOURCE_NONE));
   project_package_info info = {0};
-  project_package_query(&copy, tc, &info);
+  project_package_query(&copy, tc, true, &info);
 
   print("Package: %s", copy.meta.id ? copy.meta.id : "");
   print("  Type: %s", project_target_type_name(copy.type));
