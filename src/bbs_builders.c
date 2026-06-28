@@ -412,9 +412,11 @@ static bool builders_ensure_loaded(const project* proj) {
     }
     rt->callback = (builder_callback_fn)GetProcAddress(rt->handle, "bbs_callback");
 #else
+    dlerror();
     rt->handle = dlopen(rt->dll_path, RTLD_NOW);
     if (!rt->handle) {
-      error("Failed to load builder module '%s'.", rt->dll_path ? rt->dll_path : "");
+      const char* load_err = dlerror();
+      error("Failed to load builder module '%s': %s", rt->dll_path ? rt->dll_path : "", load_err ? load_err : "unknown dlopen error");
       return false;
     }
     rt->callback = (builder_callback_fn)dlsym(rt->handle, "bbs_callback");
