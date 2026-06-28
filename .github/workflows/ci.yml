@@ -24,6 +24,23 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Ubuntu system dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxrandr-dev
+
       - name: Build bbs (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
