@@ -110,10 +110,13 @@ class Harness:
         shutil.copytree(self.repo_root / "pub", runtime_pub)
         destination = self.bin_dir / source.name
         shutil.copy2(source, destination)
+        sibling_dirs = [source.parent, source.parent / "Debug", source.parent / "Release", source.parent / "RelWithDebInfo"]
         for sibling_name in ["bbs.lib", "bbs.exp", "bbs.pdb"]:
-            sibling = source.parent / sibling_name
-            if sibling.exists():
-                shutil.copy2(sibling, self.bin_dir / sibling_name)
+            for sibling_dir in sibling_dirs:
+                sibling = sibling_dir / sibling_name
+                if sibling.exists():
+                    shutil.copy2(sibling, self.bin_dir / sibling_name)
+                    break
         destination.chmod(destination.stat().st_mode | 0o111)
         return destination
 

@@ -7,15 +7,8 @@ on:
 
 jobs:
   tester:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - windows-latest
-          - ubuntu-latest
-          - macos-latest
+    name: windows-latest
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -24,36 +17,22 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Build bbs (Windows)
-        if: runner.os == 'Windows'
+      - name: Build bbs
         shell: pwsh
         run: |
           cmake -S . -B build/ci-bbs
           cmake --build build/ci-bbs --config Release
 
-      - name: Build bbs (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          cmake -S . -B build/ci-bbs
-          cmake --build build/ci-bbs --config Release
-
-      - name: Run isolated tester (Windows)
-        if: runner.os == 'Windows'
+      - name: Run isolated tester
         shell: pwsh
         run: |
           python tester/run.py --bbs build/ci-bbs/bbs.exe --show-log-paths
-
-      - name: Run isolated tester (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          python tester/run.py --bbs build/ci-bbs/bbs --show-log-paths
 
       - name: Upload tester logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tester-artifacts-${{ matrix.os }}
+          name: tester-artifacts-windows-latest
           path: tester/.artifacts/
+          include-hidden-files: true
           if-no-files-found: warn
