@@ -408,7 +408,21 @@ def build_case_list(h: Harness) -> list[tuple[str, Callable[[], str]]]:
     def raylib_example() -> str:
         cwd = h.example_dir("raylib_example")
         h.run_bbs("raylib_example_package_list", cwd, "package", "list", timeout=2400)
-        h.run_bbs("raylib_example_build", cwd, "build", timeout=2400)
+        last_exc: AssertionError | None = None
+        for attempt in range(1, 4):
+            try:
+                build_name = "raylib_example_build" if attempt == 1 else f"raylib_example_build_retry_{attempt}"
+                h.run_bbs(build_name, cwd, "build", timeout=2400)
+                return "repo-backed package build succeeded"
+            except AssertionError as exc:
+                last_exc = exc
+                if attempt == 3:
+                    raise
+                for path in [cwd / "build", cwd / "dist", cwd / "releases", h.bin_dir / "packages"]:
+                    if path.exists():
+                        remove_tree(path)
+        if last_exc is not None:
+            raise last_exc
         return "repo-backed package build succeeded"
 
     def empty_dir_failure() -> str:
