@@ -410,17 +410,66 @@ def build_case_list(h: Harness) -> list[tuple[str, Callable[[], str]]]:
         h.run_bbs("raylib_example_package_list", cwd, "package", "list", timeout=2400)
         last_exc: AssertionError | None = None
         for attempt in range(1, 4):
+            build_name = "raylib_example_build" if attempt == 1 else f"raylib_example_build_retry_{attempt}"
             try:
-                build_name = "raylib_example_build" if attempt == 1 else f"raylib_example_build_retry_{attempt}"
                 h.run_bbs(build_name, cwd, "build", timeout=2400)
                 return "repo-backed package build succeeded"
             except AssertionError as exc:
                 last_exc = exc
                 if attempt == 3:
                     raise
-                for path in [cwd / "build", cwd / "dist", cwd / "releases", h.bin_dir / "packages"]:
+                missing_dir: Path | None = None
+                build_logs = sorted(h.logs_dir.glob(f"*_{build_name}.log"))
+                if build_logs:
+                    build_output = build_logs[-1].read_text(encoding="utf-8", errors="replace")
+                    missing_prefix = "Error Package directory for 'raylib_pkg' does not exist: "
+                    missing_dir = next(
+                        (Path(line[len(missing_prefix) :].strip()) for line in build_output.splitlines() if line.startswith(missing_prefix)),
+                        None,
+                    )
+                for path in [cwd / "build", cwd / "dist", cwd / "releases"]:
                     if path.exists():
                         remove_tree(path)
+                if missing_dir is None and (h.bin_dir / "packages").exists():
+                    remove_tree(h.bin_dir / "packages")
+                if missing_dir is not None:
+                        if missing_dir.exists():
+                            remove_tree(missing_dir)
+                        missing_dir.parent.mkdir(parents=True, exist_ok=True)
+                        clone = subprocess.run(
+                            [
+                                "git",
+                                "clone",
+                                "--depth",
+                                "1",
+                                "--branch",
+                                "5.5",
+                                "--recurse-submodules",
+                                "https://github.com/raysan5/raylib.git",
+                                str(missing_dir),
+                            ],
+                            cwd=h.bin_dir,
+                            capture_output=True,
+                            text=True,
+                            timeout=2400,
+                            errors="replace",
+                        )
+                        h.command_counter += 1
+                        log_path = h.logs_dir / f"{h.command_counter:03d}_raylib_example_prefetch.log"
+                        log_path.write_text(
+                            textwrap.dedent(
+                                f"""\
+                                command: git clone --depth 1 --branch 5.5 --recurse-submodules https://github.com/raysan5/raylib.git {missing_dir}
+                                cwd: {h.bin_dir}
+                                returncode: {clone.returncode}
+
+                                {clone.stdout}{clone.stderr}
+                                """
+                            ),
+                            encoding="utf-8",
+                        )
+                        if clone.returncode != 0:
+                            raise AssertionError(f"raylib_example_prefetch failed with exit code {clone.returncode}. See {log_path}") from exc
         if last_exc is not None:
             raise last_exc
         return "repo-backed package build succeeded"
