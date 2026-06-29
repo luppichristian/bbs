@@ -211,6 +211,23 @@ class Harness:
                 return
         raise AssertionError(f"None of the archives contained {sorted(expected)}")
 
+    def has_probable_cuda_toolkit(self) -> bool:
+        for env_name in ["CUDA_PATH", "CUDA_HOME", "CUDAToolkit_ROOT", "CUDACXX"]:
+            value = os.environ.get(env_name)
+            if value and Path(value).exists():
+                return True
+        if shutil.which("nvcc"):
+            return True
+        if self.host_is_windows:
+            program_files = os.environ.get("ProgramFiles")
+            if program_files and (Path(program_files) / "NVIDIA GPU Computing Toolkit" / "CUDA").exists():
+                return True
+        else:
+            for path in [Path("/usr/local/cuda"), Path("/opt/cuda")]:
+                if path.exists():
+                    return True
+        return False
+
     def is_cuda_environment_issue(self, output: str) -> bool:
         lowered = output.lower()
         return any(token in lowered for token in [
@@ -366,6 +383,8 @@ def build_case_list(h: Harness) -> list[tuple[str, Callable[[], str]]]:
 
     def cuda_console() -> str:
         cwd = h.example_dir("cuda_console")
+        if not h.has_probable_cuda_toolkit():
+            raise SkipCase("CUDA toolkit not detected on this runner")
         h.run_bbs("cuda_console_init", cwd, "update", "--init-toolchain")
         try:
             h.run_bbs("cuda_console_build", cwd, "build", timeout=2400)
