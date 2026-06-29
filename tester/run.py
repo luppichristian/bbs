@@ -422,7 +422,7 @@ def build_case_list(h: Harness) -> list[tuple[str, Callable[[], str]]]:
                 build_logs = sorted(h.logs_dir.glob(f"*_{build_name}.log"))
                 if build_logs:
                     build_output = build_logs[-1].read_text(encoding="utf-8", errors="replace")
-                    missing_prefix = "Error Package directory for 'raylib_pkg' does not exist: "
+                    missing_prefix = "Fetching package 'raylib_pkg' into "
                     missing_dir = next(
                         (Path(line.lstrip()[len(missing_prefix) :].strip()) for line in build_output.splitlines() if line.lstrip().startswith(missing_prefix)),
                         None,
