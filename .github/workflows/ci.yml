@@ -44,6 +44,7 @@ jobs:
             libxinerama-dev \
             libxkbcommon-dev \
             libxrandr-dev \
+            libxrender-dev \
             zip
 
       - name: Build bbs (Windows)
@@ -74,7 +75,10 @@ jobs:
           python tester/run.py --bbs build/ci-bbs/bbs --show-log-paths 2>&1 | tee tester-output.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            fail_line=$(grep '^\[FAIL\]' tester-output.log | tail -n 1 || true)
+            fail_line=$(awk 'f && /^  - / {print; exit} /^FAIL$/ {f=1}' tester-output.log || true)
+            if [ -z "$fail_line" ]; then
+              fail_line=$(grep '^\[FAIL\]' tester-output.log | tail -n 1 || true)
+            fi
             if [ -n "$fail_line" ]; then
               echo "::error title=isolated tester failure::$fail_line"
             fi
