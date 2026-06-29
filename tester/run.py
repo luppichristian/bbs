@@ -424,7 +424,7 @@ def build_case_list(h: Harness) -> list[tuple[str, Callable[[], str]]]:
                     build_output = build_logs[-1].read_text(encoding="utf-8", errors="replace")
                     missing_prefix = "Error Package directory for 'raylib_pkg' does not exist: "
                     missing_dir = next(
-                        (Path(line[len(missing_prefix) :].strip()) for line in build_output.splitlines() if line.startswith(missing_prefix)),
+                        (Path(line.lstrip()[len(missing_prefix) :].strip()) for line in build_output.splitlines() if line.lstrip().startswith(missing_prefix)),
                         None,
                     )
                 for path in [cwd / "build", cwd / "dist", cwd / "releases"]:
