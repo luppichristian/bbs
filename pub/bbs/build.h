@@ -13,7 +13,7 @@ extern "C" {
 
 /* Public builder API version, not the built project's version. */
 #define BBS_VERSION_MAJOR     0u
-#define BBS_VERSION_MINOR     7u
+#define BBS_VERSION_MINOR     8u
 #define BBS_BUILD_API_VERSION 2u
 
 #if defined(_WIN32) || defined(__CYGWIN__)
