@@ -130,6 +130,18 @@ This is usually `<dist>/<config>-<platform>/gen`.
 
 Target id.
 
+When used as a scoped lookup, it can also read resolved fields from the current target.
+
+Examples:
+
+```txt
+$TARGET(output)
+$TARGET(lang)
+$TARGET(package.resolved_dir)
+$TARGET(include_dirs.0)
+$TARGET(exe)
+```
+
 ## `$OUT`
 
 Target output name.
@@ -152,6 +164,19 @@ Absolute path to the target executable output when available.
 
 Working directory used for the script being executed.
 
+## `$DEP(...)` / `$DEPENDENCY(...)`
+
+Scoped lookup into another resolved target by id.
+The first path segment is the dependency target id, and the remaining path is resolved the same way as `$TARGET(...)`.
+
+Examples:
+
+```txt
+$DEP(raylib.package.resolved_dir)
+$DEPENDENCY(enet.package.build_dir)
+$DEP(my_codegen.exe)
+```
+
 ## Scoped Path Rules
 
 - use `.` for nested fields, for example `$PROJECT(license.type)`
@@ -159,6 +184,10 @@ Working directory used for the script being executed.
 - scalar values are expanded as text
 - non-scalar nodes are left unchanged
 - numeric path segments can index repeated children in source order, for example `$PROJECT(targets.0.output)`
+- `$TARGET(...)` supports resolved scalar target fields such as `id`, `name`, `lang`, `type`, `output`, `runtime`, `stdver`, `warning_level`, `opt_level`, `stack_size`, `warnings_as_errors`, `defines`, `undefines`, `additional_compile_args`, `additional_link_args`, `platform`, `os`, `arch`, `workdir`, `exe`, `build_dir`, `dist_dir`, `gen_dir`, and `assets_dir`
+- `$TARGET(...)` also supports nested groups such as `meta.*`, `license.type`, `license.file`, `package.*`, and `dist.*`
+- list-style target fields can be indexed with numeric suffixes, for example `$TARGET(include_dirs.0)`, `$TARGET(dependencies.1)`, `$TARGET(package.cmake_args.0)`, and `$TARGET(package.cmake_options.0)`
+- `$DEP(...)` and `$DEPENDENCY(...)` first resolve the referenced target id, then apply the same lookup rules as `$TARGET(...)`
 - bare `$PROJECT`, `$CONFIG`, and `$TOOLCHAIN` were previously file-path tokens; prefer `$PROJECT_FILE`, `$GLOBAL_FILE`, and `$TOOLCHAIN_FILE` for that use
 
 ## Practical Examples
@@ -205,6 +234,16 @@ post_build_cmds(
 ```txt
 cmake_args("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DPROJECT_ID=$PROJECT(id)")
 ctest_args("--output-on-failure --label-regex $PROJECT(id)")
+```
+
+## Query resolved target and dependency fields
+
+```txt
+pre_build_cmds(
+  "echo target output: $TARGET(output)"
+  "echo first include dir: $TARGET(include_dirs.0)"
+  "echo enet package dir: $DEP(enet.package.resolved_dir)"
+)
 ```
 
 ## Refer to config file paths explicitly

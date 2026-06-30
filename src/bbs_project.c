@@ -24,6 +24,7 @@ static const char* project_path_parent(const char* path);
 static bool project_prepare_packages(project* proj, toolchain* tc, const char* platform, bool refresh);
 static bool project_generate_cmakelists(const project* proj, toolchain* tc, const char* platform_id, bool* changed);
 static bool project_target_needs_build_for_execution(const project* proj, const target* tgt, const char* platform);
+static bool project_run_cmake_preset(toolchain* tc, const project* proj, const char* preset, const char* platform);
 static const char* project_escape_cmake_string(const char* text);
 static bool project_textbuf_appendf(project_textbuf* buf, const char* fmt, ...);
 static const char* project_compiler_undefines_args(const char* text, const char* prefix);
@@ -4211,7 +4212,274 @@ static const char* project_lookup_config_path(node* root, const char* path) {
   return node_scalar_text_canonical(value);
 }
 
-static const char* project_scoped_token_value(const char* name, const char* path, const project* proj, toolchain* tc) {
+static const char* project_size_text(size_t value) {
+  char buf[32] = {0};
+  snprintf(buf, sizeof(buf), "%zu", value);
+  return arena_text(buf, strlen(buf));
+}
+
+static bool project_parse_path_head(const char* path, const char** out_rest, char* head, size_t head_cap) {
+  if (out_rest)
+    *out_rest = NULL;
+  if (!path || !path[0] || !head || head_cap == 0)
+    return false;
+
+  const char* dot = strchr(path, '.');
+  size_t len = dot ? (size_t)(dot - path) : strlen(path);
+  if (len == 0 || len >= head_cap)
+    return false;
+
+  memcpy(head, path, len);
+  head[len] = '\0';
+  if (out_rest)
+    *out_rest = dot ? dot + 1 : NULL;
+  return true;
+}
+
+static bool project_path_is_exact(const char* path, const char* text) {
+  return path && text && _stricmp(path, text) == 0;
+}
+
+static bool project_parse_nonnegative_int(const char* text, int* out) {
+  if (out)
+    *out = -1;
+  if (!text || !text[0])
+    return false;
+
+  int value = 0;
+  for (const unsigned char* p = (const unsigned char*)text; *p; ++p) {
+    if (!isdigit(*p))
+      return false;
+    value = (value * 10) + (*p - '0');
+  }
+
+  if (out)
+    *out = value;
+  return true;
+}
+
+static const char* project_target_list_path_value(const char* path, const char* list_name, const char** items, int count) {
+  const char* rest = NULL;
+  char head[64] = {0};
+  if (!project_parse_path_head(path, &rest, head, sizeof(head)) || _stricmp(head, list_name) != 0)
+    return NULL;
+  if (!rest || !rest[0] || !items || count <= 0)
+    return NULL;
+
+  int index = -1;
+  if (!project_parse_nonnegative_int(rest, &index) || index < 0 || index >= count)
+    return NULL;
+  return items[index] ? items[index] : NULL;
+}
+
+static const char* project_target_scalar_path_value(const project* proj,
+                                                    const target* tgt,
+                                                    const char* path,
+                                                    const char* platform,
+                                                    const char* workdir,
+                                                    os target_os,
+                                                    arch target_arch) {
+  if (!tgt || !path || !path[0])
+    return NULL;
+
+  if (project_path_is_exact(path, "id"))
+    return tgt->meta.id;
+  if (project_path_is_exact(path, "name"))
+    return tgt->meta.name;
+  if (project_path_is_exact(path, "repo"))
+    return tgt->meta.repo;
+  if (project_path_is_exact(path, "authors"))
+    return tgt->meta.authors;
+  if (project_path_is_exact(path, "ver"))
+    return project_has_ver(tgt->meta.ver) ? project_version_text(tgt->meta.ver) : NULL;
+  if (project_path_is_exact(path, "lang"))
+    return project_lang_name(tgt->lang);
+  if (project_path_is_exact(path, "type"))
+    return project_target_type_name(tgt->type);
+  if (project_path_is_exact(path, "output"))
+    return tgt->output ? tgt->output : tgt->meta.id;
+  if (project_path_is_exact(path, "package_source"))
+    return project_package_source_name(tgt->package_source);
+  if (project_path_is_exact(path, "package_backend"))
+    return project_package_backend_name(tgt->package_backend);
+  if (project_path_is_exact(path, "package_path"))
+    return tgt->package_path;
+  if (project_path_is_exact(path, "package_subdir"))
+    return tgt->package_subdir;
+  if (project_path_is_exact(path, "package_repo_link"))
+    return tgt->package_repo_link;
+  if (project_path_is_exact(path, "package_repo_tag"))
+    return tgt->package_repo_tag;
+  if (project_path_is_exact(path, "package_repo_commit"))
+    return tgt->package_repo_commit;
+  if (project_path_is_exact(path, "package_cmake_target"))
+    return tgt->package_cmake_target;
+  if (project_path_is_exact(path, "package_project_cfg_path"))
+    return tgt->package_project_cfg_path;
+  if (project_path_is_exact(path, "package_resolved_dir"))
+    return tgt->package_resolved_dir;
+  if (project_path_is_exact(path, "package_cache_dir"))
+    return tgt->package_cache_dir;
+  if (project_path_is_exact(path, "package_build_dir"))
+    return tgt->package_build_dir;
+  if (project_path_is_exact(path, "defines"))
+    return tgt->defines;
+  if (project_path_is_exact(path, "undefines"))
+    return tgt->undefines;
+  if (project_path_is_exact(path, "additional_compile_args"))
+    return tgt->additional_compile_args;
+  if (project_path_is_exact(path, "additional_link_args"))
+    return tgt->additional_link_args;
+  if (project_path_is_exact(path, "runtime"))
+    return project_runtime_name(tgt->runtime);
+  if (project_path_is_exact(path, "stdver"))
+    return tgt->stdver;
+  if (project_path_is_exact(path, "cuda_architectures"))
+    return tgt->cuda_architectures;
+  if (project_path_is_exact(path, "testing"))
+    return tgt->testing ? "true" : "false";
+  if (project_path_is_exact(path, "warning_level"))
+    return project_warning_level_name(tgt->warning_level);
+  if (project_path_is_exact(path, "opt_level"))
+    return project_opt_level_name(tgt->opt_level);
+  if (project_path_is_exact(path, "stack_size"))
+    return project_size_text(tgt->stack_size);
+  if (project_path_is_exact(path, "warnings_as_errors"))
+    return tgt->warnings_as_errors ? "true" : "false";
+  if (project_path_is_exact(path, "exe"))
+    return (proj && platform) ? project_target_executable_abs(proj, tgt, platform) : NULL;
+  if (project_path_is_exact(path, "build_dir"))
+    return proj ? project_build_binary_dir_abs(proj, proj->active_config, platform) : NULL;
+  if (project_path_is_exact(path, "dist_dir"))
+    return proj ? project_dist_config_dir_abs(proj, proj->active_config, platform) : NULL;
+  if (project_path_is_exact(path, "gen_dir"))
+    return proj ? project_dist_gen_dir_abs(proj, proj->active_config, platform) : NULL;
+  if (project_path_is_exact(path, "assets_dir"))
+    return proj ? project_assets_root_abs(proj) : NULL;
+  if (project_path_is_exact(path, "platform"))
+    return platform && platform[0] ? platform : project_default_platform_id();
+  if (project_path_is_exact(path, "os"))
+    return target_os < OS_MAX ? OS_NAMES[target_os] : project_host_os_name();
+  if (project_path_is_exact(path, "arch"))
+    return target_arch < ARCH_MAX ? ARCH_NAMES[target_arch] : project_host_arch_name();
+  if (project_path_is_exact(path, "workdir"))
+    return workdir && workdir[0] ? workdir : project_current_workdir();
+
+  if (project_target_list_path_value(path, "units", tgt->units, tgt->unit_c))
+    return project_target_list_path_value(path, "units", tgt->units, tgt->unit_c);
+  if (project_target_list_path_value(path, "include_dirs", tgt->include_dirs, tgt->include_dir_c))
+    return project_target_list_path_value(path, "include_dirs", tgt->include_dirs, tgt->include_dir_c);
+  if (project_target_list_path_value(path, "link_dirs", tgt->link_dirs, tgt->link_dir_c))
+    return project_target_list_path_value(path, "link_dirs", tgt->link_dirs, tgt->link_dir_c);
+  if (project_target_list_path_value(path, "dependencies", tgt->dependencies, tgt->dependency_c))
+    return project_target_list_path_value(path, "dependencies", tgt->dependencies, tgt->dependency_c);
+  if (project_target_list_path_value(path, "link_libs", tgt->link_libs, tgt->link_libs_count))
+    return project_target_list_path_value(path, "link_libs", tgt->link_libs, tgt->link_libs_count);
+  if (project_target_list_path_value(path, "test_args", tgt->test_args, tgt->test_arg_c))
+    return project_target_list_path_value(path, "test_args", tgt->test_args, tgt->test_arg_c);
+  if (project_target_list_path_value(path, "package_cmake_args", tgt->package_cmake_args, tgt->package_cmake_arg_c))
+    return project_target_list_path_value(path, "package_cmake_args", tgt->package_cmake_args, tgt->package_cmake_arg_c);
+  if (project_target_list_path_value(path, "package_cmake_options", tgt->package_cmake_options, tgt->package_cmake_option_c))
+    return project_target_list_path_value(path, "package_cmake_options", tgt->package_cmake_options, tgt->package_cmake_option_c);
+
+  const char* rest = NULL;
+  char head[64] = {0};
+  if (!project_parse_path_head(path, &rest, head, sizeof(head)))
+    return NULL;
+
+  if (_stricmp(head, "meta") == 0)
+    return rest ? project_target_scalar_path_value(proj, tgt, rest, platform, workdir, target_os, target_arch) : NULL;
+
+  if (_stricmp(head, "license") == 0) {
+    if (!rest)
+      return NULL;
+    if (_stricmp(rest, "type") == 0)
+      return tgt->meta.license.type;
+    if (_stricmp(rest, "file") == 0)
+      return tgt->meta.license.file;
+    return NULL;
+  }
+
+  if (_stricmp(head, "package") == 0) {
+    if (!rest)
+      return NULL;
+    if (_stricmp(rest, "source") == 0)
+      return project_package_source_name(tgt->package_source);
+    if (_stricmp(rest, "backend") == 0)
+      return project_package_backend_name(tgt->package_backend);
+    if (_stricmp(rest, "path") == 0)
+      return tgt->package_path;
+    if (_stricmp(rest, "subdir") == 0)
+      return tgt->package_subdir;
+    if (_stricmp(rest, "repo_link") == 0)
+      return tgt->package_repo_link;
+    if (_stricmp(rest, "repo_tag") == 0)
+      return tgt->package_repo_tag;
+    if (_stricmp(rest, "repo_commit") == 0)
+      return tgt->package_repo_commit;
+    if (_stricmp(rest, "cmake_target") == 0)
+      return tgt->package_cmake_target;
+    if (_stricmp(rest, "project_cfg_path") == 0)
+      return tgt->package_project_cfg_path;
+    if (_stricmp(rest, "resolved_dir") == 0)
+      return tgt->package_resolved_dir;
+    if (_stricmp(rest, "cache_dir") == 0)
+      return tgt->package_cache_dir;
+    if (_stricmp(rest, "build_dir") == 0)
+      return tgt->package_build_dir;
+    if (project_target_list_path_value(rest, "cmake_args", tgt->package_cmake_args, tgt->package_cmake_arg_c))
+      return project_target_list_path_value(rest, "cmake_args", tgt->package_cmake_args, tgt->package_cmake_arg_c);
+    if (project_target_list_path_value(rest, "cmake_options", tgt->package_cmake_options, tgt->package_cmake_option_c))
+      return project_target_list_path_value(rest, "cmake_options", tgt->package_cmake_options, tgt->package_cmake_option_c);
+    return NULL;
+  }
+
+  if (_stricmp(head, "dist") == 0) {
+    if (!rest)
+      return NULL;
+    if (_stricmp(rest, "archive") == 0)
+      return tgt->dist.archive ? "true" : "false";
+    if (_stricmp(rest, "copy_assets") == 0)
+      return tgt->dist.copy_assets ? "true" : "false";
+    if (_stricmp(rest, "archive_name") == 0)
+      return tgt->dist.archive_name;
+    return NULL;
+  }
+
+  return NULL;
+}
+
+static const char* project_dependency_target_path_value(const char* path,
+                                                        const project* proj,
+                                                        const char* platform,
+                                                        toolchain* tc,
+                                                        const char* workdir,
+                                                        os target_os,
+                                                        arch target_arch) {
+  (void)tc;
+  if (!path || !path[0] || !proj)
+    return NULL;
+
+  const char* rest = NULL;
+  char dep_id[128] = {0};
+  if (!project_parse_path_head(path, &rest, dep_id, sizeof(dep_id)) || !rest || !rest[0])
+    return NULL;
+
+  int index = project_find_target_index(proj, dep_id);
+  if (index < 0 || index >= proj->target_c)
+    return NULL;
+  return project_target_scalar_path_value(proj, &proj->targets[index], rest, platform, workdir, target_os, target_arch);
+}
+
+static const char* project_scoped_token_value(const char* name,
+                                              const char* path,
+                                              const project* proj,
+                                              const target* tgt,
+                                              const char* platform,
+                                              toolchain* tc,
+                                              const char* workdir,
+                                              os target_os,
+                                              arch target_arch) {
   if (!name || !name[0] || !path || !path[0])
     return NULL;
 
@@ -4221,6 +4489,10 @@ static const char* project_scoped_token_value(const char* name, const char* path
     return project_lookup_config_path(proj ? proj->config.merged_scope : NULL, path);
   if (strcmp(name, "TOOLCHAIN") == 0)
     return project_lookup_config_path(tc ? tc->config_tree : NULL, path);
+  if (strcmp(name, "TARGET") == 0)
+    return project_target_scalar_path_value(proj, tgt, path, platform, workdir, target_os, target_arch);
+  if (strcmp(name, "DEP") == 0 || strcmp(name, "DEPENDENCY") == 0)
+    return project_dependency_target_path_value(path, proj, platform, tc, workdir, target_os, target_arch);
   return NULL;
 }
 
@@ -4374,7 +4646,7 @@ static const char* project_expand_config_string(const char* text, const project*
         if (arg_len < sizeof(arg)) {
           memcpy(arg, text + arg_start, arg_len);
           arg[arg_len] = '\0';
-          value = project_scoped_token_value(token, arg, proj, tc);
+          value = project_scoped_token_value(token, arg, proj, tgt, resolved_platform, tc, workdir, target_os, target_arch);
         }
         consumed = (arg_end + 1) - i;
       } else {
@@ -4819,17 +5091,21 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
     }
 
     for (int i = 0; i < tgt->include_dir_c; ++i) {
-      const char* dir = project_cmake_path_text(tgt->include_dirs[i] ? tgt->include_dirs[i] : "");
+      const char* expanded = project_expand_config_string(tgt->include_dirs[i] ? tgt->include_dirs[i] : "", proj, tgt, platform_id, tc, NULL);
+      const char* resolved = project_resolve_path_from_root(proj ? proj->root_dir : NULL, expanded ? expanded : (tgt->include_dirs[i] ? tgt->include_dirs[i] : ""));
+      const char* dir = project_cmake_path_text(resolved ? resolved : (expanded ? expanded : (tgt->include_dirs[i] ? tgt->include_dirs[i] : "")));
       if (!dir)
         return false;
-      if (!project_textbuf_appendf(buf, "target_include_directories(%s INTERFACE \"${BBS_PROJECT_ROOT}/%s\")\n", usage_target_name, dir))
+      if (!project_textbuf_appendf(buf, "target_include_directories(%s INTERFACE \"%s\")\n", usage_target_name, dir))
         return false;
     }
     for (int i = 0; i < tgt->link_dir_c; ++i) {
-      const char* dir = project_cmake_path_text(tgt->link_dirs[i] ? tgt->link_dirs[i] : "");
+      const char* expanded = project_expand_config_string(tgt->link_dirs[i] ? tgt->link_dirs[i] : "", proj, tgt, platform_id, tc, NULL);
+      const char* resolved = project_resolve_path_from_root(proj ? proj->root_dir : NULL, expanded ? expanded : (tgt->link_dirs[i] ? tgt->link_dirs[i] : ""));
+      const char* dir = project_cmake_path_text(resolved ? resolved : (expanded ? expanded : (tgt->link_dirs[i] ? tgt->link_dirs[i] : "")));
       if (!dir)
         return false;
-      if (!project_textbuf_appendf(buf, "target_link_directories(%s INTERFACE \"${BBS_PROJECT_ROOT}/%s\")\n", usage_target_name, dir))
+      if (!project_textbuf_appendf(buf, "target_link_directories(%s INTERFACE \"%s\")\n", usage_target_name, dir))
         return false;
     }
     for (int i = 0; i < tgt->link_libs_count; ++i) {
@@ -5030,17 +5306,21 @@ static bool project_append_cmake_target(project_textbuf* buf, const project* pro
   }
 
   for (int i = 0; i < tgt->include_dir_c; ++i) {
-    const char* dir = project_cmake_path_text(tgt->include_dirs[i] ? tgt->include_dirs[i] : "");
+    const char* expanded = project_expand_config_string(tgt->include_dirs[i] ? tgt->include_dirs[i] : "", proj, tgt, platform_id, tc, NULL);
+    const char* resolved = project_resolve_path_from_root(proj ? proj->root_dir : NULL, expanded ? expanded : (tgt->include_dirs[i] ? tgt->include_dirs[i] : ""));
+    const char* dir = project_cmake_path_text(resolved ? resolved : (expanded ? expanded : (tgt->include_dirs[i] ? tgt->include_dirs[i] : "")));
     if (!dir)
       return false;
-    if (!project_textbuf_appendf(buf, "target_include_directories(%s INTERFACE \"${BBS_PROJECT_ROOT}/%s\")\n", usage_target_name, dir))
+    if (!project_textbuf_appendf(buf, "target_include_directories(%s INTERFACE \"%s\")\n", usage_target_name, dir))
       return false;
   }
   for (int i = 0; i < tgt->link_dir_c; ++i) {
-    const char* dir = project_cmake_path_text(tgt->link_dirs[i] ? tgt->link_dirs[i] : "");
+    const char* expanded = project_expand_config_string(tgt->link_dirs[i] ? tgt->link_dirs[i] : "", proj, tgt, platform_id, tc, NULL);
+    const char* resolved = project_resolve_path_from_root(proj ? proj->root_dir : NULL, expanded ? expanded : (tgt->link_dirs[i] ? tgt->link_dirs[i] : ""));
+    const char* dir = project_cmake_path_text(resolved ? resolved : (expanded ? expanded : (tgt->link_dirs[i] ? tgt->link_dirs[i] : "")));
     if (!dir)
       return false;
-    if (!project_textbuf_appendf(buf, "target_link_directories(%s INTERFACE \"${BBS_PROJECT_ROOT}/%s\")\n", usage_target_name, dir))
+    if (!project_textbuf_appendf(buf, "target_link_directories(%s INTERFACE \"%s\")\n", usage_target_name, dir))
       return false;
   }
   for (int i = 0; i < tgt->link_libs_count; ++i) {
@@ -5668,6 +5948,21 @@ static bool project_needs_configure(const project* proj, const char* platform, b
   return false;
 }
 
+static bool project_prepare_and_configure_if_needed(project* proj, toolchain* tc, const char* platform, bool refresh_packages) {
+  if (!proj || !tc || !platform)
+    return false;
+
+  bool backend_changed = false;
+  if (!project_prepare_backend(proj, tc, platform, refresh_packages, false, &backend_changed))
+    return false;
+
+  if (!project_needs_configure(proj, platform, backend_changed))
+    return true;
+
+  const char* preset = project_build_dir_name(proj->active_config, platform);
+  return project_run_cmake_preset(tc, proj, preset, platform);
+}
+
 static bool project_run_cmake_preset(toolchain* tc, const project* proj, const char* preset, const char* platform) {
   const char* cmake = toolchain_get_host_tool_path(tc, "cmake");
   const char* build_root = project_build_root_abs(proj);
@@ -6267,7 +6562,7 @@ static bool project_build(const char* target_name, const char* platform, const c
   const char* platform_id = project_resolve_platform_id(platform, tc);
   if (!platform_id)
     goto done;
-  if (!project_prepare_backend(&proj, tc, platform_id, true, false, NULL))
+  if (!project_prepare_and_configure_if_needed(&proj, tc, platform_id, true))
     goto done;
 
   const char* preset = project_build_dir_name(proj.active_config, platform_id);
@@ -6280,8 +6575,6 @@ static bool project_build(const char* target_name, const char* platform, const c
       goto done;
     event_tgt = &proj.targets[idx];
     project_print_target_line("Build", &proj.targets[idx]);
-    if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
-      goto done;
     ok = project_run_cmake_build(tc, &proj, preset, project_target_build_target_name(&proj.targets[idx]), platform_id);
     goto done;
   }
@@ -6294,8 +6587,6 @@ static bool project_build(const char* target_name, const char* platform, const c
       print("  - %s (%s)", proj.targets[i].meta.id ? proj.targets[i].meta.id : "", project_target_type_name(proj.targets[i].type));
   }
 
-  if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
-    goto done;
   ok = project_run_cmake_build(tc, &proj, preset, NULL, platform_id);
 
 done:
@@ -6354,12 +6645,10 @@ static bool project_run(const char* target_name, const char* platform, const cha
   project_print_target_line("Run", &proj.targets[idx]);
 
   if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
-    if (!project_prepare_backend(&proj, tc, platform_id, true, false, NULL))
+    if (!project_prepare_and_configure_if_needed(&proj, tc, platform_id, true))
       goto done;
 
     const char* preset = project_build_dir_name(proj.active_config, platform_id);
-    if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
-      goto done;
     if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
         !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
       goto done;
@@ -6410,12 +6699,10 @@ static bool project_test(const char* test_name, const char* target_name, const c
     event_tgt = &proj.targets[idx];
     project_print_target_line("Test", &proj.targets[idx]);
     if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
-      if (!project_prepare_backend(&proj, tc, platform_id, true, false, NULL))
+      if (!project_prepare_and_configure_if_needed(&proj, tc, platform_id, true))
         goto done;
 
       const char* preset = project_build_dir_name(proj.active_config, platform_id);
-      if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
-        goto done;
       if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
           !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
         goto done;
@@ -6437,12 +6724,10 @@ static bool project_test(const char* test_name, const char* target_name, const c
   event_tgt = &proj.targets[idx];
   project_print_target_line("Test", &proj.targets[idx]);
   if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
-    if (!project_prepare_backend(&proj, tc, platform_id, true, false, NULL))
+    if (!project_prepare_and_configure_if_needed(&proj, tc, platform_id, true))
       goto done;
 
     const char* preset = project_build_dir_name(proj.active_config, platform_id);
-    if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
-      goto done;
     if (project_target_needs_build_for_execution(&proj, &proj.targets[idx], platform_id) &&
         !project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
       goto done;
@@ -6491,12 +6776,10 @@ static bool project_dist(const char* target_name, const char* platform, const ch
     }
 
     if (project_run_needs_build_prep(&proj, &proj.targets[idx], platform_id, tc)) {
-      if (!project_prepare_backend(&proj, tc, platform_id, true, false, NULL))
+      if (!project_prepare_and_configure_if_needed(&proj, tc, platform_id, true))
         goto done;
 
       const char* preset = project_build_dir_name(proj.active_config, platform_id);
-      if (!project_run_cmake_preset(tc, &proj, preset, platform_id))
-        goto done;
       if (!project_run_cmake_build(tc, &proj, preset, proj.targets[idx].meta.id, platform_id))
         goto done;
     }
