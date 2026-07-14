@@ -1,5 +1,11 @@
 # bbs (my Better Build System)
 
+[![Release](https://img.shields.io/github/v/release/luppichristian/bbs)](https://github.com/luppichristian/bbs/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/luppichristian/bbs/ci.yml?branch=master&label=ci)](https://github.com/luppichristian/bbs/actions/workflows/ci.yml)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-blue)](https://github.com/luppichristian/bbs)
+[![Language](https://img.shields.io/badge/language-C-555555)](https://github.com/luppichristian/bbs)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
+
 `bbs` is a build frontend for C, C++, and CUDA projects.
 
 It uses a small `.bbs` configuration format, discovers your local toolchain, generates the CMake backend files for you, and gives you one CLI for build, run, test, packaging, and distribution.
